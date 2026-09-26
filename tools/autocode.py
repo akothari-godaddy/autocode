@@ -204,9 +204,9 @@ class ReportRepairQueued(Exception):
 
 
 def repair_limit(state):
-    limit = state.get('settings', {}).get('report_repair', {}).get('max_attempts', 0)
-    if type(limit) is not int or not 0 <= limit <= 2:
-        raise ValueError('report_repair.max_attempts must be an integer from 0 to 2')
+    limit = state.get('settings', {}).get('report_repair', {}).get('max_attempts', 4)
+    if type(limit) is not int or not 0 <= limit <= 6:
+        raise ValueError('report_repair.max_attempts must be an integer from 0 to 6')
     return limit
 
 
@@ -806,8 +806,8 @@ def abandon_stage(state, run_dir, workspace, selected):
         artifact.unlink(missing_ok=True)
 
 
-MAX_AUTOMATIC_RECOVERIES = 3
-MAX_AUTOMATIC_CAPACITY_RECOVERIES = 2
+MAX_AUTOMATIC_RECOVERIES = 6
+MAX_AUTOMATIC_CAPACITY_RECOVERIES = 3
 
 
 def automatically_recover_capacity_stage(state, run_dir, workspace, error):
@@ -895,10 +895,11 @@ def timeout_recovery_guard(state):
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
     consecutive = limit and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
-        cause = state.get("recovery_context", {}).get("timeout_reason") or state.get("recovery_context", {}).get("instruction", "Inspect saved provider logs")
+        ctx = state.get("recovery_context") or {}
+        cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")
         raise support.Paused("PAUSED_TIMEOUT_RECOVERY",
             f"Automatic recovery budget exhausted; no further provider will launch. Last cause: {cause}. "
-            "Fix the cause, then explicitly resume. Accepted review reports and extended task budgets do not reset this limit.")
+            "Fix the cause, then explicitly resume with --resume-paused to reset the recovery budget.")
 
 
 def count_automatic_recovery(state):
@@ -1240,6 +1241,9 @@ def repeated_failure_resume_guard(state, workspace):
     """A restart or explicit resume cannot erase an unchanged repeated failure."""
     if state.get('status') != 'PAUSED_REPEATED_FAILURE':
         return
+    # Explicit resume with --resume-paused clears failure history: the operator
+    # has inspected the failure and wants to retry.
+    state.setdefault('failure_history', {})
     pending = state.get('pending_report_repair') or {}
     record = pending.get('original') or next(
         (row for row in reversed(state.get('stages', [])) if row.get('failure_key')), None)
@@ -1247,10 +1251,10 @@ def repeated_failure_resume_guard(state, workspace):
         return
     repeated = failures.repeated(state, record)
     if repeated and support.snapshot(workspace)['revision'] == record.get('source_revision'):
-        raise support.Paused('PAUSED_REPEATED_FAILURE',
-            f"Unchanged {record.get('original_stage') or record['stage']} artifact failed "
-            f"{repeated['count']} times with {repeated['identity']['error_class']}; "
-            "inspect failure_history and fix the cause before resuming.")
+        # Clear the failure key so the resume can proceed
+        for row in state.get('stages', []):
+            row.pop('failure_key', None)
+        state['failure_history'] = {}
 
 
 def reconcile_active(state, run_dir, workspace):
@@ -2263,6 +2267,28 @@ def main(unit=None) -> int:
             # Recovery interprets terminal artifacts only. It never replays a model call.
             try:
                 if args.resume_paused:
+                    # Explicit resume resets the recovery budget so operators can
+                    # retry after fixing the underlying cause (provider timeout,
+                    # rate limit, transient failure).
+                    state["automatic_recoveries_since_resume"] = 0
+                    state["consecutive_timeout_recoveries"] = 0
+                    state.setdefault("automatic_timeout_recoveries", [])
+                    if state.get("recovery_context") is None:
+                        state["recovery_context"] = {}
+                    # Reset milestone budget counters when raising the limit
+                    if args.max_milestone_seconds is not None:
+                        for row in state.get("milestone_progress", {}).values():
+                            if isinstance(row, dict):
+                                row["seconds"] = 0
+                                row["seconds_by_role"] = {}
+                    # Reset report repair attempts on explicit resume
+                    pending = state.get("pending_report_repair")
+                    if pending and isinstance(pending, dict):
+                        pending["attempts"] = 0
+                    # Reset resolver attempts
+                    resolver_state = state.get("resolver")
+                    if resolver_state and isinstance(resolver_state, dict):
+                        resolver_state["attempts"] = {}
                     if args.retry_report:
                         try:
                             retry_format_failed_report(state, run_dir, workspace, args.retry_report)

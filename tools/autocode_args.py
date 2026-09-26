@@ -84,7 +84,7 @@ def build_parser(*, unit, units, role_models, joint_models):
     parser.add_argument("--request-milestone-checkpoints", action="store_true",
                         help="Queue a boundary pause and milestone configuration for an active saved run; never launches or stops workers")
     parser.add_argument("--max-milestone-seconds", type=int,
-                        help="Active-time budget per milestone, checked at stage boundaries (new-run default: 5400; 0 disables)")
+                        help="Active-time budget per milestone; with --resume-paused this also resets spent time (default: 5400; 0 disables)")
     parser.add_argument("--max-milestone-replans", type=int,
                         help="Maximum changed-approach replans per milestone (saved default: 1; 0 means unbounded)")
     parser.add_argument("--max-milestone-stalled-reviews", type=int,
