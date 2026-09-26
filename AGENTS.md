@@ -97,9 +97,25 @@ the full suite's time is spent waiting on subprocesses and timeouts, not
 computing. Before committing a change to `tools/`, run the tests for the modules
 you touched, `test_architecture`, and the fake scenario runs.
 
-Use `scenarios/` for new end-to-end coverage: add a catalog entry with an
-oracle, a reference solution and a broken variant (see `scenarios/README.md`).
-Live-model runs need `--i-authorize-live-model-spend` and are never part of a
+Run the full suite once before merging, not after every change; CI runs it on
+every pull request.
+
+Where a new test belongs:
+
+- **Behavior a user would notice** (a run plans, builds, pauses, completes,
+  refuses to complete): a scenario in `scenarios/`, or a CLI-level test that
+  drives `autocode` through the task-run interface. These survive refactors.
+- **Pure logic** (a function from inputs to outputs, such as the status view or
+  requirement tracing): a small unit test beside that module's other tests.
+- **Not** a test that asserts internal state-dict keys after a sequence of
+  private calls. It breaks on every refactor without catching more bugs. When
+  touching such a test, prefer rewriting it against the CLI or a public function.
+- **Never** a test that re-runs another test, waits in real time, or asserts
+  something that cannot fail. Fake the clock or the provider instead of waiting.
+
+Tests live in `tools/` for now; do not start a second test directory. For new
+end-to-end coverage add a catalog entry with an oracle, a reference solution
+and a broken variant (see `scenarios/README.md`). Live-model runs need `--i-authorize-live-model-spend` and are never part of a
 routine test run.
 
 ## Hygiene
