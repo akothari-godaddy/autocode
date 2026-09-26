@@ -4,12 +4,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
 from . import autocode_multicomponent as mc
 
+REPO_ROOT = Path(__file__).resolve().parents[1]
 HERE = Path(__file__).resolve().parent
 FAKE_PROVIDER = HERE / "fixtures" / "multicomponent_fake.py"
 FIXTURE_OPTIONS = ("--engine", "codex", "--joint-planning", "--astra-model", "gpt-6-astra",
@@ -89,7 +91,14 @@ class BuildAndIntegrateTests(unittest.TestCase):
         self.repo = self.root / "repo"
         self.repo.mkdir()
         git(self.repo, "init", "-q")
-        git(self.repo, "commit", "-q", "--allow-empty", "-m", "base")
+        # A committed file, not an empty repo: this is what makes the fake's source_refs
+        # and code_refs handling meaningful (autopilot._check_code_refs only requires a
+        # citation once the workspace has tracked files; an empty repo would never catch
+        # the fake citing "task" instead of a real path, as an earlier version of this
+        # fake did).
+        (self.repo / "architecture.md").write_text("placeholder architecture note\n")
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "base")
         bindir = self.root / "bin"
         bindir.mkdir()
         shutil.copy2(FAKE_PROVIDER, bindir / "codex")
@@ -154,6 +163,52 @@ class BuildAndIntegrateTests(unittest.TestCase):
         self.assertEqual(["alpha"], outcome["integrated"])
         self.assertTrue((target / "components" / "alpha" / "message.txt").is_file())
         self.assertFalse((target / "shared").exists())
+
+
+class CliTests(BuildAndIntegrateTests):
+    """The installed entry point (`autocode components`), not just the Python API."""
+
+    def setUp(self):
+        super().setUp()
+        architecture = self.repo / "architecture"
+        architecture.mkdir()
+        (architecture / "components.json").write_text(json.dumps(
+            [component("alpha"), component("beta")]))
+        (architecture / "dependency_trace.json").write_text(json.dumps({"edges": []}))
+        (architecture / "contracts").mkdir()
+        git(self.repo, "add", "-A")
+        git(self.repo, "commit", "-q", "-m", "architecture")
+
+    def run_cli(self, *args):
+        return subprocess.run([sys.executable, "-m", "tools.autocode", "components", *args], cwd=REPO_ROOT,
+                              env={**os.environ, **self.env}, capture_output=True, text=True, timeout=120)
+
+    def test_cli_builds_and_integrates_both_components(self):
+        self.write_manifest()
+        proc = self.run_cli("architecture", "--workspace", str(self.repo), "--auto-approve",
+                            "--integrate", "integration", "--options", " ".join(FIXTURE_OPTIONS))
+        self.assertEqual(0, proc.returncode, proc.stderr[-1500:])
+        summary = json.loads(proc.stdout)
+        self.assertEqual({"alpha": "done", "beta": "done"},
+                         {cid: info["status"] for cid, info in summary["components"].items()})
+        self.assertEqual(["alpha", "beta"], summary["integration"]["integrated"])
+        target = self.repo / "integration"
+        self.assertEqual("from alpha\n", (target / "components" / "alpha" / "message.txt").read_text())
+        self.assertEqual("from beta\n", (target / "components" / "beta" / "message.txt").read_text())
+
+    def test_cli_refuses_a_cycle_before_starting_any_component(self):
+        (self.repo / "architecture" / "components.json").write_text(json.dumps(
+            [{**component("alpha"), "depends_on": ["beta"]}, {**component("beta"), "depends_on": ["alpha"]}]))
+        proc = self.run_cli("architecture", "--workspace", str(self.repo), "--auto-approve")
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("cycle", proc.stderr)
+        self.assertFalse((self.repo / ".autocode-components").exists())
+
+    def test_cli_refuses_to_touch_an_existing_worktree(self):
+        (self.repo / ".autocode-components" / "alpha").mkdir(parents=True)
+        proc = self.run_cli("architecture", "--workspace", str(self.repo))
+        self.assertNotEqual(0, proc.returncode)
+        self.assertIn("already exists for alpha", proc.stderr)
 
 
 if __name__ == "__main__":

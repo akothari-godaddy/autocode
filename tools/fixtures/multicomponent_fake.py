@@ -24,6 +24,13 @@ from pathlib import Path
 MANIFEST = json.loads(Path(os.environ["FAKE_MANIFEST"]).read_text())
 
 
+def source_refs() -> list[str]:
+    """AutoCode requires the requirements handoff to cite a real tracked file once
+    the workspace has any (see autopilot._check_code_refs)."""
+    tracked = subprocess.run(["git", "ls-files"], capture_output=True, text=True).stdout.split()
+    return tracked[:8] or ["task"]
+
+
 def find_component(text: str) -> str | None:
     match = re.search(r"Implement the (\S+) component", text)
     return match.group(1) if match and match.group(1) in MANIFEST else None
@@ -80,12 +87,12 @@ def report_for(stage: str, component_id: str, spec: dict, data: dict) -> dict:
              "task_id": task.get("id", ""), "deferred_backlog": [],
              "user_request": {"kind": "none", "discovered": "", "impact": "", "decision_needed": "",
                               "options": [], "proposed_delta": ""}}
-    planning = {"code_refs": [], "contract_changes": [], "conflict_resolutions": [],
+    planning = {"code_refs": source_refs(), "contract_changes": [], "conflict_resolutions": [],
                "requirement_trace": [{"requirement_id": "R1", "disposition": "covered", "evidence": spec["description"]}]}
     if stage == "requirements_gather":
         return {"summary": "Scripted component requirements", "intended_outcome": spec["description"],
                 "required_behaviors": [spec["description"]], "constraints": [], "acceptance_tests": [spec["check"]],
-                "source_refs": ["task"], "proposed_assumptions": [], "open_questions": [],
+                "source_refs": source_refs(), "proposed_assumptions": [], "open_questions": [],
                 "requirements": requirements(component_id, spec), "ignored_statements": ignored_statements(component_id),
                 "conflicts": [], "proposed_reframes": []}
     if stage == "astra_discovery":

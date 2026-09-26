@@ -47,6 +47,37 @@ Parallel lanes intentionally remain separate branches. Autocode does not guess h
 to merge parallel source changes. Put dependent tasks in one lane, or explicitly
 merge completed branches before starting a task that combines them.
 
+## Building components of an architecture in parallel
+
+`autocode components ARCHITECTURE --workspace REPO` takes a design already
+committed in `REPO` — `components.json`, `dependency_trace.json` and
+`contracts/*.schema.json` — and builds each component as its own AutoCode task
+run under `REPO/.autocode-components/<id>`, in parallel with any component it
+does not depend on. A component owns only `components/<id>/`; this is checked
+against its actual changes at integration, not only requested in its brief.
+
+```sh
+autocode components architecture --workspace /path/to/project --joint-planning
+```
+
+Without `--auto-approve`, a component that needs a plan approved, a question
+answered, or a review accepted stops there; inspect and resume it directly with
+`autocode --workspace /path/to/project --run-dir RUN_DIR --status`, using the
+`run_dir` this command prints for that component. `--auto-approve` answers
+those for every component automatically, including approving the displayed
+plan — an explicit person's decision to delegate, not a default choice.
+
+`--integrate TARGET` combines every finished component's changes into `TARGET`
+(created fresh from the repository's HEAD if it does not exist yet), left
+uncommitted for review, the same way a single AutoCode task leaves its own
+work. Extra flags for the underlying task runs (models, reasoning effort,
+provider) go after `--options`, shell-quoted.
+
+This command does not yet resume a build across separate invocations: if a
+component stopped needing input, rerunning `autocode components` refuses
+rather than reusing its worktree. Resolve that component's own run directly,
+or remove `.autocode-components/<id>` to rebuild it from scratch.
+
 ## Multiple tasks in one project
 
 New implementation tasks automatically get separate Git worktrees and branches,

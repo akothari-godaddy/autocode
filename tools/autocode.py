@@ -2045,6 +2045,12 @@ def main(unit=None) -> int:
         except ImportError:
             import autocode_tasks
         return autocode_tasks.cli(sys.argv[2:])
+    if sys.argv[1:2] == ["components"]:
+        try:
+            from . import autocode_components
+        except ImportError:
+            import autocode_components
+        return autocode_components.cli(sys.argv[2:])
     if sys.argv[1:2] == ["ui"]:
         try:
             from . import autocode_ui
