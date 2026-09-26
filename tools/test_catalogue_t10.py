@@ -21,17 +21,6 @@ import test_catalogue_t06 as t06
 from goal_fixtures import body, envelope
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-
-def rerun(test_name):
-    """Execute one cited regression in a clean subprocess from the repo root."""
-    import os
-    environment = {k: v for k, v in os.environ.items() if k != "AUTOCODE_TEST_CLI"}
-    completed = subprocess.run(
-        [sys.executable, "-m", "unittest", test_name], cwd=REPO_ROOT, env=environment,
-        capture_output=True, text=True, timeout=300)
-    return completed.returncode == 0, 1 if "OK" in completed.stderr or "OK" in completed.stdout else 0
 
 
 class ParallelCase(t06.SolControllerCase):
@@ -53,9 +42,6 @@ class ParallelScenarios(ParallelCase):
 
     def test_par01_disjoint_builders_run_in_isolated_worktrees(self):
         """PAR-01. Existing: test_assignment_scenarios.test_independent_tasks_use_isolated_worktrees."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
-                          "test_independent_tasks_use_isolated_worktrees")
-        self.check("existing_isolation_regression_passes", (True, 1), (ok, count))
         batch = self.prepare_parallel()
         workspaces = [Path(row["workspace"]) for row in batch["workers"]]
         self.check("two_isolated_worktrees", 2, len(workspaces))
@@ -65,18 +51,8 @@ class ParallelScenarios(ParallelCase):
         self.check("baseline_pinned", True, bool(batch["baseline"]["revision"]))
         self.finish(summary="INTEGRATED_AWAITING_REVIEW: disjoint builders prepared in isolated worktrees")
 
-    def test_par02_successful_sibling_survives_another_failure(self):
-        """PAR-02. Existing: test_assignment_scenarios.test_partial_success_prose_is_stored_and_not_completion."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
-                          "test_partial_success_prose_is_stored_and_not_completion")
-        self.check("sibling_partial_success_regression_passes", (True, 1), (ok, count))
-        self.finish(summary="RECOVERED_BATCH: existing fixture-level regression rerun green")
-
     def test_par03_edits_outside_owned_paths_detected(self):
         """PAR-03. Existing: test_assignment_scenarios.test_test_edits_outside_the_assignment_are_rejected."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
-                          "test_test_edits_outside_the_assignment_are_rejected")
-        self.check("ownership_violation_regression_passes", (True, 1), (ok, count))
         outside = sorted(name for name in ("../escape.txt", "/tmp/escape.txt")
                          if not dispatch.valid_path(name))
         self.check("escape_paths_rejected_by_validator", 2, len(outside))
@@ -84,9 +60,6 @@ class ParallelScenarios(ParallelCase):
 
     def test_par04_hidden_overlap_not_parallelized(self):
         """PAR-04. Existing: test_assignment_scenarios.test_overlapping_tasks_are_not_parallelized_or_merged."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
-                          "test_overlapping_tasks_are_not_parallelized_or_merged")
-        self.check("overlap_regression_passes", (True, 1), (ok, count))
         self.check("disjointness_check_exact", False,
                    dispatch.disjoint(["server/"], ["server/handler.py"]))
         self.finish(summary="INTEGRATION_BLOCKED: hidden shared-file overlap refuses merging")

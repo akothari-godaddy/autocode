@@ -26,27 +26,11 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 INSTALLED = Path.home() / ".local" / "bin" / "autocode"
 
 
-def rerun(test_name, timeout=180):
-    environment = {k: v for k, v in os.environ.items() if k != "AUTOCODE_TEST_CLI"}
-    completed = subprocess.run([sys.executable, "-m", "unittest", test_name],
-                               cwd=REPO_ROOT, env=environment, capture_output=True,
-                               text=True, timeout=timeout)
-    return completed.returncode == 0
-
-
 class CompatCase(t01.ApprovalCase):
     pass
 
 
 class CompatScenarios(CompatCase):
-
-    def test_cfg01_supported_historical_checkpoints_resume(self):
-        """CFG-01. Existing: v1->v2 migrate_v1 and v2->v3 goals.migrate tests."""
-        ok_legacy = rerun("tools.test_autocode.RetrofitTest.test_legacy_resume_after_terra_does_not_replay_it")
-        ok_modern = rerun("tools.test_goals.GoalTests.test_migration_retains_work_sessions_limits_and_does_not_approve")
-        self.check("legacy_checkpoint_resume_passes", True, ok_legacy)
-        self.check("modern_migration_without_invented_approval_passes", True, ok_modern)
-        self.finish(summary="COMPATIBLE_PROGRESS: supported old formats resume without new approval")
 
     def test_cfg02_unknown_future_version_refused(self):
         """CFG-02. New: an unsupported future state version must not run."""
@@ -82,12 +66,6 @@ class CompatScenarios(CompatCase):
         self.check("running_version_recorded", True, isinstance(running, str))
         self.finish(summary="EXPLICIT_VERSION_TRANSITION: versions recorded; CLI flag is a scoped gap")
 
-    def test_cfg04_static_model_routes_preserved(self):
-        """CFG-04. Existing: configure() precedence tests in test_autocode."""
-        ok = rerun("tools.test_autocode.RetrofitTest.test_provider_saved_per_role_and_kept_on_resume")
-        self.check("route_persistence_regression_passes", True, ok)
-        self.finish(summary="CONFIGURED_ROUTE_OR_PAUSE: saved routes survive resume unchanged")
-
     def test_cfg05_provider_quota_and_auth_failures_honest(self):
         """CFG-05. Existing: failure_status mapping + provider credit tests."""
         for message, expected in (("rate limit 429", "PAUSED_RATE_LIMIT"),
@@ -97,8 +75,6 @@ class CompatScenarios(CompatCase):
                 path = self.run / "events.jsonl"
                 path.write_text(json.dumps({"type": "turn.failed", "error": {"message": message}}))
                 self.check(f"[{message}] honest_status", expected, support.failure_status(path))
-        ok = rerun("tools.test_command_provider.CommandProviderTests.test_pay_as_you_go_credit_errors_pause_as_budget")
-        self.check("credit_exhaustion_pauses_as_budget", True, ok)
         self.finish(summary="PAUSED_OR_BOUNDED_RETRY: provider failures map to explicit pauses")
 
     def test_cfg06_unsupported_provider_evidence_capability_refused(self):
@@ -123,8 +99,6 @@ class CompatScenarios(CompatCase):
         reloaded = support.read(self.run / "state.json")
         self.check("limits_survive_roundtrip", self.state["settings"]["limits"],
                    reloaded["settings"]["limits"])
-        ok = rerun("tools.test_goals.GoalTests.test_limits_pause_and_cannot_complete")
-        self.check("limit_pause_regression_passes", True, ok)
         self.finish(summary="PAUSED_OR_AUTHORIZED_ESCALATION: persisted limits bind after restart")
 
     def test_cfg08_large_reports_stay_responsive(self):

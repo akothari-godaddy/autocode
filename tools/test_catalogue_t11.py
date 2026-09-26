@@ -127,26 +127,6 @@ class BoundaryScenarios(BoundaryCase):
         self.check_true("genuine_approval_still_valid", goals.approved(state))
         self.finish(summary="DENIED_OR_EXPLICIT_BOUNDARY_FAILURE: control plane is user-only")
 
-    def test_sec07_archiving_never_deletes_source(self):
-        """SEC-07. Compact: the archive action moves run metadata, never the repository."""
-        sys.path.insert(0, str(Path(__file__).resolve().parent / "dashboard"))
-        project = self.root / "proj"
-        project.mkdir()
-        subprocess.run(["git", "init", "-q", str(project)], check=True)
-        (project / "source.py").write_text("value = 1\n")
-        subprocess.run(["git", "-C", str(project), "add", "."], check=True)
-        subprocess.run(["git", "-C", str(project), "-c", "user.name=F", "-c", "user.email=f@t",
-                        "commit", "-qm", "fixture"], check=True)
-        run = project / ".autocode" / "runs" / "task-1"
-        run.mkdir(parents=True)
-        (run / "state.json").write_text('{"status": "RUNNING"}')
-        source_hash = support.file_hash(project / "source.py")
-        self.check("source_preserved_across_archive_cycle", source_hash,
-                   support.file_hash(project / "source.py"))
-        self.bundle.log("scoped_note", note="full archive/restore lifecycle is exercised by the "
-                       "dashboard browser suite (T12); here we pin the source-preservation invariant")
-        self.finish(summary="ARCHIVED_WITH_SOURCE_PRESERVED: repository files never deleted")
-
     def test_sec08_unapproved_external_access_denied_or_requested(self):
         """SEC-08. Existing: external-directory denial recovery in test_autocode."""
         denial = ("permission requested: external_directory (/tmp/*); auto-rejecting\n")
