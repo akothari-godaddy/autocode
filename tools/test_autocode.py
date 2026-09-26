@@ -238,12 +238,39 @@ class RetrofitTest(unittest.TestCase):
         with s.workspace_lock(self.root):
             with s.workspace_lock(self.root/"other"): pass
 
+    def test_run_locks_do_not_block_independent_runs_in_one_workspace(self):
+        first=self.root/".autocode"/"runs"/"first"
+        second=self.root/".autocode"/"runs"/"second"
+        with s.run_lock(first):
+            with s.run_lock(second): pass
+
+    def test_run_lock_blocks_duplicate_writer_for_same_run(self):
+        with s.run_lock(self.run):
+            with self.assertRaises(s.Paused):
+                with s.run_lock(self.run): pass
+
+    def test_process_marker_for_another_run_does_not_block_this_run(self):
+        other=self.root/".autocode"/"runs"/"other"
+        other.mkdir(parents=True)
+        s.atomic_json(self.root/".autocode"/"active-processes.json", {"run_dir":str(other),"processes":[]})
+        with patch.object(s.subprocess,"run",return_value=subprocess.CompletedProcess([],0,stdout="")):
+            s.assert_no_legacy_process(self.run,self.root)
+
     def test_active_legacy_guard_and_process_check_failure(self):
         result=subprocess.CompletedProcess([],0,stdout=f"101 python tools/autocode.py --run-dir {self.run}\n")
         with patch.object(s.subprocess,"run",return_value=result):
             with self.assertRaisesRegex(s.Paused,"101"): s.assert_no_legacy_process(self.run,self.root)
         with patch.object(s.subprocess,"run",return_value=subprocess.CompletedProcess([],1,stdout="")):
             with self.assertRaisesRegex(s.Paused,"Cannot inspect"): s.assert_no_legacy_process(self.run,self.root)
+
+    def test_process_guard_allows_isolated_workspace_when_sandbox_denies_process_listing(self):
+        result=subprocess.CompletedProcess([],1,stdout="",stderr="ps: operation not permitted")
+        with patch.object(s.subprocess,"run",return_value=result):
+            s.assert_no_legacy_process(self.run,self.root)
+
+    def test_process_guard_allows_isolated_workspace_when_sandbox_raises_permission_error(self):
+        with patch.object(s.subprocess,"run",side_effect=OSError("operation not permitted")):
+            s.assert_no_legacy_process(self.run,self.root)
 
     def test_legacy_resume_after_terra_does_not_replay_it(self):
         d=self.decision(); d.pop("plan");d.pop("affected_paths")

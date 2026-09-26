@@ -24,12 +24,14 @@ import copy
 import uuid
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures
+    from . import autocode_gocode as gocode
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
     import autocode_interventions as interventions
     import autocode_providers
     import autocode_opencode as opencode
+    import autocode_gocode as gocode
     import autocode_process as processes
     import autocode_registry as registry
     import autocode_planning as planning
@@ -68,6 +70,8 @@ DEFAULT_ROLE_MODELS = {
     "sol": "gpt-5.6-sol",
     "completion": "gpt-5.6-sol",
 }
+# Keep the historical OpenCode default for existing saved/dashboard flows. New
+# GoCode-native runs select --engine gocode explicitly and never launch OpenCode.
 DEFAULT_ENGINE = "opencode"
 
 
@@ -345,6 +349,9 @@ def run_role(
         prompt = opencode.prompt_for_schema(prompt, read_json(schema), events)
         if not configured_tool:
             write_json(base.with_suffix(".opencode.json"), overrides)
+    elif engine == "gocode":
+        command = gocode.launch(role=role, workspace=workspace, session=session, model=model,
+                                effort=effort, sandbox=sandbox, schema=schema, output=output)
     else:
         command = ["codex", "exec", "-C", str(workspace), "--sandbox", sandbox, *transport_args]
         if planning.enabled(state):
@@ -403,7 +410,7 @@ def run_role(
     timed_out = False
     interrupted = False
     cleanup_error = None
-    worker_path = workspace / ".autocode" / "active-processes.json"
+    worker_path = run_dir / "active-processes.json"
     with processes.interruption_handler(), prompt_file.open("r") as stdin, events.open("w") as stdout:
         try:
             # Preparation can be slow. Linearize immediately before the durable
@@ -1392,6 +1399,8 @@ def configure(args, state):
         joint = requested_joint
     else:
         joint = True
+    if joint and engine not in ("codex", "opencode", "gocode"):
+        raise ValueError("--joint-planning requires a supported planning engine")
     if (getattr(args, "requirements_model", None) or getattr(args, "requirements_reasoning_effort", None)
             or getattr(args, "glm_reasoning_effort", None) or getattr(args, "plan_reviewer_model", None)
             or getattr(args, "plan_reviewer_reasoning_effort", None)) and not joint:
@@ -1400,8 +1409,9 @@ def configure(args, state):
         raise ValueError("--glm-model requires --joint-planning")
     if started and engine != saved_engine:
         raise ValueError("Start a new run to change engines; Codex and OpenCode session IDs are not interchangeable")
-    if engine == "opencode" and any(getattr(args, f"{r}_provider", None) for r in DEFAULT_ROLE_MODELS):
-        raise ValueError("For OpenCode use --<role>-model provider/model instead of --<role>-provider")
+    if engine in ("opencode", "gocode") and any(getattr(args, f"{r}_provider", None) for r in DEFAULT_ROLE_MODELS):
+        route = "OpenCode" if engine == "opencode" else "GoCode"
+        raise ValueError(f"For {route} use --<role>-model instead of --<role>-provider")
     if state.get("settings"):
         settings = json.loads(json.dumps(state["settings"]))
         settings.setdefault("provider", provider_name)
@@ -1433,6 +1443,10 @@ def configure(args, state):
                 settings["roles"][role]["reasoning_effort"] = role_effort or args.reasoning_effort
         for role in getattr(args, "pin_model_role", []):
             settings["roles"][role]["model_pinned"] = True
+        if engine == "gocode":
+            glm_effort = getattr(args, "glm_reasoning_effort", None)
+            if glm_effort or args.reasoning_effort:
+                settings["roles"]["glm"]["reasoning_effort"] = glm_effort or args.reasoning_effort
         if args.headroom is not None:
             settings["headroom"]["enabled"] = args.headroom == "on"
         if args.context_soft_tokens is not None:
@@ -1460,7 +1474,10 @@ def configure(args, state):
             opencode.check_models(settings["roles"], Path(state["workspace"]))
             opencode.check_subscription_routes(settings["roles"], Path(state["workspace"]))
         if joint:
-            configure_joint(settings, args, fresh=False)
+            if engine == "gocode":
+                configure_gocode_joint(settings, args, fresh=False)
+            else:
+                configure_joint(settings, args, fresh=False)
         if getattr(args,'unlimited_iterations',False):
             settings.setdefault('limits',{})['iteration_ceiling']=None
         if getattr(args, 'max_milestone_seconds', None) is not None:
@@ -1497,7 +1514,12 @@ def configure(args, state):
                 raise ValueError("Start a new run to enable milestone orchestration")
             settings["orchestration"]["max_parallel"] = args.max_parallel_builders
         return settings
-    local = opencode.local_settings(state["workspace"]) if engine == "opencode" else support.local_settings()
+    if engine == "opencode":
+        local = opencode.local_settings(state["workspace"])
+    elif engine == "gocode":
+        local = gocode.local_settings(Path(state["workspace"]))
+    else:
+        local = support.local_settings()
     models = {}
     providers = {}
     for record in state.get("history", []):
@@ -1510,7 +1532,11 @@ def configure(args, state):
     # Custom providers ship their own DEFAULT_MODELS (TOML [roles]); never
     # force the builtin OpenCode catalogue onto fixturetool/kilocode/etc.
     provider_mod = autocode_providers.resolve(provider_name) if provider_name else opencode
-    defaults = provider_mod.DEFAULT_MODELS if engine == "opencode" else DEFAULT_ROLE_MODELS
+    defaults = DEFAULT_ROLE_MODELS.copy()
+    if engine == "gocode":
+        defaults.update(gocode.DEFAULT_MODELS)
+    elif engine == "opencode":
+        defaults.update(provider_mod.DEFAULT_MODELS)
     roles = {r: {"model": getattr(args, f"{r}_model", None) or models.get(r) or defaults[r],
                  "reasoning_effort": getattr(args, f"{r}_reasoning_effort", None) or args.reasoning_effort or local.get("model_reasoning_effort") or opencode.DEFAULT_REASONING_EFFORTS[r],
                  "provider": getattr(args, f"{r}_provider", None) or providers.get(r) or local.get("model_provider")}
@@ -1551,7 +1577,10 @@ def configure(args, state):
             config["provider"] = "openai"
         settings.update(figma_file=figma.design_url(figma_file), figma_review=getattr(args, "figma_review", None) or "automatic")
     if joint:
-        configure_joint(settings, args, fresh=True)
+        if engine == "gocode":
+            configure_gocode_joint(settings, args, fresh=True)
+        else:
+            configure_joint(settings, args, fresh=True)
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
     return settings
@@ -1670,6 +1699,27 @@ def configure_codex_joint(settings, args):
     settings.setdefault("transport_identities", {}).setdefault("codex", settings["transport_identity"])
 
 
+def configure_gocode_joint(settings, args, *, fresh):
+    """Configure the four-role planning/implementation loop on direct GoCode routes."""
+    if fresh:
+        settings["joint_planning"] = True
+        for role in ("glm", "astra", "terra", "sol"):
+            model = getattr(args, f"{role}_model", None) or gocode.DEFAULT_MODELS[role]
+            effort = (getattr(args, "glm_reasoning_effort", None) if role == "glm"
+                      else getattr(args, f"{role}_reasoning_effort", None)) or args.reasoning_effort
+            settings["roles"].setdefault(role, {}).update(engine="gocode", provider=None, model=model,
+                                                           reasoning_effort=effort)
+        completion_model = getattr(args, "completion_model", None) or gocode.DEFAULT_MODELS["sol"]
+        completion_effort = getattr(args, "completion_reasoning_effort", None) or args.reasoning_effort
+        settings["roles"].setdefault("completion", {}).update(
+            engine="gocode", provider=None, model=completion_model, reasoning_effort=completion_effort)
+        settings["transport_identities"] = {"gocode": settings["transport_identity"]}
+    for role, config in settings["roles"].items():
+        if planning.engine_for(settings, role) != "gocode":
+            raise ValueError("GoCode joint-planning roles cannot switch engines on resume")
+        gocode.validate_model(config["model"])
+
+
 def migrate_opencode_roles(state, run_dir, workspace):
     """Move old mixed-CLI runs to OpenCode at a recovered, locked boundary."""
     settings = state["settings"]
@@ -1722,6 +1772,11 @@ def check_subscription(identity):
 
 def check_joint_transports(state, workspace):
     identities = state["settings"]["transport_identities"]
+    if "gocode" in identities:
+        current = gocode.local_settings(workspace)
+        if gocode.transport_drift(current, identities["gocode"]):
+            raise support.Paused("PAUSED_TRANSPORT_CHANGED", "GoCode managed identity changed")
+        return
     roles = {role: config for role, config in state["settings"]["roles"].items()
              if planning.engine_for(state["settings"], role) == "codex"}
     codex_changed = False
@@ -2016,19 +2071,19 @@ def main(unit=None) -> int:
     parser.add_argument("--figma-file", help="Figma Design URL to implement using the connected Codex plugin")
     parser.add_argument("--ui-run", type=Path, help="Accepted autocode-ui run to implement")
     parser.add_argument("--figma-review", choices=["automatic", "human"], help="Visual review policy for new Figma runs (default: automatic)")
-    parser.add_argument("--engine", choices=["codex", "opencode"],
-                        help="New-run default is OpenCode joint planning; Codex supports optional --joint-planning. Resumes keep the saved engine")
+    parser.add_argument("--engine", choices=["codex", "gocode", "opencode"],
+                        help="Select Codex, GoCode, or OpenCode; resumes keep the saved engine")
     parser.add_argument("--provider", default=None,
                         help="Tool that runs each role for a new run. Default: AUTOCODE_PROVIDER, then default_provider in "
                              "~/.config/autocode/config.toml, then opencode. Other names load ~/.config/autocode/providers/<name>.toml")
     parser.add_argument("--joint-planning", action="store_true",
-                        help="Separate requirements, planning, and independent review; default for new OpenCode runs, opt-in for Codex at a clean boundary")
+                        help="Separate requirements, planning, and independent review; default for new OpenCode/GoCode runs, opt-in for Codex")
     parser.add_argument("--glm-model", help="Planner model: OpenCode provider/model or native Codex GPT name")
+    parser.add_argument("--glm-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
+                        help="Override planner draft and revision reasoning effort")
     parser.add_argument("--requirements-model", help="Independent requirements-gatherer model for the saved engine")
     parser.add_argument("--requirements-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override independent requirements-gatherer reasoning effort")
-    parser.add_argument("--glm-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
-                        help="Override planner draft and revision reasoning effort")
     parser.add_argument("--plan-reviewer-model",
                         help="Override the independent plan-reviewer model for the saved engine")
     parser.add_argument("--plan-reviewer-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
@@ -2207,6 +2262,7 @@ def main(unit=None) -> int:
         parser.error("workspace differs from checkpoint; use the original --workspace")
     if not run_dir.is_relative_to(workspace / ".autocode" / "runs"):
         parser.error("run-dir must belong to this project's .autocode/runs")
+    registry.configure_workspace_storage(workspace)
     if args.request_milestone_checkpoints:
         request = milestones.queue_activation(run_dir, args.max_milestone_seconds)
         print(json.dumps({'queued': True, 'run_dir': str(run_dir), 'request': request,
@@ -2259,7 +2315,7 @@ def main(unit=None) -> int:
         parser.error(str(error))
     # Legacy runner does not own our new lock; detect it before touching state.
     support.assert_no_legacy_process(run_dir, workspace)
-    with support.workspace_lock(workspace):
+    with support.run_lock(run_dir):
         support.assert_no_legacy_process(run_dir, workspace)
         if args.run_dir:
             # A competing user command may have finished between the first read
@@ -2513,12 +2569,20 @@ def main(unit=None) -> int:
                         and current.get("no_progress_batches",0) >= limits["no_progress_batches"]):
                     raise support.Paused("PAUSED_NO_PROGRESS", "Repeated unchanged implementation batches require review")
                 # Do not silently change auth/provider when local config changes.
-                using_opencode = current["settings"].get("engine") == "opencode"
+                engine = current["settings"].get("engine")
+                using_opencode = engine == "opencode"
+                using_gocode = engine == "gocode"
                 if planning.enabled(current):
                     check_joint_transports(current, workspace)
-                current_settings = opencode.local_settings(workspace) if using_opencode else support.local_settings()
-                drifted = (opencode.transport_drift(current_settings, current["settings"]["transport_identity"]) if using_opencode else
-                           support.transport_drift(current_settings, current["settings"]["transport_identity"], current["settings"]["roles"]))
+                if using_opencode:
+                    current_settings = opencode.local_settings(workspace)
+                    drifted = opencode.transport_drift(current_settings, current["settings"]["transport_identity"])
+                elif using_gocode:
+                    current_settings = gocode.local_settings(workspace)
+                    drifted = gocode.transport_drift(current_settings, current["settings"]["transport_identity"])
+                else:
+                    current_settings = support.local_settings()
+                    drifted = support.transport_drift(current_settings, current["settings"]["transport_identity"], current["settings"]["roles"])
                 if drifted:
                     raise support.Paused("PAUSED_TRANSPORT_CHANGED", "Local model/auth/provider settings differ from checkpoint")
                 if using_opencode and current["settings"]["transport_identity"].get("identity_version", 1) < 2:

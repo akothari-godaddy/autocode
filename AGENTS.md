@@ -79,12 +79,14 @@ $PY -m unittest tools.test_architecture                        # seconds
 $PY -m unittest tools.test_goals tools.test_autocode           # the modules you touched
 $PY scenarios/run.py run --fake                                # every scenario end to end, ~3 min
 $PY -m unittest scenarios/test_harness.py                      # harness and catalog, ~2 min
-$PY -m unittest discover -s tools -t . -p 'test_*.py'          # everything; about 40 minutes
+$PY tools/run_suite.py                                         # the suite gate CI runs; about 40 minutes
 ```
 
-Most of the full suite's time is spent waiting on subprocesses and timeouts,
-not computing. Before committing a change to `tools/`, run the tests for the
-modules you touched, `test_architecture`, and the fake scenario runs.
+`tools/run_suite.py` runs the same discovery as `unittest discover -s tools -t .`
+minus the modules listed, with reasons, in `tools/suite_exclusions.json`. Most of
+the full suite's time is spent waiting on subprocesses and timeouts, not
+computing. Before committing a change to `tools/`, run the tests for the modules
+you touched, `test_architecture`, and the fake scenario runs.
 
 Use `scenarios/` for new end-to-end coverage: add a catalog entry with an
 oracle, a reference solution and a broken variant (see `scenarios/README.md`).
