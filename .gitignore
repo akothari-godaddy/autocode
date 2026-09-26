@@ -1,18 +1,12 @@
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
 *.egg-info/
-build/
-dist/
 .venv/
-.autocode/
 .pytest_cache/
-.kilo/
-.zcode/
-.zcodeignore
 
-# Nested target workspaces used for local Autocode runs
-.tmp-*/
-
+# Local run state (large, live)
+.autocode/
 .autocode-ui/
 .DS_Store
 
@@ -20,5 +14,18 @@ dist/
 .codex/config.toml
 .codex/hooks.json
 
-# Scenario harness results
+# October desktop — local canvas state
+.october/
+
+# Build output
+build/
+dist/
+
+# Other agents' local state and worktrees
+.kilo/
+.zcode/
+.zcodeignore
+
+# Scratch workspaces and evidence from test and harness runs
+.tmp-*/
 .scenario-runs/
