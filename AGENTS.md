@@ -48,8 +48,12 @@ were archived at tag `archive/pre-restructure-2026-09-26`
    typed `RunState` is planned.
 5. **Anything that works across tasks** (architecture, multi-component builds,
    integration, deployment) goes in a new layer that drives task runs through
-   the CLI (start, status, answer, approve, resume). It must not import
-   `autocode.py` internals.
+   the task-run interface (`docs/task-run.md`): `autocode_taskrun.TaskRun` and
+   the status view in `autocode_run_view`. It must not import `autocode.py`
+   internals or read `state.json`.
+6. **The status view is a contract.** Add fields to `autocode_run_view.view`;
+   never rename or remove one. Command-line flags are defined in
+   `autocode_args.py`, not in `autocode.py`.
 
 ## Names
 

@@ -365,7 +365,7 @@ VALIDATION.md           recorded results and limitations
 | Setup and commands | [Install](docs/install.md) · [CLI](docs/cli.md) |
 | Planning, approval, and handoffs | [Workflow](docs/workflow.md) |
 | Models and runtime integration | [Models](docs/models.md) · [Providers](docs/providers.md) |
-| Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) |
+| Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) · [Task-run interface](docs/task-run.md) |
 | Conversation and monitoring | [Dashboard](docs/dashboard.md) · [Registry API](docs/registry-api.md) · [macOS app](docs/macos-app.md) |
 | Visual work and multi-task runs | [Figma](docs/figma.md) · [Task lanes](docs/task-lanes.md) |
 | Verification and project priorities | [Scenarios](scenarios/README.md) · [Testing](docs/testing.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
