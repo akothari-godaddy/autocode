@@ -27,6 +27,10 @@ PROFILES = {
         },
         "effort": {"requirements": "medium", "planner": "high", "reviewer": "high", "builder": "medium",
                    "validator": "high", "completion": "medium", "resolver": "high"},
+        # MiMo as reviewer repeatedly hit AutoCode's default 300s idle cutoff mid-response
+        # on architecture-two-services (2026-09-26 live runs); it is not stuck, just slower
+        # to start producing output than the default budget assumes.
+        "extra": ["--max-idle-seconds", "900"],
     },
 }
 
@@ -51,7 +55,7 @@ def resolve(name: str) -> dict:
 
 
 def flags(profile: dict) -> list[str]:
-    result = ["--provider", profile["provider"], "--joint-planning"]
+    result = ["--provider", profile["provider"], "--joint-planning", *profile.get("extra", [])]
     if profile.get("passthrough"):
         return result
     for role in ROLES:
