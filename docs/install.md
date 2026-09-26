@@ -106,7 +106,7 @@ and limits.
 ## Default provider
 
 New runs use OpenCode unless you choose otherwise. `--provider <name>` picks the
-tool for one run. To change the default for every new run and for the dashboard,
+tool for one run. To change the default for every new run,
 set `AUTOCODE_PROVIDER=kilocode` or add this to `~/.config/autocode/config.toml`:
 
 ```toml
@@ -114,7 +114,6 @@ default_provider = "kilocode"
 ```
 
 A saved run keeps the provider it started with, and `--engine codex` runs still
-use Codex. `autocode-dashboard --provider <name>` overrides the default for the
-dashboard; its model pickers list that tool's models.
+use Codex.
 
 See also: [CLI](cli.md) · [Providers](providers.md) · [Models](models.md)

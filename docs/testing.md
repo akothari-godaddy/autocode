@@ -45,8 +45,8 @@ including separate resumed sessions, command evidence and usage. An optional tin
 live check is available via `python3 tools/opencode_smoke.py --run-live`; it makes one
 request to each selected provider in a temporary workspace and saves raw evidence.
 Process tests require local `ps` access and exercise detached-worker cleanup, timeouts,
-interruption and checkpoint-write failure. The repair audit under
-`audits/opencode-repair-2026-09-19/` also verifies the original defects with native
+interruption and checkpoint-write failure. The repair audit (archived at tag `archive/pre-restructure-2026-09-26`, under
+`audits/opencode-repair-2026-09-19/`) also verifies the original defects with native
 OpenCode metadata and a loopback provider fixture, without hosted model requests.
 
 Codex launch compatibility was checked against installed exec/resume help and
@@ -54,7 +54,7 @@ Codex launch compatibility was checked against installed exec/resume help and
 
 ### Dashboard tests
 
-See [Dashboard](dashboard.md#dashboard-verification) for the dashboard test commands.
+The dashboard is parked; its tests are at tag `archive/pre-restructure-2026-09-26` under `tools/dashboard/tests/`.
 
 ### Live-trial results
 

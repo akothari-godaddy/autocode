@@ -29,7 +29,7 @@ was needed from these checks.
 
 Separate inactivity/tool deadlines, preserved hard caps, live activity diagnostics
 and bounded recovery are implemented. The final offline suite passed **323 tests**;
-three installed-wheel workflows also passed. See [the validation record](audits/activity-timeouts-2026-09-20/RESULTS.md)
+three installed-wheel workflows also passed. See the validation record (`audits/activity-timeouts-2026-09-20/RESULTS.md` at tag `archive/pre-restructure-2026-09-26`)
 for coverage, source fingerprints, deployment behavior and transport limitations.
 
 # Milestone checkpoint validation — 2026-09-20
@@ -37,7 +37,7 @@ for coverage, source fingerprints, deployment behavior and transport limitations
 Enforced milestone evidence, bounded replanning, milestone budgets, status and
 safe adoption are implemented. The full offline suite passed 261 tests; the final
 targeted milestone suite passed 19 tests, and three installed-wheel workflow tests
-passed. See [the validation and rollout record](audits/milestone-checkpoints-2026-09-20/RESULTS.md)
+passed. See the validation and rollout record (`audits/milestone-checkpoints-2026-09-20/RESULTS.md` at tag `archive/pre-restructure-2026-09-26`)
 for exact coverage, limits, and the IdleCampus/ddia-tutor migration state.
 
 # Repair validation — Autocode 0.5.4 — 2026-09-19
@@ -65,7 +65,7 @@ there were no hosted model requests in this repair pass. Process inspection was
 enabled for the supervision tests. OpenCode permissions and process supervision
 remain distinct from an OS sandbox. Existing application runs were not resumed.
 
-Details and raw evidence: [repair resolution](audits/opencode-repair-2026-09-19/RESOLUTION.md).
+Details and raw evidence: repair resolution (`audits/opencode-repair-2026-09-19/RESOLUTION.md` at tag `archive/pre-restructure-2026-09-26`).
 
 # OpenCode integration validation — 2026-09-19 (historical)
 

@@ -179,7 +179,7 @@ weakening process-identity checks.
 
 These are starting points, not assertions that current tests pass or that all
 cases above are already implemented. The
-[catalogue map](../audits/autopilot-test-catalogue/coverage-map.json) is historical.
+catalogue map (`audits/autopilot-test-catalogue/coverage-map.json` at tag `archive/pre-restructure-2026-09-26`) is historical.
 
 | Area | Existing modules or harness | Additional evidence needed |
 | --- | --- | --- |
@@ -278,7 +278,8 @@ suite before restoring it to routine use.
 
 ### Dashboard and installation
 
-With Node and the relevant browser/loopback prerequisites available:
+The dashboard and macOS app are parked (tag `archive/pre-restructure-2026-09-26`). When they are restored,
+with Node and the relevant browser/loopback prerequisites available:
 
 ```sh
 fixture_python -m unittest discover -s tools/dashboard/tests -p 'test_*.py'
@@ -296,8 +297,8 @@ accessibility cases as well as node-only tests, with fixture servers that cannot
 launch live agents. Check the supported browser's console and network failures.
 
 The real-browser suites are
-[`test_m3_lifecycle_browser_ui.js`](../tools/dashboard/tests/test_m3_lifecycle_browser_ui.js)
-and [`test_shell_a11y_ui.js`](../tools/dashboard/tests/test_shell_a11y_ui.js).
+`tools/dashboard/tests/test_m3_lifecycle_browser_ui.js`
+and `tools/dashboard/tests/test_shell_a11y_ui.js`.
 They require `agent-browser`, Python fixture servers, and localhost access, and
 write evidence. Verify those prerequisites before selecting them; node/DOM-stub
 results must not be substituted for these rendered-browser checks.
@@ -463,4 +464,4 @@ Promotion rules:
 
 See also: [testing guide](testing.md), [workflow](workflow.md),
 [execution and recovery](execution.md), [providers](providers.md), and
-[dashboard verification](dashboard.md#dashboard-verification).
+[scenarios](../scenarios/README.md).
