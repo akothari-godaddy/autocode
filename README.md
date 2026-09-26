@@ -89,7 +89,7 @@ existing runs. For a GoCode-native run, GoCode must be in managed mode with its
 credential bundle available; the runner launches `gocode exec codex exec` and
 does not launch OpenCode.
 macOS/Linux are supported; Windows needs WSL because the inherited process and lock
-mechanisms use POSIX APIs. There are no Python runtime dependencies. Installation does
+mechanisms use POSIX APIs. The only Python runtime dependency is `psutil`, used for process supervision. Installation does
 not change Codex or OpenCode settings. `--engine codex` still starts a Codex-only run.
 
 The current development priority is **reliable completion of agreed work**. Focus on
