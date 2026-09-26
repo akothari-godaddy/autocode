@@ -52,8 +52,15 @@ def needs(state: dict) -> dict | None:
     if reviews:
         return {"kind": "review", "criteria": list(reviews[0]["review_criteria"]),
                 "token": reviews[0].get("review_token"), "question": reviews[0].get("question")}
+    request = state.get("user_request") or {}
+    if request.get("kind") == "human_review":
+        # A completion-time human review (autopilot.apply_review_result, after validation
+        # passes with unreviewed criteria) is signaled directly on user_request with no
+        # pending_questions entry at all; the token is the one already displayed for this
+        # validated artifact.
+        return {"kind": "review", "criteria": list(request.get("criteria") or []),
+                "token": state.get("displayed_review"), "question": request.get("decision_needed")}
     if questions:
-        request = state.get("user_request") or {}
         return {"kind": "answer", "request_kind": request.get("kind"),
                 "questions": [{field: question.get(field) for field in QUESTION_FIELDS} for question in questions]}
     if status == "AWAITING_GOAL_APPROVAL":

@@ -36,6 +36,18 @@ class RunViewTests(unittest.TestCase):
         self.assertEqual({"kind": "review", "criteria": ["C2"], "token": "r-9", "question": "Accept C2?"},
                          run_view.needs(state))
 
+    def test_human_review_after_validation_passes_with_no_pending_question(self):
+        # autopilot.apply_review_result sets user_request directly, with pending_questions
+        # left empty — no question object to read review_criteria/review_token from. Shape
+        # matches a real run captured live (2026-09-26): sol PASSED, AC11/AC13 need a person.
+        state = {"status": "WAITING_FOR_USER", "pending_questions": [],
+                 "displayed_review": "r5:abc@def:ghi",
+                 "user_request": {"kind": "human_review", "criteria": ["AC11", "AC13"],
+                                  "decision_needed": "Review the current artifact and explicitly approve the listed criteria"}}
+        self.assertEqual({"kind": "review", "criteria": ["AC11", "AC13"], "token": "r5:abc@def:ghi",
+                          "question": "Review the current artifact and explicitly approve the listed criteria"},
+                         run_view.needs(state))
+
     def test_questions_carry_their_defaults(self):
         state = {"status": "WAITING_FOR_USER", "user_request": {"kind": "permission"},
                  "pending_questions": [{"id": "q1", "question": "Use a network?", "why": "tests", "options": ["no"],
