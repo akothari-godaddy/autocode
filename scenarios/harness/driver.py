@@ -132,8 +132,8 @@ class Driver:
             for question in questions:
                 options = question.get("options") or []
                 answer = question.get("proposed_default") or (options[0] if options else "yes")
-                self.answers.append({"question": question.get("question") or question.get("text"),
-                                     "id": question.get("id"), "answer": answer})
+                self.answers.append({"id": question.get("id"), "question": question.get("question"),
+                                     "why": question.get("why"), "answer": answer})
                 self.call("answer", "--answer", f"{question.get('id')}={answer}")
             return True
         request = state.get("user_request") or {}
