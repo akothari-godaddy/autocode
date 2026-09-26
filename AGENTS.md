@@ -77,8 +77,8 @@ suite as import errors.
 PY=.venv/bin/python   # has psutil; the system python3 does not
 $PY -m unittest tools.test_architecture                        # seconds
 $PY -m unittest tools.test_goals tools.test_autocode           # the modules you touched
-$PY scenarios/run.py run --fake                                # every scenario end to end, ~3 min
-$PY -m unittest scenarios/test_harness.py                      # harness and catalog, ~2 min
+$PY scenarios/run.py run --fake                                # every scenario end to end, under a minute
+$PY -m unittest scenarios/test_harness.py                      # harness and catalog, under a minute
 $PY tools/run_suite.py                                         # the suite gate CI runs; about 40 minutes
 ```
 
