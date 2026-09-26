@@ -482,6 +482,23 @@ class GoalTests(unittest.TestCase):
         self.assertEqual("user_cli", self.state.get("completion_actor"))
         self.assertEqual(task_id, self.state["final_decision"].get("task_id"))
 
+    def test_human_only_pending_validation_closes_only_after_current_review(self):
+        self.approve(human=True)
+        current = self.validation()
+        validation = self.state["validation"]
+        validation["verdict"] = "BLOCKED"
+        validation["criterion_results"][0]["status"] = "NOT_VERIFIED"
+        validation["unverified_criteria"] = ["C1 — awaiting explicit human review"]
+        g.present(self.state)
+        selected = g.review_token(self.state)
+        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        g.approve_review(self.state, "C1", selected, current)
+        self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.state["human_reviews"].clear()
+        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.state["validation"]["unverified_criteria"] = ["C2 — unrelated failure"]
+        self.assertFalse(g.human_only_pending_validation(self.state, self.state["validation"], "C1"))
+
     def test_medium_blocking_finding_blocks_even_with_tests_passing(self):
         self.approve(); current = self.validation()
         self.state["validation"]["findings"] = [{"severity": "medium", "blocking": True, "finding": "Required behavior missing"}]
