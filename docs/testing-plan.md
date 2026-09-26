@@ -278,8 +278,7 @@ suite before restoring it to routine use.
 
 ### Dashboard and installation
 
-The dashboard and macOS app are parked (tag `archive/pre-restructure-2026-09-26`). When they are restored,
-with Node and the relevant browser/loopback prerequisites available:
+With Node and the relevant browser/loopback prerequisites available:
 
 ```sh
 fixture_python -m unittest discover -s tools/dashboard/tests -p 'test_*.py'
@@ -297,8 +296,8 @@ accessibility cases as well as node-only tests, with fixture servers that cannot
 launch live agents. Check the supported browser's console and network failures.
 
 The real-browser suites are
-`tools/dashboard/tests/test_m3_lifecycle_browser_ui.js`
-and `tools/dashboard/tests/test_shell_a11y_ui.js`.
+[`test_m3_lifecycle_browser_ui.js`](../tools/dashboard/tests/test_m3_lifecycle_browser_ui.js)
+and [`test_shell_a11y_ui.js`](../tools/dashboard/tests/test_shell_a11y_ui.js).
 They require `agent-browser`, Python fixture servers, and localhost access, and
 write evidence. Verify those prerequisites before selecting them; node/DOM-stub
 results must not be substituted for these rendered-browser checks.
@@ -463,5 +462,5 @@ Promotion rules:
    declare dependable complex-project delivery based on fake fixtures alone.
 
 See also: [testing guide](testing.md), [workflow](workflow.md),
-[execution and recovery](execution.md), [providers](providers.md), and
-[scenarios](../scenarios/README.md).
+[execution and recovery](execution.md), [providers](providers.md),
+[dashboard verification](dashboard.md#dashboard-verification), and [scenarios](../scenarios/README.md).

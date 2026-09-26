@@ -14,13 +14,18 @@ not to add surface area. See `RELIABILITY.md` for product priorities.
 | `tools/test_*.py` | Unit and integration tests (`unittest`). |
 | `scenarios/` | End-to-end scenario harness and catalog. Black box: it drives the CLI and never imports `tools/`. |
 | `test-scenarios/` | Older fault-injection suite (crash/resume, budgets, dirty workspaces) against a fake Codex. |
+| `tools/dashboard/`, `macos-app/` | Browser dashboard and native macOS host. Frozen: bug fixes only. |
 | `docs/` | User documentation. |
 
-Parked on 2026-09-26: the browser dashboard (`tools/dashboard/`) and the macOS
-app (`macos-app/`). Historical audit records (`audits/`) and notes were archived
-at the same time. All of it is at tag `archive/pre-restructure-2026-09-26`:
-`git checkout archive/pre-restructure-2026-09-26 -- tools/dashboard` restores the
-dashboard. Do not add dashboard features until it is unparked.
+**Frozen since 2026-09-26: the browser dashboard (`tools/dashboard/`) and the
+macOS app (`macos-app/`).** Bug fixes only, no new features, until the core is
+consolidated. Their tests stay in the suite gate. The installed macOS app runs
+the dashboard straight from this checkout, so a change that breaks the dashboard
+breaks the app. The core must not import the dashboard.
+
+Historical audit records (`audits/`), `learn/` and two top-level result reports
+were archived at tag `archive/pre-restructure-2026-09-26`
+(`git show archive/pre-restructure-2026-09-26:audits/...`).
 
 ## Architecture rules
 

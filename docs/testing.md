@@ -54,7 +54,7 @@ Codex launch compatibility was checked against installed exec/resume help and
 
 ### Dashboard tests
 
-The dashboard is parked; its tests are at tag `archive/pre-restructure-2026-09-26` under `tools/dashboard/tests/`.
+See [Dashboard](dashboard.md#dashboard-verification) for the dashboard test commands.
 
 ### Live-trial results
 

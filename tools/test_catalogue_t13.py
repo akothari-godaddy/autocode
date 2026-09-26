@@ -10,6 +10,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -126,6 +127,27 @@ class CompatScenarios(CompatCase):
         self.check("limit_pause_regression_passes", True, ok)
         self.finish(summary="PAUSED_OR_AUTHORIZED_ESCALATION: persisted limits bind after restart")
 
+    def test_cfg08_large_reports_stay_responsive(self):
+        """CFG-08. New: bounded measurement against a declared threshold."""
+        sys.path.insert(0, str(REPO_ROOT / "tools" / "dashboard"))
+        import dashboard_monitor as monitor
+        ledger = [{"id": f"F-{i}", "source": "sol", "severity": "low",
+                   "finding": f"finding {i}", "status": "open", "blocking": False}
+                  for i in range(5000)]
+        with tempfile.TemporaryDirectory() as temp:
+            run = Path(temp) / "run"
+            run.mkdir()
+            (run / "state.json").write_text("{}")
+            state = {"status": "RUNNING", "stages": [], "findings_ledger": ledger}
+            started = time.monotonic()
+            snapshot = monitor.snapshot(state, run, detailed=True)
+            elapsed = time.monotonic() - started
+        self.check("complete_finding_count_reported", 5000, snapshot["findings_summary"]["open"])
+        self.check("responsiveness_within_declared_threshold", True, elapsed < 10.0)
+        self.bundle.log("measurement", findings=5000, seconds=round(elapsed, 3),
+                        threshold_seconds=10.0)
+        self.finish(summary="RESPONSIVE_OR_EXPLICIT_LIMIT: 5000-entry ledger snapshotted promptly")
+
     def test_cfg09_installed_cli_runs_outside_the_repository(self):
         """CFG-09. New: the real installed entry point, offline, outside the repo."""
         if not INSTALLED.exists():
@@ -160,7 +182,7 @@ class CompatScenarios(CompatCase):
                    {p.stem for p in source_aliases} >=
                    {"autoplanner", "autocode", "autoreview", "autoresolver"})
         self.bundle.log("scoped_note", note="the pyproject also installs separate console scripts "
-                       "(autocode-tasks, autocode-ui); equivalence of every "
+                       "(autocode-dashboard, autocode-tasks, autocode-ui); equivalence of every "
                        "alias pair is exercised by their own suites")
         self.finish(summary="EQUIVALENT_SUPPORTED_BEHAVIOR: unit aliases agree with source units")
 

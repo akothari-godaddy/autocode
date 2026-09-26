@@ -10,13 +10,14 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | Command | What it does |
 | --- | --- |
 | `autocode "Your rough idea"` | The normal entry point. Runs the full plan → approve → build → validate → complete loop (or stops at the next required checkpoint). |
-| `autopilot` | Deterministic workflow controller. Same loop as `autocode`. |
+| `autopilot` | Deterministic workflow controller. Same loop as `autocode`, and the controller behind the dashboard and macOS app. |
 | `autoplanner` | Planning only. Stops before any Builder starts. |
 | `autocode-build` | Implementation only, from a saved run directory. |
 | `autoreview` | Independent validation and completion-owner review. |
 | `autoresolver` | Read-only diagnosis of reviewer-requested rework. |
 | `autocode ui` / `autocode-ui` | Figma design (and optional `--build` handoff to implementation). |
 | `autocode tasks` / `autocode-tasks` | Run a multi-lane task flow file. |
+| `autocode-dashboard` | Local browser dashboard. |
 | `autocode --unit autoplanner\|autocode\|autoreview\|autoresolver` | Select one unit; omitting `--unit` runs all. |
 | `autocode compare-baseline` | Compare Vitest failure evidence (see [Execution](execution.md#baseline-comparison)). |
 | `autocode registry location\|list\|import` | Registry API (see [Registry API](registry-api.md)). |
