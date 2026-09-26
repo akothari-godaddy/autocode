@@ -102,6 +102,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--list-excluded", action="store_true",
                          help="print excluded modules and reasons, then exit without running anything")
     parser.add_argument("--verbosity", type=int, default=1)
+    parser.add_argument("--durations", type=int, metavar="N",
+                        help="report the N slowest tests (Python 3.12+)")
     args = parser.parse_args(argv)
 
     exclusions = load_exclusions(args.exclusions)
@@ -131,7 +133,8 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {module}: {exclusions[module]}")
         print()
 
-    runner = unittest.TextTestRunner(verbosity=args.verbosity)
+    options = {"durations": args.durations} if args.durations else {}
+    runner = unittest.TextTestRunner(verbosity=args.verbosity, **options)
     result = runner.run(kept)
     return 0 if result.wasSuccessful() else 1
 
