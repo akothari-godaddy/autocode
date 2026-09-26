@@ -1,9 +1,11 @@
 """Drive AutoCode's public CLI through one scenario, serving its gates like a user.
 
-The driver only calls the CLI and reads ``state.json``; it never writes state.
-Gates served: clarifying questions (answered with AutoCode's proposed default,
-and recorded), plan approval, human-review acceptance, and planning-budget
-feedback. Anything else that stops the run is left for the verdict to judge.
+The driver only calls the CLI. It decides what to do from the status view that
+`autocode --status` reports (docs/task-run.md), and reads ``state.json`` only
+afterwards, for evidence and metrics. It never writes state. Gates served:
+clarifying questions (answered with AutoCode's proposed default, and recorded),
+plan approval, human-review acceptance, and planning-budget feedback. A pause
+that needs a person is left for the verdict to judge.
 """
 from __future__ import annotations
 
@@ -20,7 +22,6 @@ from .project import overlay_paths
 
 REPO = Path(__file__).resolve().parents[2]
 FAKE_PROVIDER = Path(__file__).resolve().parent / "fake_codex.py"
-COMPLETE = ("TASK_COMPLETE", "COMPLETE")
 # Codex-engine flags for fake runs. The fake ignores models, but AutoCode's
 # Codex path wants bare GPT names and distinct builder and verifier models.
 FAKE_FLAGS = ["--engine", "codex", "--joint-planning", "--astra-model", "gpt-6-astra",
@@ -63,33 +64,47 @@ class Driver:
         self.log = root / "steps.jsonl"
 
     def state(self) -> dict:
+        """The saved state, read only for evidence and metrics after the run."""
         path = self.run_dir / "state.json" if self.run_dir else None
         return json.loads(path.read_text()) if path and path.is_file() else {}
 
-    def call(self, kind: str, *extra: str, task: str | None = None) -> None:
-        if len(self.steps) >= self.max_steps:
+    def view(self) -> dict:
+        """The run's status view from `autocode --status` (docs/task-run.md)."""
+        proc = self.call("status", "--status", action=True, record=False)
+        try:
+            return json.loads(proc.stdout)["view"]
+        except (ValueError, KeyError) as error:
+            raise DriveError(f"--status returned no status view: {error}") from None
+
+    def call(self, kind: str, *extra: str, task: str | None = None, action: bool = False,
+             record: bool = True) -> subprocess.CompletedProcess:
+        """One CLI invocation. Actions must exit 0; launches may also exit 2 (stopped for input)."""
+        if record and len(self.steps) >= self.max_steps:
             raise DriveError(f"step budget used up after {len(self.steps)} CLI calls")
         remaining = self.deadline - time.monotonic()
         if remaining <= 0:
             raise DriveError(f"time budget used up after {len(self.steps)} CLI calls")
         cmd = [*self.autocode, *([task] if task else []), "--workspace", str(self.project),
-               "--no-chat", "--in-place", *(["--run-dir", str(self.run_dir)] if self.run_dir else []),
-               *self.flags, *extra]
+               *(["--run-dir", str(self.run_dir)] if self.run_dir else ["--in-place"]),
+               *([] if action else ["--no-chat", *self.flags]), *extra]
         started = time.monotonic()
         try:
             proc = subprocess.run(cmd, env=self.env, cwd=self.root, capture_output=True, text=True,
                                   timeout=remaining)
         except subprocess.TimeoutExpired:
             raise DriveError(f"{kind} was still running when the time budget ran out") from None
-        step = {"kind": kind, "args": list(extra), "exit": proc.returncode,
-                "seconds": round(time.monotonic() - started, 1),
-                "stdout_tail": proc.stdout[-1500:], "stderr_tail": proc.stderr[-1500:]}
-        self.steps.append(step)
-        with self.log.open("a") as handle:
-            handle.write(json.dumps(step) + "\n")
-        # 0 = finished, 2 = paused at a gate; both are normal CLI outcomes.
-        if proc.returncode not in (0, 2):
+        if record:
+            step = {"kind": kind, "args": list(extra), "exit": proc.returncode,
+                    "seconds": round(time.monotonic() - started, 1),
+                    "stdout_tail": proc.stdout[-1500:], "stderr_tail": proc.stderr[-1500:]}
+            self.steps.append(step)
+            with self.log.open("a") as handle:
+                handle.write(json.dumps(step) + "\n")
+        # Usage errors also exit 2, so recognize argparse's message rather than trusting the code.
+        usage_error = proc.returncode == 2 and proc.stderr.startswith("usage:")
+        if usage_error or proc.returncode not in ((0,) if action else (0, 2)):
             raise DriveError(f"{kind} exited {proc.returncode}: {(proc.stderr or proc.stdout).strip()[-500:]}")
+        return proc
 
     def drive(self, brief: str) -> dict:
         self.call("start", task=brief)
@@ -101,48 +116,41 @@ class Driver:
                              + (last["stderr_tail"] or last["stdout_tail"]).strip()[-500:])
         self.run_dir = candidates[-1].parent
         while True:
-            state = self.state()
-            status = state.get("status", "")
-            if status in COMPLETE or (status.startswith("PAUSED_") and status != "PAUSED_PLANNING_BUDGET"):
-                return state
-            if self.serve_gate(state):
-                continue
-            self.call("resume")
-            after = self.state()
-            if after.get("status") in COMPLETE:
-                continue
-            if all(after.get(key) == state.get(key) for key in ("status", "next_stage", "iteration", "phase")):
-                raise DriveError(f"no progress at {status!r} (next_stage={after.get('next_stage')!r})")
+            view = self.view()
+            need = view["needs"]
+            if view["done"] or need["kind"] == "resume":
+                return view
+            if need["kind"] == "continue":
+                self.call("resume")
+                after = self.view()
+                keys = ("status", "next_stage", "iteration", "phase")
+                if not after["done"] and all(after[key] == view[key] for key in keys):
+                    raise DriveError(f"no progress at {view['status']!r} (next_stage={view['next_stage']!r})")
+            else:
+                self.serve(need)
 
-    def serve_gate(self, state: dict) -> bool:
-        """Answer one gate from the saved state; False when there is none to answer."""
-        status = state.get("status", "")
-        if status == "PAUSED_PLANNING_BUDGET":
-            self.call("feedback", "--feedback", "The previous planning cycle used up its review budget. "
-                      "Produce a complete final plan now and finalize it.")
-            return True
-        if status == "AWAITING_GOAL_APPROVAL":
-            if not state.get("displayed_goal"):
-                raise DriveError("AWAITING_GOAL_APPROVAL without a displayed plan to approve")
-            self.call("approve-plan", "--approve-goal", state["displayed_goal"])
-            return True
-        answered = {row["id"] for row in self.answers}
-        questions = [q for q in state.get("pending_questions") or [] if q.get("id") not in answered]
-        if questions and status in ("DISCOVERING", "RUNNING", "WAITING_FOR_USER"):
-            for question in questions:
+    def serve(self, need: dict) -> None:
+        """Answer one gate the way a cooperative user would, recording every answer."""
+        kind = need["kind"]
+        if kind == "approve_plan":
+            self.call("approve-plan", "--approve-goal", need["token"], action=True)
+        elif kind == "answer":
+            for question in need["questions"]:
                 options = question.get("options") or []
                 answer = question.get("proposed_default") or (options[0] if options else "yes")
-                self.answers.append({"id": question.get("id"), "question": question.get("question"),
+                self.answers.append({"id": question["id"], "question": question.get("question"),
                                      "why": question.get("why"), "answer": answer})
-                self.call("answer", "--answer", f"{question.get('id')}={answer}")
-            return True
-        request = state.get("user_request") or {}
-        if request.get("kind") == "human_review":
-            token = state.get("displayed_review") or state.get("displayed_goal")
-            for criterion in request.get("criteria", []):
-                self.call("accept-review", "--accept-review", f"{criterion}={token}" if token else criterion)
-            return True
-        return False
+                self.call("answer", "--answer", f"{question['id']}={answer}", action=True)
+        elif kind == "review":
+            for criterion in need["criteria"]:
+                self.answers.append({"id": criterion, "question": need.get("question"), "answer": "approved"})
+                self.call("approve-review", "--approve-review", criterion, "--review-token", need["token"],
+                          action=True)
+        elif kind == "planning_budget":
+            self.call("feedback", "--feedback", "The previous planning cycle used up its review budget. "
+                      "Produce a complete final plan now and finalize it.", action=True)
+        else:
+            raise DriveError(f"no way to serve a {kind!r} gate")
 
 
 def default_autocode() -> list[str]:
