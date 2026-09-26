@@ -194,7 +194,8 @@ class OutputLimitTests(unittest.TestCase):
                 runner.abandon_stage(state, self.run, self.root, runner.attempt_id(record))
             popen.assert_not_called()
         self.assertEqual("PAUSED_STAGE_ABANDONED", state["status"])
-        self.assertEqual("astra_review", state["next_stage"])
+        # Abandoning a Builder re-dispatches the Builder to inspect its partial work (46a8187).
+        self.assertEqual("terra", state["next_stage"])
         self.assertEqual(approved, state["goal_contract"])
         self.assertNotIn("active_stage", state)
         self.assertNotIn("terra", state["sessions"])
