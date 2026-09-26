@@ -19,3 +19,6 @@ dist/
 # Local Codex config and hooks
 .codex/config.toml
 .codex/hooks.json
+
+# Scenario harness results
+.scenario-runs/
