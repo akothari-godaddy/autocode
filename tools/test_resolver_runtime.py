@@ -373,7 +373,16 @@ class OperationalDiagnosisTests(unittest.TestCase):
             runner.resolver_runtime.diagnostic_call_limit(self.state)
 
     def charge(self):
-        return runner.resolver_runtime.charge_diagnostic_dispatch(runner, self.state, self.run)
+        return runner.resolver_runtime.charge_diagnostic_dispatch(runner, self.state, self.run, self.root)
+
+    def archive_timed_out_astra_diagnose_attempt(self):
+        """Simulate what automatically_recover_timed_out_stage actually does:
+        archive the timed-out attempt into state['stages'] at the same
+        iteration, then route back to astra_diagnose for a fresh launch."""
+        self.state.setdefault('stages', []).append({
+            'stage': 'astra_diagnose', 'role': 'astra', 'iteration': self.state.get('iteration'),
+            'automatic_recovery': True, 'timed_out': True})
+        self.state['next_stage'] = 'astra_diagnose'
 
     def test_charge_dispatch_is_a_no_op_without_an_admitted_diagnosis_request(self):
         before = copy.deepcopy(self.state)
@@ -389,18 +398,33 @@ class OperationalDiagnosisTests(unittest.TestCase):
         saved = support.read(self.run / 'state.json')
         self.assertEqual(1, saved['resolver']['diagnostic_calls'])
 
-    def test_charge_dispatch_does_not_double_charge_a_provider_timeout_retry(self):
-        # timeout_recovery_route returns astra_diagnose to itself on a timeout
-        # (same role, same stage): the next dispatch charges the SAME admitted
-        # attempt, which charge_diagnostic_dispatch must recognize as already
-        # charged rather than spending the run-level cap a second time.
+    def test_charge_dispatch_rechecking_the_same_unlaunched_attempt_is_idempotent(self):
+        # No new stages row appeared between these calls (no relaunch
+        # actually happened), so this must not spend the budget three times.
         self.repeated_terra_failure()
         self.admit()
         self.charge()
         self.charge()
         self.charge()
         self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
-        self.assertEqual(1, len(self.state['resolver']['diagnostic_dispatch_charged']))
+
+    def test_charge_dispatch_charges_a_genuine_timeout_relaunch_again(self):
+        # The exact case the review found uncounted: a real timeout archives
+        # the attempt and routes back to astra_diagnose for a real relaunch,
+        # which is a second genuine provider call and must be charged again.
+        self.repeated_terra_failure()
+        self.admit()
+        self.charge()
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        self.archive_timed_out_astra_diagnose_attempt()
+        self.charge()
+        self.assertEqual(2, self.state['resolver']['diagnostic_calls'])
+        # And a third relaunch (e.g. the cap is 2) is refused before launch.
+        self.archive_timed_out_astra_diagnose_attempt()
+        with self.assertRaises(support.Paused) as caught:
+            self.charge()
+        self.assertEqual('PAUSED_REPEATED_FAILURE', caught.exception.status)
+        self.assertEqual(2, self.state['resolver']['diagnostic_calls'])
 
     def test_charge_dispatch_pauses_at_the_cap_before_any_launch(self):
         self.repeated_terra_failure()
@@ -422,6 +446,15 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
         self.charge()
         self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+
+    def test_charge_dispatch_refuses_a_stale_source_before_charging(self):
+        self.repeated_terra_failure()
+        self.admit()
+        self.state['diagnosis_request']['source_revision'] = 'a-different-revision'
+        with self.assertRaises(support.Paused) as caught:
+            self.charge()
+        self.assertEqual('PAUSED_STALE_HANDOFF', caught.exception.status)
+        self.assertNotIn('diagnostic_calls', self.state['resolver'])
 
     def test_cli_diagnose_failed_stage_reaches_astra_diagnose_and_retries_terra(self):
         """The real production dispatch path (autocode.main), not a test helper."""

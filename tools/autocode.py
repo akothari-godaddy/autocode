@@ -2740,7 +2740,7 @@ def main(unit=None) -> int:
                 if stage == "terra":
                     autopilot.builder_policy.guard(current)
                 if stage == "astra_diagnose":
-                    resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], current, run_dir)
+                    resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], current, run_dir, workspace)
                 milestones.dispatch_guard(current, stage)
                 workflow.dispatch_guard(current,stage,workspace)
                 if stage == "orchestrator":

@@ -252,25 +252,43 @@ def diagnostic_call_limit(state):
     return limit
 
 
-def charge_diagnostic_dispatch(runner, state, run_dir):
-    """Durably charge the run-level diagnostic cap when astra_diagnose is
-    about to actually launch a provider request -- not at admission, which
-    does not guarantee a launch, and not once per provider-level retry of
-    the same admitted attempt (a timeout retry of astra_diagnose relaunches
-    the identical logical call; see timeout_recovery_route, which returns
-    it to itself). The reservation is keyed by the diagnosis request's
-    stable blocker id, so it survives a crash between charge and launch,
-    a provider timeout retry, and an explicit resume: whichever of those
-    happens, the same admitted attempt is charged exactly once, and this
-    is a no-op once it already has been.
+def charge_diagnostic_dispatch(runner, state, run_dir, workspace):
+    """Durably charge the run-level diagnostic cap once per genuine provider
+    launch of astra_diagnose, not once per admitted attempt.
+
+    A blocker id is stable across a whole admitted attempt, but a timeout
+    retry archives the timed-out record into state['stages'] and dispatches
+    a brand new provider request (timeout_recovery_route routes astra_diagnose
+    back to itself precisely so that relaunch happens) -- a genuinely new
+    paid call, not a replay of the first one. So the reservation here is NOT
+    keyed by blocker id; it is keyed by how many astra_diagnose stage records
+    (completed or timeout-archived) already exist for the current iteration.
+    Each time that count is about to increase by dispatching a new one, this
+    charges exactly one more call. A crash-then-reconcile that has not yet
+    produced a new stages row sees the same count as before and is a no-op,
+    so this remains idempotent across a restart without undercounting a
+    genuine relaunch.
+
+    Runs before any charge: the same staleness check astra_diagnose's own
+    guard performs at prepare(), so a dispatch that can never actually reach
+    the provider (stale source or contract) pauses without spending budget.
     """
     request = state.get('diagnosis_request')
     if not request or state.get('next_stage') != 'astra_diagnose':
         return
+    if (request.get('contract_hash') != state['goal_contract']['hash']
+            or request.get('source_revision') != support.snapshot(workspace)['revision']):
+        raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis needs the current source and approved contract')
+    for path, digest in request.get('evidence_hashes', {}).items():
+        if not Path(path).is_file() or support.file_hash(path) != digest:
+            raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis evidence changed; reconcile before diagnosing')
+    iteration = state.get('iteration')
+    existing_attempts = sum(1 for row in state.get('stages', [])
+                            if row.get('stage') == 'astra_diagnose' and row.get('iteration') == iteration)
+    upcoming_attempt = existing_attempts + 1
     saved = state.setdefault('resolver', {})
-    charged = saved.setdefault('diagnostic_dispatch_charged', [])
-    blocker_id = request['blocker_id']
-    if blocker_id in charged:
+    charged_through = saved.get('diagnostic_dispatch_charged_through', 0)
+    if upcoming_attempt <= charged_through:
         return
     limit = diagnostic_call_limit(state)
     diagnostic_calls = saved.get('diagnostic_calls', 0)
@@ -280,7 +298,7 @@ def charge_diagnostic_dispatch(runner, state, run_dir):
         runner.write_json(Path(run_dir) / 'state.json', state)
         raise support.Paused('PAUSED_REPEATED_FAILURE', reason)
     saved['diagnostic_calls'] = diagnostic_calls + 1
-    charged.append(blocker_id)
+    saved['diagnostic_dispatch_charged_through'] = upcoming_attempt
     runner.write_json(Path(run_dir) / 'state.json', state)
 
 

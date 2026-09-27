@@ -134,7 +134,7 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     if stage == 'terra':
         builder_policy.guard(state)
     if stage == 'astra_diagnose':
-        runtime.resolver_runtime.charge_diagnostic_dispatch(runtime, state, run_dir)
+        runtime.resolver_runtime.charge_diagnostic_dispatch(runtime, state, run_dir, workspace)
     runtime.milestones.dispatch_guard(state, stage)
     runtime.workflow.dispatch_guard(state, stage, workspace)
     unit = unit_module(stage)

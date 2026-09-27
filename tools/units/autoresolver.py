@@ -117,7 +117,8 @@ def prepare_diagnosis(state, stage, state_path, schema_dir):
     data.update(stage=stage, diagnosis_request=state['diagnosis_request'],
                 execution_engine=state['settings']['roles']['resolver'].get('engine', state['settings'].get('engine', 'codex')))
     prompt = ('You are AUTORESOLVER, a read-only failure diagnostician, not a Builder or completion owner. '
-              'A stage has failed the same way repeatedly and the bounded report-repair route is already exhausted. '
+              'A stage has failed the same way repeatedly (see diagnosis_request.repeated_count) and the runner has '
+              'stopped its own deterministic recovery for it. '
               'Inspect diagnosis_request (the repeated failure identity, its evidence, and how many times it '
               'recurred) plus the current handoff data. Return a nonempty diagnosis explaining the likely cause. '
               'Recommend "retry" only when you can name a concrete, different action or guidance the next '

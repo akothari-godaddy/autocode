@@ -80,6 +80,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -107,24 +108,45 @@ def celsius_to_fahrenheit(celsius):
     return celsius * 9 / 5 + 31  # BUG: should be + 32
 '''
 
-SEED_TEST = '''"""Regression tests: stdlib only, run as `python3 test_convert.py`."""
+SEED_TEST = '''"""Regression tests: stdlib only, run as `python3 test_convert.py`.
+
+Each test imports convert INSIDE the test method, not at module scope: a
+candidate module that raises SystemExit (or otherwise refuses to import) at
+module level must not be able to kill the whole test process before a single
+assertion runs -- unittest reports that as a test error instead, and the
+completion marker below still prints, so a verdict reader can tell "the
+candidate would not even import" apart from "the interpreter exited zero."
+"""
+import sys
 import unittest
-from convert import celsius_to_fahrenheit
+
+EXPECTED_TEST_COUNT = 3
 
 
 class ConversionTests(unittest.TestCase):
     def test_freezing_point(self):
+        from convert import celsius_to_fahrenheit
         self.assertEqual(32, celsius_to_fahrenheit(0))
 
     def test_boiling_point(self):
+        from convert import celsius_to_fahrenheit
         self.assertEqual(212, celsius_to_fahrenheit(100))
 
     def test_body_temperature(self):
+        from convert import celsius_to_fahrenheit
         self.assertAlmostEqual(98.6, celsius_to_fahrenheit(37), places=2)
 
 
 if __name__ == "__main__":
-    unittest.main()
+    _suite = unittest.TestLoader().loadTestsFromTestCase(ConversionTests)
+    _result = unittest.TextTestRunner(verbosity=0).run(_suite)
+    # A machine-checkable completion marker: its presence and count are the
+    # verdict, never a bare process exit code alone.
+    print(f"TRIAL_RESULT_MARKER tests_run={_result.testsRun} "
+          f"failures={len(_result.failures)} errors={len(_result.errors)} "
+          f"expected={EXPECTED_TEST_COUNT}")
+    _ok = _result.wasSuccessful() and _result.testsRun == EXPECTED_TEST_COUNT
+    sys.exit(0 if _ok else 1)
 '''
 
 REFERENCE_MODULE = '''"""Temperature conversion."""
@@ -377,6 +399,22 @@ def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
     return result
 
 
+GRADING_SUBPROCESS_TIMEOUT = 30  # seconds; a delivered module that hangs must not stall grading indefinitely.
+_MARKER_PATTERN = re.compile(
+    r"TRIAL_RESULT_MARKER tests_run=(\d+) failures=(\d+) errors=(\d+) expected=(\d+)")
+
+
+def verdict_result(verdict: dict) -> str:
+    """PASS only when the frozen test genuinely completed and passed AND the
+    delivered test_convert.py is byte-identical to what was seeded -- the
+    task explicitly prohibits editing it, so a modified or missing protected
+    test is a FAIL even when the code fix itself is correct.
+    """
+    if verdict.get("protected_test_status") != "unmodified":
+        return "FAIL"
+    return "PASS" if verdict.get("verified_pass") else "FAIL"
+
+
 def judge_final_verdict(project: Path, run_dir: Path, frozen_test_path: Path) -> dict:
     """Independent scoring against an immutable copy of the seed's own test,
     never the delivered workspace's copy: the Builder was told not to edit
@@ -386,20 +424,53 @@ def judge_final_verdict(project: Path, run_dir: Path, frozen_test_path: Path) ->
     frozen test (captured before any Builder attempt) alongside whatever
     convert.py the run actually delivered, in a directory the candidate
     never touched, and running it there.
+
+    A bare zero exit code is not proof anything was actually checked: a
+    candidate module that exits the whole interpreter at import time (or
+    otherwise prevents the test body from running) can return 0 without a
+    single assertion executing. The verdict instead requires the frozen
+    test's own completion marker, with the exact expected test count and
+    zero failures/errors; its absence or mismatch is a fail regardless of
+    the process exit code.
+
+    Separately (and independently of the code verdict), the delivered
+    test_convert.py's bytes are compared against the frozen original: the
+    task explicitly prohibits editing it, so a modified or missing copy is
+    reported even when the delivered implementation is otherwise correct.
     """
+    delivered = project / "convert.py"
+    delivered_test = project / "test_convert.py"
+    protected_test_status = "missing"
+    if delivered_test.is_file():
+        protected_test_status = ("unmodified" if delivered_test.read_bytes() == frozen_test_path.read_bytes()
+                                 else "modified")
+    if not delivered.is_file():
+        state = base.load_state(run_dir)
+        return {"independent_test_exit": None, "independent_test_tail": "", "marker": None,
+                "protected_test_status": protected_test_status,
+                "runner_status": state.get("status"), "note": "convert.py is missing from the delivered workspace"}
     with tempfile.TemporaryDirectory(prefix="diagnosis-trial-verdict-") as tmp:
         scoring_dir = Path(tmp)
-        delivered = project / "convert.py"
-        if not delivered.is_file():
-            state = base.load_state(run_dir)
-            return {"independent_test_exit": None, "independent_test_tail": "",
-                    "runner_status": state.get("status"), "note": "convert.py is missing from the delivered workspace"}
         shutil.copy2(delivered, scoring_dir / "convert.py")
         shutil.copy2(frozen_test_path, scoring_dir / "test_convert.py")
-        proc = subprocess.run([sys.executable, "test_convert.py"],
-                              capture_output=True, text=True, cwd=scoring_dir)
+        try:
+            proc = subprocess.run([sys.executable, "test_convert.py"], capture_output=True, text=True,
+                                  cwd=scoring_dir, timeout=GRADING_SUBPROCESS_TIMEOUT)
+            timed_out = False
+        except subprocess.TimeoutExpired as error:
+            proc = type("Result", (), {"returncode": None, "stdout": error.stdout or "", "stderr": error.stderr or ""})()
+            timed_out = True
     state = base.load_state(run_dir)
-    return {"independent_test_exit": proc.returncode, "independent_test_tail": proc.stdout[-800:],
+    match = _MARKER_PATTERN.search(proc.stdout or "")
+    marker = None
+    if match:
+        tests_run, failures, errors, expected = (int(g) for g in match.groups())
+        marker = {"tests_run": tests_run, "failures": failures, "errors": errors, "expected": expected,
+                  "complete": tests_run == expected and failures == 0 and errors == 0}
+    verified_pass = bool(marker and marker["complete"] and proc.returncode == 0)
+    return {"independent_test_exit": proc.returncode, "timed_out": timed_out, "marker": marker,
+            "verified_pass": verified_pass, "protected_test_status": protected_test_status,
+            "independent_test_tail": (proc.stdout or "")[-800:], "independent_test_stderr_tail": (proc.stderr or "")[-800:],
             "runner_status": state.get("status")}
 
 
@@ -475,7 +546,7 @@ def main(argv: list[str] | None = None) -> int:
             verdict = judge_final_verdict(project, first["run_dir"], frozen_test_path)
             payload.update(astra_diagnose="NOT_EXERCISED", reason="first attempt already valid",
                            final_verdict=verdict)
-            result = "PASS" if verdict["independent_test_exit"] == 0 else "FAIL"
+            result = verdict_result(verdict)
         elif first["outcome"] not in ("rejected",):
             payload.update(astra_diagnose="NOT_EXERCISED",
                            reason=f"drive stopped at {first['outcome']!r} before any Builder rejection")
@@ -493,7 +564,7 @@ def main(argv: list[str] | None = None) -> int:
             if diagnosis.get("recommendation", {}).get("action") == "retry":
                 verdict = judge_final_verdict(project, first["run_dir"], frozen_test_path)
                 payload["final_verdict"] = verdict
-                result = "PASS" if verdict["independent_test_exit"] == 0 else "FAIL"
+                result = verdict_result(verdict)
 
         payload["result"] = result
         report_path = bundle.dir / "diagnosis-comparison.json"
