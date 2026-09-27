@@ -14,7 +14,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import run  # noqa: E402
-from harness import catalog, verdict  # noqa: E402
+from harness import catalog, oracle, routing, verdict  # noqa: E402
 
 
 class CatalogTests(unittest.TestCase):
@@ -45,6 +45,21 @@ class CatalogTests(unittest.TestCase):
                 self.assertTrue(scenario.brief)
                 self.assertNotIn("\n#", scenario.brief, "headings would become part of the task text")
 
+    def test_known_failures_say_why(self):
+        for scenario in catalog.load_all():
+            with self.subTest(scenario=scenario.id):
+                self.assertIsInstance(scenario.known_failure, str)
+                if scenario.known_failure:
+                    self.assertGreater(len(scenario.known_failure), 20, "a known failure names what is missing")
+                self.assertIn(scenario.expected, catalog.EXPECTED)
+
+    def test_routing_table_loads_and_names_known_workflows(self):
+        table = routing.load()
+        catalog.load(table["seed"])
+        self.assertGreaterEqual(len(table["prompts"]), 10)
+        self.assertEqual(set(routing.WORKFLOWS), {p["workflow"] for p in table["prompts"]},
+                         "every workflow needs at least one prompt")
+
 
 class JudgeTests(unittest.TestCase):
     passing = verdict.OracleResult([verdict.Check("a", True)])
@@ -57,8 +72,36 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(verdict.ERROR, verdict.judge("RUNNING", self.passing)[0])
         self.assertEqual(verdict.ERROR, verdict.judge("TASK_COMPLETE", verdict.OracleResult(error="boom"))[0])
 
+    def test_a_scenario_that_expects_a_stop(self):
+        self.assertEqual(verdict.PASS, verdict.judge("PAUSED_HUMAN", self.passing, "stop")[0])
+        self.assertEqual(verdict.HONEST_BLOCKER, verdict.judge("PAUSED_HUMAN", self.failing, "stop")[0])
+        self.assertEqual(verdict.FALSE_COMPLETE, verdict.judge("TASK_COMPLETE", self.passing, "stop")[0])
+        self.assertEqual(verdict.PASS, verdict.judge("WAITING_FOR_USER", self.passing, "any")[0])
+        self.assertEqual(verdict.PASS, verdict.judge("TASK_COMPLETE", self.passing, "any")[0])
+
     def test_an_oracle_with_no_checks_does_not_pass(self):
         self.assertFalse(verdict.OracleResult([]).passed)
+
+
+class RunChecksTests(unittest.TestCase):
+    """Run-level checks judge how AutoCode worked; without a run there is nothing to judge."""
+
+    def test_no_run_means_no_checks(self):
+        self.assertEqual([], oracle.run_checks(None, workflow="review", no_build=True))
+
+    def test_todays_build_pipeline_fails_a_review(self):
+        run_record = {"view": {"workflow": None}, "cli_calls": ["start", "approve-plan", "resume"],
+                      "stages": ["requirements_gather", "astra_discovery", "terra", "sol"], "answers": []}
+        failed = {c.name for c in oracle.run_checks(run_record, workflow="review", no_build=True, no_requirements=True)
+                  if not c.ok}
+        self.assertEqual({"workflow_recognized", "no_builder_dispatched", "no_build_plan_approval_requested",
+                          "no_requirements_gathering"}, failed)
+
+    def test_a_recognized_read_only_review_passes(self):
+        run_record = {"view": {"workflow": "review"}, "cli_calls": ["start", "resume"],
+                      "stages": ["review", "sol"], "answers": []}
+        self.assertTrue(all(c.ok for c in oracle.run_checks(run_record, workflow="review", no_build=True,
+                                                            no_requirements=True, max_questions=0)))
 
 
 class FakeRunTests(unittest.TestCase):

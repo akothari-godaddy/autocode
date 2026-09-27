@@ -7,6 +7,7 @@ imports AutoCode and never trusts the run's own reports or the model's tests.
 from __future__ import annotations
 
 import ast
+import json
 import shutil
 import subprocess
 import sys
@@ -98,6 +99,104 @@ def non_stdlib_imports(project: Path) -> list[str]:
                 if name not in sys.stdlib_module_names and name not in local:
                     foreign.append(f"{path.relative_to(project)}: imports {name}")
     return foreign
+
+
+def changed_paths(project: Path) -> list[str]:
+    """Paths the run added, changed or deleted, relative to the committed seed."""
+    status = run(["git", "status", "--porcelain", "--untracked-files=all"], project)
+    paths = (line[3:].strip() for line in status.stdout.splitlines() if line.strip())
+    # AutoCode's own run state lives in the workspace; it is not a change to the project.
+    return sorted(path for path in paths if not path.startswith(".autocode/") and "__pycache__" not in path)
+
+
+def only_changed_under(project: Path, *allowed: str) -> Check:
+    """A read-only job may leave only its report behind. ``allowed`` are path prefixes."""
+    stray = [path for path in changed_paths(project) if not path.startswith(allowed)]
+    return Check("workspace_unchanged_except_report", not stray, f"also changed: {stray}" if stray else "")
+
+
+def load_json(path: Path) -> tuple[object, str]:
+    """(parsed value, error); the value is None when the file is missing or invalid."""
+    try:
+        return json.loads(path.read_text()), ""
+    except (OSError, ValueError) as error:
+        return None, str(error)
+
+
+def apply_patch(copy: Path, patch: Path) -> subprocess.CompletedProcess:
+    return run(["git", "apply", "--whitespace=nowarn", str(patch)], copy)
+
+
+def mentions(text: object, *groups: tuple[str, ...]) -> bool:
+    """True when the text contains a word from every group (case-insensitive)."""
+    lowered = json.dumps(text).lower() if not isinstance(text, str) else text.lower()
+    return all(any(word.lower() in lowered for word in group) for group in groups)
+
+
+def finding_matches(finding: dict, *, file: str, lines: tuple[int, int] | None = None,
+                    words: tuple[tuple[str, ...], ...] = ()) -> bool:
+    """Does a review finding point at a planted defect? It must name the file and
+    either overlap the planted line span or describe the defect in words."""
+    if not isinstance(finding, dict) or finding.get("file") != file:
+        return False
+    span = finding.get("lines")
+    if lines and isinstance(span, list) and len(span) == 2 and all(isinstance(n, int) for n in span):
+        if span[0] <= lines[1] and lines[0] <= span[1]:
+            return True
+    return bool(words) and mentions(finding, *words)
+
+
+def findings_of(report: object, severity: str) -> list[dict]:
+    if not isinstance(report, dict) or not isinstance(report.get("findings"), list):
+        return []
+    return [f for f in report["findings"] if isinstance(f, dict) and f.get("severity") == severity]
+
+
+# Stage names AutoCode saves today (AGENTS.md, "Names"); oracles use them only through the sets below.
+REQUIREMENTS_STAGES = ("requirements_gather",)
+PLAN_REVIEW_STAGES = ("astra_challenge", "glm_revise")
+BUILD_STAGES = ("orchestrator", "astra_plan", "terra")
+
+
+def run_checks(run: dict | None, *, workflow: str, no_build: bool = False, no_requirements: bool = False,
+               no_plan_review: bool = False, max_questions: int | None = None,
+               max_model_stages: int | None = None) -> list[Check]:
+    """Checks on how AutoCode worked, from the run record the harness passes to oracles.
+
+    ``run`` is None in ``check`` mode (no AutoCode ran), and then there is nothing to
+    judge. Otherwise it holds ``status``, the final status ``view`` (docs/task-run.md),
+    ``stages`` (saved stage names in order), ``answers`` (questions the driver answered)
+    and ``cli_calls`` (the kinds of CLI call the driver made).
+
+    ``workflow`` is the kind of job the run should have recognized; the harness
+    reads it from the status view's ``workflow`` field (README, "Workflows").
+    """
+    if run is None:
+        return []
+    checks = []
+    view = run.get("view") or {}
+    stages = run.get("stages") or []
+    checks.append(Check("workflow_recognized", view.get("workflow") == workflow,
+                        f"status view reports workflow={view.get('workflow')!r}, wanted {workflow!r}"))
+    if no_build:
+        built = [stage for stage in stages if stage in BUILD_STAGES]
+        checks.append(Check("no_builder_dispatched", not built, f"build stages ran: {built}"))
+        approved = "approve-plan" in run.get("cli_calls", [])
+        checks.append(Check("no_build_plan_approval_requested", not approved,
+                            "a build plan was put up for approval" if approved else ""))
+    if no_requirements:
+        gathered = [stage for stage in stages if stage in REQUIREMENTS_STAGES]
+        checks.append(Check("no_requirements_gathering", not gathered, f"ran {gathered}"))
+    if no_plan_review:
+        reviewed = [stage for stage in stages if stage in PLAN_REVIEW_STAGES]
+        checks.append(Check("no_plan_review_rounds", not reviewed, f"ran {reviewed}"))
+    if max_questions is not None:
+        asked = len(run.get("answers") or [])
+        checks.append(Check("question_budget", asked <= max_questions, f"asked {asked}, allowed {max_questions}"))
+    if max_model_stages is not None:
+        count = len([stage for stage in stages if stage != "orchestrator"])
+        checks.append(Check("stage_budget", count <= max_model_stages, f"{count} model stages, allowed {max_model_stages}"))
+    return checks
 
 
 def python_change_checks(project: Path, scenario, package: str) -> list[Check]:

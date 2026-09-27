@@ -1,0 +1,13 @@
+{
+  "satisfied": ["Throughput", "Replay", "Independent consumers", "Per-domain ordering"],
+  "concerns": [
+    {
+      "id": "F1",
+      "area": "duplicate processing",
+      "severity": "blocking",
+      "summary": "At-least-once delivery means a renew can be charged twice on redelivery.",
+      "evidence": "Consumers paragraph says delivery is at-least-once."
+    }
+  ],
+  "questions": []
+}

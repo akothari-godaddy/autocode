@@ -1,0 +1,11 @@
+title = "Review a sound design without inventing blockers"
+category = "design"
+# The negative control for design reviews: the same migration with ordering,
+# idempotency and rollback specified. Advisory notes and questions are fine;
+# a blocking concern is an invented one.
+
+[fake]
+check = "python3 -c \"import json; json.load(open('review/design-review.json')); print('ok')\""
+
+[run]
+known_failure = "AutoCode has no design-review workflow; it turns every prompt into a build brief"

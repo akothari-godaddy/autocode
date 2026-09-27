@@ -1,9 +1,9 @@
 """The scenario catalog: one directory per scenario under ``scenarios/catalog/``.
 
-    <id>/scenario.toml   title, category, requirements, fake-mode check, budgets
+    <id>/scenario.toml   title, category, requirements, fake-mode check, budgets, expected outcome
     <id>/brief.md        the request given to AutoCode, verbatim
     <id>/seed/           starting project, committed before the run (optional)
-    <id>/oracle.py       check(project, scenario) -> list[Check]
+    <id>/oracle.py       check(project, scenario[, run]) -> list[Check]
     <id>/reference/      overlay that makes a correct solution (optional)
     <id>/broken/<name>/  overlays that look plausible but are wrong (optional)
     <id>/hidden/         files only the oracle sees (optional)
@@ -17,8 +17,15 @@ from dataclasses import dataclass
 from pathlib import Path
 
 CATALOG = Path(__file__).resolve().parent.parent / "catalog"
-CATEGORIES = ("bugfix", "feature", "greenfield", "port", "parallel", "architecture", "figma", "system")
+# The kind of engineering job. The first eight change or create code; the last
+# four are read-only jobs whose deliverable is a report (README, "Workflows").
+CATEGORIES = ("bugfix", "feature", "greenfield", "port", "parallel", "architecture", "figma", "system",
+              "review", "design", "discuss", "investigate")
+# How a correct run ends: with completion, with a stop (a blocker or a question
+# the user must answer), or either.
+EXPECTED = ("complete", "stop", "any")
 KEYS = {"title", "category", "requires", "fake", "run"}
+RUN_KEYS = {"max_steps", "timeout_minutes", "expected", "known_failure"}
 
 
 @dataclass(frozen=True)
@@ -32,6 +39,10 @@ class Scenario:
     fake_check: str | None
     max_steps: int
     timeout_minutes: int
+    expected: str = "complete"
+    # Why AutoCode is known not to pass this scenario yet. A verdict other than
+    # PASS is reported but does not fail the suite; a PASS says to remove the key.
+    known_failure: str = ""
 
     @property
     def seed(self) -> Path:
@@ -69,11 +80,17 @@ def load(scenario_id: str) -> Scenario:
     if meta.get("category") not in CATEGORIES:
         raise ValueError(f"{scenario_id}: category must be one of {CATEGORIES}")
     run = meta.get("run", {})
+    unknown = set(run) - RUN_KEYS
+    if unknown:
+        raise ValueError(f"{scenario_id}/scenario.toml: unknown [run] keys {sorted(unknown)}")
+    if run.get("expected", "complete") not in EXPECTED:
+        raise ValueError(f"{scenario_id}: [run] expected must be one of {EXPECTED}")
     return Scenario(
         id=scenario_id, dir=root, title=meta["title"], category=meta["category"],
         brief=(root / "brief.md").read_text().strip(), requires=tuple(meta.get("requires", ())),
         fake_check=meta.get("fake", {}).get("check"), max_steps=run.get("max_steps", 40),
-        timeout_minutes=run.get("timeout_minutes", 60))
+        timeout_minutes=run.get("timeout_minutes", 60), expected=run.get("expected", "complete"),
+        known_failure=run.get("known_failure", ""))
 
 
 def load_all() -> list[Scenario]:
