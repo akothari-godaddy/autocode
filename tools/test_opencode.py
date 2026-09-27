@@ -74,10 +74,20 @@ class OpenCodeTests(unittest.TestCase):
             rows = [earlier, event("text", text='```json\n{"ok":true}\n```'), terminal()]
             path.write_text("\n".join(json.dumps(row) for row in rows))
             self.assertEqual({"ok": True}, oc.final_report(path))
-            rows[1]["part"]["text"] = 'Commentary {"ok":true}'
+            # Brief prose then the complete report, with nothing after it, is the report.
+            rows[1]["part"]["text"] = 'The probe confirms the claims. Report:\n\n{"ok":true}'
             path.write_text("\n".join(json.dumps(row) for row in rows))
-            with self.assertRaisesRegex(RuntimeError, "not a JSON report"):
-                oc.final_report(path)
+            self.assertEqual({"ok": True}, oc.final_report(path))
+            # Anything after the object, a second object, long prose or a fence before it is still refused.
+            for text in ('Commentary {"ok":true} but I changed my mind',
+                         'Commentary {"ok":true}{"ok":false}',
+                         'Commentary {"ok":true}{"ok":true}',
+                         "x" * 501 + '{"ok":true}',
+                         'See ```the fence``` {"ok":true}'):
+                rows[1]["part"]["text"] = text
+                path.write_text("\n".join(json.dumps(row) for row in rows))
+                with self.subTest(text=text[:40]), self.assertRaisesRegex(RuntimeError, "not a JSON report"):
+                    oc.final_report(path)
 
     def test_schema_prompt_keeps_agent_within_the_target_workspace(self):
         prompt = oc.prompt_for_schema("Task\nCURRENT HANDOFF DATA\n{}", {"type": "object"}, Path("/tmp/events.jsonl"))

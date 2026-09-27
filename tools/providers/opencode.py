@@ -323,15 +323,22 @@ def normalized_events(rows):
     return normalized
 
 
-def _repeated_repair_report(final):
-    """Recover a report-only reply with brief prose and duplicate identical JSON."""
+def _trailing_report(final, *, copies=1):
+    """Recover a reply of brief prose followed by the complete JSON report and nothing else.
+
+    Models sometimes lead with a sentence ("The probe confirms ... Report:") despite the
+    JSON-only instruction. Accept that shape only when the prose is short (at most 500
+    characters, no code fence) and the message ENDS with one complete JSON object, so a
+    fragment quoted inside an explanation is never taken for the report. Report-only
+    repairs (``copies=2``) also accept the same object repeated twice. Every recovered
+    report is still validated against the stage's schema by the runner."""
     start = final.find("{")
     if start < 0 or start > 500 or "```" in final[:start]:
         return None
     decoder = json.JSONDecoder()
     reports = []
     remaining = final[start:].strip()
-    while remaining and len(reports) < 2:
+    while remaining and len(reports) < copies:
         try:
             report, end = decoder.raw_decode(remaining)
         except ValueError:
@@ -378,7 +385,8 @@ def final_report(path, *, recover_wrapped=False):
         if len(parsed_parts) == 1 and parsed_parts[0][0] == len(parts) - 1:
             report = parsed_parts[0][1]
         # Models may wrap the report in commentary despite the schema instruction;
-        # accept an explicitly fenced JSON block, but never a bare fragment in prose.
+        # accept an explicitly fenced JSON block, or brief prose followed by the complete
+        # report at the very end, but never a fragment with commentary after it.
         for candidate in reversed(re.findall(r"```(?:json)?\s*(\{.*?\})\s*```", final, re.S)):
             if report is not None:
                 break
@@ -387,8 +395,8 @@ def final_report(path, *, recover_wrapped=False):
                 break
             except ValueError:
                 continue
-        if report is None and recover_wrapped:
-            report = _repeated_repair_report(final)
+        if report is None:
+            report = _trailing_report(final, copies=2 if recover_wrapped else 1)
     if not isinstance(report, dict):
         raise RuntimeError("OpenCode final message is not a JSON report; inspect the saved raw events")
     return report

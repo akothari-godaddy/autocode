@@ -300,7 +300,9 @@ class CommandProviderTests(unittest.TestCase):
 
         report = json.dumps({"summary": "Repaired fixture report"})
         wrapped = events_file("Brief commentary; the repaired report follows twice.\n" + report + report)
-        # The default stays strict: wrapped prose is never accepted implicitly.
+        # A first attempt accepts brief prose followed by exactly one report, never duplicates.
+        once = events_file("Brief commentary; the report follows.\n" + report)
+        self.assertEqual({"summary": "Repaired fixture report"}, provider.final_report(once))
         with self.assertRaisesRegex(RuntimeError, "not a JSON report"):
             provider.final_report(wrapped)
         self.assertEqual({"summary": "Repaired fixture report"},
