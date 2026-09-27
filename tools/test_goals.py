@@ -522,7 +522,7 @@ class GoalTests(unittest.TestCase):
             saved["user_events"].append({"kind": "concurrent-user-event"})
             s.atomic_json(self.run / "state.json", saved)
             yield
-        with patch.object(s, "workspace_lock", concurrent_update):
+        with patch.object(s, "run_lock", concurrent_update):
             self.assertEqual(0, self.invoke("--show-goal"))
         self.assertIn({"kind": "concurrent-user-event"}, self.state["user_events"])
 
@@ -728,6 +728,31 @@ class GoalTests(unittest.TestCase):
         self.invoke("--show-goal")
         self.assertEqual(0, self.invoke("--approve-goal", g.token(self.state["goal_contract"])))
         self.assertEqual("READY_TO_EXECUTE", self.state["phase"])
+
+    def test_cli_can_approve_reviewed_goal_after_unapproved_resume_pause(self):
+        self.draft()
+        self.invoke("--show-goal")
+        selected = g.token(self.state["goal_contract"])
+        self.state.update(status="PAUSED_GOAL_UNAPPROVED", phase="PAUSED_OR_BLOCKED")
+        self.assertEqual(0, self.invoke("--approve-goal", selected))
+        self.assertTrue(g.approved(self.state))
+        self.assertEqual("READY_TO_EXECUTE", self.state["phase"])
+
+    def test_paused_goal_approval_rejects_unreconciled_work_and_stale_tokens(self):
+        for field in ("active_stage", "uncertain_artifacts", "pending_report_repair"):
+            with self.subTest(field=field):
+                self.draft()
+                g.present(self.state)
+                selected = g.token(self.state["goal_contract"])
+                self.state.update(status="PAUSED_GOAL_UNAPPROVED", **{field: {"pending": True}})
+                with self.assertRaises(ValueError):
+                    g.approve(self.state, selected)
+                self.state.pop(field)
+        self.draft()
+        g.present(self.state)
+        self.state.update(status="PAUSED_GOAL_UNAPPROVED")
+        with self.assertRaises(ValueError):
+            g.approve(self.state, "stale-token")
 
     def test_runner_guard_rejects_unapproved_stage_before_subprocess(self):
         self.draft()

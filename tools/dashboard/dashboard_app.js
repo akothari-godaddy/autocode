@@ -538,7 +538,12 @@ function taskStatusBadge(run) {
 }
 function jointPlanning(run) { return run.model_settings?.joint_planning === true; }
 function planningMode(run) { return run.monitor?.workflow_mode==='glm_final_audit_v2'?'Builder-led · Completion owner final audit':run.monitor?.workflow_mode==='glm_first_v1'?'Builder-led · Completion owner milestone reviews':jointPlanning(run)?'Requirements planning · Independent review':run.model_settings?.engine?'Legacy planning':'Saved workflow unavailable'; }
-function planningSpeaker(run) { return jointPlanning(run) && run.goal?.origin === 'astra_finalize' ? 'Plan reviewer' : 'Planner'; }
+function planningSpeaker(run) {
+  if(run.model_settings?.engine==='gocode'){
+    return ['glm_draft','glm_revise'].includes(run.goal?.origin)?'GLM':'Astra';
+  }
+  return jointPlanning(run) && run.goal?.origin === 'astra_finalize' ? 'Plan reviewer' : 'Planner';
+}
 function roleDisplayName(name) {
   const key=String(name||'').trim().toLowerCase().replaceAll('_',' ');
   return ({requirements:'Requirements Gatherer',glm:'Planner',astra:'Planner / director','plan reviewer':'Plan reviewer',terra:'Builder',sol:'Validator',completion:'Completion owner',orchestrator:'Orchestrator',resolver:'Resolver'})[key]||human(name);
@@ -583,7 +588,16 @@ function taskOverviewState(run) {
     step:ongoing&&live.state==='alive'?'Current step · '+stageName(run):info.group==='complete'?'Work complete':info.group==='attention'?info.action:savedStep,
     objective:run.monitor?.objective||run.astra_plan?.current_assignment?.objective||'No current objective has been recorded.'};
 }
+function workflowRoleConfig(run, state) {
+  const mode=run.monitor?.workflow_mode,finalOnly=mode==='glm_final_audit_v2',glmFirst=finalOnly||mode==='glm_first_v1';
+  return glmFirst?[['terra','GLM','Plan & implement'],['sol','Sol','Targeted escalation only'],['astra','Astra',finalOnly?'Final full-task audit only':'Milestone review']]:
+    [...(jointPlanning(run)?[['glm','GLM','Draft & revise']]:[]),['astra','Astra','Plan & direct'],['terra',String(run.monitor?.roles?.terra?.model||run.model_settings?.roles?.terra||'').includes('glm')?'GLM · Implementer':'Terra','Implement'],['sol','Sol','Review']];
+}
 function workflowConfig(run, state) {
+  if(run.model_settings?.engine==='gocode'){
+    const stages={glm:['astra_discovery','glm_revise'],astra:['astra_challenge','astra_finalize'],terra:['terra'],sol:['sol']};
+    return workflowRoleConfig(run,state).map(([role,name,duty])=>[role,name,duty,stages[role]||[],'']);
+  }
   const mode=run.monitor?.workflow_mode,finalOnly=mode==='glm_final_audit_v2',glmFirst=finalOnly||mode==='glm_first_v1',joint=jointPlanning(run),roles={...run.model_settings?.roles,...run.monitor?.roles};
   const hasRequirements=!!roles.requirements||(run.stages||[]).some(step=>step.stage==='requirements_gather');
   return [

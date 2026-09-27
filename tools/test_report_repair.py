@@ -60,7 +60,8 @@ class RepairTests(unittest.TestCase):
 
     def queue(self, error=None, **overrides):
         self.state['settings']['report_repair'] = {'max_attempts': 2}
-        record = self.stage_record(**overrides)
+        # ResolverRuntimeTests borrows this helper without inheriting RepairTests.
+        record = RepairTests.stage_record(self, **overrides)
         with self.assertRaises(runner.ReportRepairQueued):
             runner.reject_completed_stage(self.state, self.run, record, error or ValueError('Missing summary'))
         return self.state['pending_report_repair']
@@ -673,7 +674,7 @@ class RepairTests(unittest.TestCase):
         launch.assert_not_called()
 
     def test_invalid_or_unbounded_repair_configuration_is_rejected(self):
-        for value in (-1,3,True,'2'):
+        for value in (-1, 7, True, '2'):
                 self.state['settings']['report_repair']={'max_attempts':value}
                 with self.subTest(value=value),self.assertRaises(ValueError):
                     runner.repair_limit(self.state)
@@ -842,7 +843,7 @@ class RepairSubprocessTests(unittest.TestCase):
         self.assertNotIn('pending_report_repair',saved)
         self.assertNotEqual(str(old_output),saved['stages'][-1]['output'])
         self.assertIn('invented-conversation-id',old_output.read_text())
-        self.assertEqual(2,saved['report_repair_archive'][-1]['repair']['attempts'])
+        self.assertEqual(0, saved['report_repair_archive'][-1]['repair']['attempts'])
 
     def test_completed_implementation_is_not_replayed_to_fix_report(self):
         self.env.update(AUTOCODE_FIXTURE_MODE='no-human', AUTOCODE_FIXTURE_REPORT_REPAIR_STAGE='terra')

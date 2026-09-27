@@ -238,12 +238,39 @@ class RetrofitTest(unittest.TestCase):
         with s.workspace_lock(self.root):
             with s.workspace_lock(self.root/"other"): pass
 
+    def test_run_locks_do_not_block_independent_runs_in_one_workspace(self):
+        first=self.root/".autocode"/"runs"/"first"
+        second=self.root/".autocode"/"runs"/"second"
+        with s.run_lock(first):
+            with s.run_lock(second): pass
+
+    def test_run_lock_blocks_duplicate_writer_for_same_run(self):
+        with s.run_lock(self.run):
+            with self.assertRaises(s.Paused):
+                with s.run_lock(self.run): pass
+
+    def test_process_marker_for_another_run_does_not_block_this_run(self):
+        other=self.root/".autocode"/"runs"/"other"
+        other.mkdir(parents=True)
+        s.atomic_json(self.root/".autocode"/"active-processes.json", {"run_dir":str(other),"processes":[]})
+        with patch.object(s.subprocess,"run",return_value=subprocess.CompletedProcess([],0,stdout="")):
+            s.assert_no_legacy_process(self.run,self.root)
+
     def test_active_legacy_guard_and_process_check_failure(self):
         result=subprocess.CompletedProcess([],0,stdout=f"101 python tools/autocode.py --run-dir {self.run}\n")
         with patch.object(s.subprocess,"run",return_value=result):
             with self.assertRaisesRegex(s.Paused,"101"): s.assert_no_legacy_process(self.run,self.root)
         with patch.object(s.subprocess,"run",return_value=subprocess.CompletedProcess([],1,stdout="")):
             with self.assertRaisesRegex(s.Paused,"Cannot inspect"): s.assert_no_legacy_process(self.run,self.root)
+
+    def test_process_guard_allows_isolated_workspace_when_sandbox_denies_process_listing(self):
+        result=subprocess.CompletedProcess([],1,stdout="",stderr="ps: operation not permitted")
+        with patch.object(s.subprocess,"run",return_value=result):
+            s.assert_no_legacy_process(self.run,self.root)
+
+    def test_process_guard_allows_isolated_workspace_when_sandbox_raises_permission_error(self):
+        with patch.object(s.subprocess,"run",side_effect=OSError("operation not permitted")):
+            s.assert_no_legacy_process(self.run,self.root)
 
     def test_legacy_resume_after_terra_does_not_replay_it(self):
         d=self.decision(); d.pop("plan");d.pop("affected_paths")
@@ -437,6 +464,33 @@ class RetrofitTest(unittest.TestCase):
         self.assertNotIn("pending_report_repair", self.state)
         self.assertTrue(self.state["stages"][-1]["abandoned"])
 
+    def test_abandon_completion_report_repair_requires_fresh_validation(self):
+        before = self.valid_completion()
+        base = self.run / 'iterations/005/astra_review_report_repair-01'
+        base.parent.mkdir(parents=True)
+        s.atomic_json(base.with_suffix('.before.json'), before)
+        base.with_suffix('.jsonl').write_text('{"type":"thread.started","thread_id":"incomplete"}\n')
+        self.state['sessions']['completion'] = 'completion-session'
+        self.state['human_reviews'] = {'C1': {'approved': True}}
+        self.state['active_stage'] = {
+            'role': 'astra', 'route_role': 'completion', 'stage': 'astra_review_report_repair',
+            'original_stage': 'astra_review', 'report_only': True, 'iteration': 5,
+            'exit_code': -15, 'processes': [], 'duration_seconds': 1,
+            'output': str(base.with_suffix('.json')), 'events': str(base.with_suffix('.jsonl')),
+            'before_ref': str(base.with_suffix('.before.json'))}
+        pending = {'original': {'stage': 'astra_review'}}
+        self.state['pending_report_repair'] = pending
+        runner.abandon_stage(self.state, self.run, self.root, '005/astra_review_report_repair-01')
+        self.assertEqual('sol', self.state['next_stage'])
+        self.assertIn('Validator', self.state['stop_reason'])
+        self.assertNotIn('validation', self.state)
+        self.assertNotIn('active_stage', self.state)
+        self.assertNotIn('pending_report_repair', self.state)
+        self.assertEqual(pending, self.state['report_repair_archive'][-1]['repair'])
+        self.assertNotIn('completion', self.state['sessions'])
+        self.assertEqual({}, self.state['human_reviews'])
+        self.assertEqual(before['revision'], s.snapshot(self.root)['revision'])
+
     def test_explicit_resume_recovers_legacy_archived_repair_stage(self):
         self.state['settings']['joint_planning'] = True
         self.state.update(status='PAUSED_INVALID_OUTPUT', next_stage='glm_revise_report_repair',
@@ -446,6 +500,75 @@ class RetrofitTest(unittest.TestCase):
                                      'abandoned':True})
         self.assertTrue(runner.prepare_planning_retry(self.state, self.run))
         self.assertEqual('glm_revise', self.state['next_stage'])
+
+    def test_saved_abandoned_completion_recovery_is_narrow(self):
+        current = self.valid_completion()
+        abandoned = {'stage': 'astra_review_report_repair', 'original_stage': 'astra_review',
+                     'role': 'astra', 'iteration': 5,
+                     'output': str(self.run / 'astra_review_report_repair-01.json'),
+                     'source_revision': current['revision'], 'abandoned': True, 'rejected': True}
+        selected = runner.attempt_id(abandoned)
+        self.state.update(status='PAUSED_REPEATED_FAILURE', next_stage='astra_review',
+                          recovery_context={'attempt_id': selected, 'source_revision': current['revision']},
+                          user_events=[{'kind': 'stage_abandoned', 'attempt_id': selected}])
+        self.state['validation_archive'] = [{'reason': 'Uncertain stage abandoned',
+                                            'validation': self.state.pop('validation')}]
+        self.state['stages'].append(abandoned)
+        error = s.Paused('PAUSED_COMPLETION_GATE',
+            'Completion rejected: missing, stale, failed or unverified independent evidence')
+        for attempt in range(3):
+            record = {'stage': 'astra_review_report_repair' if attempt < 2 else 'astra_review',
+                      'original_stage': 'astra_review', 'role': 'astra', 'iteration': 5,
+                      'output': str(self.run / f'rejected-{attempt}.json'),
+                      'source_revision': current['revision'], 'rejected': True,
+                      'rejection_reason': str(error)}
+            runner.failures.record(self.state, record, error, s.now())
+            self.state['stages'].append(record)
+            if attempt == 0:
+                self.state['stages'].append({'stage': 'resolver', 'runner_owned': True,
+                                            'decision': {'action': 'retry'}})
+        s.atomic_json(self.run / 'state.json', self.state)
+        saved = (self.run / 'state.json').read_bytes()
+        for override in ({'validation': {'verdict': 'PASS'}}, {'active_stage': {'stage': 'astra_review'}},
+                         {'pending_report_repair': {'original': {'stage': 'astra_review'}}},
+                         {'uncertain_artifacts': 'unresolved'}, {'recovery_context': {}},
+                         {'user_events': []}, {'validation_archive': []},
+                         {'status': 'PAUSED_BUDGET'}, {'next_stage': 'sol'},
+                         {'current_task': {'id': 'different-task'}}):
+            with self.subTest(override=override):
+                state = {**copy.deepcopy(self.state), **override}
+                before = copy.deepcopy(state)
+                self.assertFalse(runner.prepare_abandoned_completion_revalidation(state, self.run, self.root))
+                self.assertEqual(before, state)
+                self.assertEqual(saved, (self.run / 'state.json').read_bytes())
+        for mismatch in ('other_error', 'accepted_progress', 'changed_source', 'validator_failure'):
+            with self.subTest(mismatch=mismatch):
+                state = copy.deepcopy(self.state)
+                if mismatch == 'other_error':
+                    state['stages'][1]['rejection_reason'] = 'Completion rejected: blocking findings'
+                elif mismatch == 'accepted_progress':
+                    state['stages'].append({'stage': 'sol', 'source_revision': current['revision']})
+                elif mismatch == 'changed_source':
+                    state['recovery_context']['source_revision'] = 'old-source'
+                else:
+                    for attempt in range(3):
+                        runner.failures.record(state, {'stage': 'sol', 'iteration': 5,
+                            'source_revision': current['revision'], 'output': str(self.run / f'sol-{attempt}.json')},
+                            ValueError('invalid validation'), s.now())
+                before = copy.deepcopy(state)
+                self.assertFalse(runner.prepare_abandoned_completion_revalidation(state, self.run, self.root))
+                self.assertEqual(before, state)
+                self.assertEqual(saved, (self.run / 'state.json').read_bytes())
+        history = copy.deepcopy(self.state['failure_history'])
+        self.assertTrue(runner.prepare_abandoned_completion_revalidation(self.state, self.run, self.root))
+        self.assertEqual('sol', self.state['next_stage'])
+        self.assertEqual('PAUSED_STAGE_ABANDONED', self.state['status'])
+        self.assertEqual(history, self.state['failure_history'])
+        self.assertNotIn('validation', self.state)
+        self.assertEqual(selected, self.state['reconciliation_notes'][-1]['attempt_id'])
+        reloaded = s.read(self.run / 'state.json')
+        runner.repeated_failure_resume_guard(reloaded, self.root)
+        self.assertFalse(runner.prepare_abandoned_completion_revalidation(reloaded, self.run, self.root))
 
     def test_missing_evidence_and_outside_project_rejected(self):
         for refs in ([],["nope"],["/etc/hosts"]):

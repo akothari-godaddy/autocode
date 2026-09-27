@@ -599,7 +599,8 @@ def render(state):
         lines += ["", "Decision needed:", json.dumps(state["user_request"], indent=2)]
         lines += [f"Answer ID: {q['id']} — {q['question']}" for q in state.get("pending_questions", [])]
     if state.get("planning"):
-        lines += ["", f"Joint planning: {state['planning']['astra_calls']}/2 plan-review calls used"]
+        lines += ["", f"Joint planning: {state['planning']['astra_calls']}/"
+                      f"{state['planning'].get('review_call_limit', 2)} plan-review calls used"]
         for stage, report in state["planning"]["reports"].items():
             lines.append(f"  {stage}: {report['output']}")
         final = state["planning"]["reports"].get("astra_finalize", {}).get("report", {})
@@ -623,7 +624,11 @@ def present(state):
 
 def approve(state, selected):
     contract = state["goal_contract"]
-    if (state["status"] != "AWAITING_GOAL_APPROVAL" or not sealed(contract)
+    # Resuming after an environment failure can reach the execution guard with
+    # the same reviewed draft. Keep exact-token approval available in that pause.
+    if (state["status"] not in ("AWAITING_GOAL_APPROVAL", "PAUSED_GOAL_UNAPPROVED")
+            or any(state.get(key) for key in ("active_stage", "uncertain_artifacts", "pending_report_repair"))
+            or not sealed(contract)
             or selected != token(contract) or state.get("displayed_goal") != selected):
         raise ValueError("Approve only the current displayed draft token; show the goal again")
     validate_body(state, contract["body"], ready=True, allow_legacy=True)
