@@ -45,7 +45,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--feedback '…'` | Send a correction; returns to discovery and requires fresh approval. |
 | `--delegate Q1` | Accept a question's proposed default. |
 | `--delegate-all` | Delegate every pending question marked `delegable` with a proposed default; blocks (no partial effect) if any pending question is not. Never approves; invalidates any existing approval. |
-| `--reject-assumption A1` | Reject a structured assumption from the current requirements handoff (repeatable). Never approves; invalidates any existing approval. |
+| `--reject-assumption A1` | Reject a structured assumption from the current requirements handoff (repeatable). A cost, quota, permission, external side effect or requested-outcome assumption becomes a question only you can answer (`--answer`, or `--feedback` citing the obligation id); any other becomes a remediation the Planner must replace and the Plan Reviewer must accept. Until then the plan cannot be approved or executed. Never approves; invalidates any existing approval. |
 | `--show-goal` | Display the current contract/revision. |
 | `--approve-goal 'r3:<hash>'` | Approve the exact displayed revision. |
 | `--edit-goal body.json` | Load a full contract body as a new draft revision. |

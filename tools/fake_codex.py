@@ -6,7 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import uuid
-from goal_fixtures import body
+from goal_fixtures import body, planning_defaults
 
 
 if sys.argv[1:] == ["login", "status"]:
@@ -237,5 +237,6 @@ if stage=='terra' and (data.get('workflow') or {}).get('mode')=='glm_final_audit
         'reason':'Fixture-specific debugging question' if action=='ESCALATE_SOL' else 'Continue approved work',
         'question':'Check the empty input boundary' if action=='ESCALATE_SOL' else '',
         'self_assessment':assessment}
+planning_defaults(stage, result)
 Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps(result))
 print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 100, "output_tokens": 50}}))

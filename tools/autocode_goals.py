@@ -421,7 +421,13 @@ def check_requirement_handoff(state, report):
             raise ValueError("A proposed reframe must name an existing requirement and a replacement proposal")
         if reframe["question_id"] not in questions and reframe["question_id"] not in state.get("answers", {}):
             raise ValueError("A proposed reframe needs an explicit user acceptance question")
-    validate_assumptions(report.get("proposed_assumptions", []), seen)
+    assumptions = validate_assumptions(report.get("proposed_assumptions", []), seen)
+    # A rejected assumption id may not come back under the same id; a
+    # paraphrase under a new id is the Plan Reviewer's job to catch.
+    rejected = rejected_assumption_ids(state)
+    for row in assumptions:
+        if row["id"] and row["id"] in rejected:
+            raise ValueError(f"Assumption {row['id']} was rejected by the user and cannot be proposed again")
     # A refreshed handoff (one that follows an earlier requirements_gather report)
     # must retain every previous requirement verbatim, or move it to
     # ignored_requirements with a reason citing a saved user event. A vanished
@@ -600,6 +606,12 @@ def install_draft(state, body, *, origin, allow_legacy=False, changes=None):
                                     "status": "unverified", "evidence": ""} for c in body["acceptance_criteria"]]
     state["criteria_revision"] = s.digest(s.criteria_definition(state["acceptance_criteria"]))
     state["pending_questions"] = copy.deepcopy(body["open_blocking_questions"])
+    listed = {row["id"] for row in state["pending_questions"]}
+    state["pending_questions"] += [row for row in obligation_questions(state) if row["id"] not in listed]
+    if origin == "user_cli_edit":
+        start_episode(state, "edit_goal")
+    if state["pending_questions"]:
+        ensure_episode(state, "clarification_stop")
     state.pop("user_request", None)
     state.update(status="WAITING_FOR_USER" if state["pending_questions"] else "AWAITING_GOAL_APPROVAL",
                  phase="DISCOVERING" if state["pending_questions"] else "AWAITING_GOAL_APPROVAL",
@@ -736,6 +748,9 @@ def approve(state, selected):
     validate_body(state, contract["body"], ready=True, allow_legacy=True)
     if contract["body"]["open_blocking_questions"] or state.get("pending_questions"):
         raise ValueError("Blocking questions still need answers")
+    if unresolved_obligations(state):
+        raise ValueError("Unresolved assumption rejections block approval: "
+                         + ", ".join(row["id"] for row in unresolved_obligations(state)))
     joint = state.get("settings", {}).get("joint_planning")
     if joint and (state.get("planning", {}).get("final_token") != selected or "initial_task" not in contract["body"]):
         raise ValueError("Joint planning requires the Plan Reviewer's final plan before approval")
@@ -780,6 +795,8 @@ def feedback(state, text):
              "text": text.strip(), "contract_token": token(state["goal_contract"])}
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
+    discharge_obligations(state, event)
+    start_episode(state, event["id"])
     state["goal_contract"].update(approval_status="draft", approval_event=None)
     invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
     first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
@@ -823,6 +840,9 @@ def answer(state, question_id, text, *, delegated=False):
              "contract_token": token(state["goal_contract"])}
     state.setdefault("user_events", []).append(event)
     state.setdefault("answers", {})[question_id] = event
+    if not delegated:
+        discharge_obligations(state, event)
+        start_episode(state, "answer:" + question_id)
     state["pending_questions"] = [row for row in state["pending_questions"] if row["id"] != question_id]
     body = state.get("goal_contract", {}).get("body", {})
     if "open_blocking_questions" in body:
@@ -884,11 +904,13 @@ def reject_assumption(state, assumption_id):
              "contract_token": token(contract) if contract else None}
     state.setdefault("user_events", []).append(event)
     obligation = {"id": "obligation-" + uuid.uuid4().hex[:12], "kind": kind, "assumption_id": assumption_id,
-                  "category": category, "supports": list(row["supports"]),
+                  "category": category, "supports": list(row["supports"]), "assumption_text": row["text"],
                   "contract_revision": contract.get("revision"), "created_at": event["at"], "status": "open",
                   "remediation": None, "remediation_hash": None, "resolved_by": None,
                   "reject_event_id": event["id"]}
     state.setdefault("deferred_obligations", []).append(obligation)
+    # Rejection never starts a new episode, but a remediation record needs one to bind to.
+    ensure_episode(state, "reject_assumption")
     if contract:
         contract.update(approval_status="draft", approval_event=None)
     invalidate(state, "An assumption rejection requires a refreshed draft and explicit approval")
@@ -896,6 +918,69 @@ def reject_assumption(state, assumption_id):
                    else "astra_discovery")
     state.update(status="RUNNING", phase="DISCOVERING", next_stage=first_stage, pending_questions=[])
     return obligation
+
+
+def current_episode(state):
+    return state.get("clarification_episode")
+
+
+def start_episode(state, started_by):
+    """A saved user event that changes intent opens a new clarification episode
+    with a fresh one-pass investigation budget. Delegation, rejection, reworded
+    handoffs and new contract revisions never call this."""
+    # A pass requested under the old intent no longer applies.
+    state.pop("investigation_request", None)
+    state["clarification_episode"] = {"id": "episode-" + uuid.uuid4().hex[:12], "started_by": started_by,
+                                      "started_at": s.now(), "investigation_used": False,
+                                      "used_at": None, "used_stage": None}
+    return state["clarification_episode"]
+
+
+def ensure_episode(state, started_by):
+    """Created on the first clarification stop; legacy runs have none until then."""
+    return current_episode(state) or start_episode(state, started_by)
+
+
+def handoff_hash(state):
+    report = (state.get("requirements_handoff") or {}).get("report")
+    return s.digest(report) if report is not None else "none"
+
+
+def rejected_assumption_ids(state):
+    return {event.get("assumption_id") for event in state.get("user_events", [])
+            if event.get("kind") == "reject_assumption"}
+
+
+def unresolved_obligations(state, kind=None):
+    return [row for row in state.get("deferred_obligations", [])
+            if row.get("status") != "resolved" and (kind is None or row.get("kind") == kind)]
+
+
+def obligation_questions(state):
+    """Runner-generated questions for open human decisions. Never classified as
+    discoverable and never delegable: only the user's own answer, or feedback
+    citing the obligation id, discharges them."""
+    rows = []
+    for row in unresolved_obligations(state, "human_decision"):
+        question_id = row.get("question_id") or row["id"]
+        text = row.get("assumption_text") or row.get("assumption_id") or question_id
+        rows.append({"id": question_id,
+                     "question": f"You rejected assumption {row.get('assumption_id')}: {text}. What should the plan do instead?",
+                     "why": f"A {row.get('category')} choice cannot be inferred; the plan stays blocked until you "
+                            f"answer or send feedback citing {row['id']}.",
+                     "options": [], "proposed_default": "", "kind": "decision",
+                     "category": row.get("category") or "requested_outcome", "delegable": False})
+    return rows
+
+
+def discharge_obligations(state, event):
+    """Resolve open human decisions settled by this saved, non-delegated user event."""
+    for row in unresolved_obligations(state, "human_decision"):
+        if event.get("kind") == "answer" and event.get("question_id") in (row.get("question_id"), row["id"]):
+            row.update(status="resolved", resolved_by="user_answer:" + event["question_id"])
+        elif (event.get("kind") == "brief_feedback"
+              and re.search(r"(?<![\w-])" + re.escape(row["id"]) + r"(?![\w-])", event.get("text", ""))):
+            row.update(status="resolved", resolved_by="user_feedback:" + event["id"])
 
 
 def resolve_permission(state, question_id, text):
@@ -1001,6 +1086,8 @@ def wait_for_user(state, request):
 def execution_guard(state, value=None):
     if not approved(state):
         raise s.Paused("PAUSED_GOAL_UNAPPROVED", "Current goal revision has no valid explicit approval")
+    if unresolved_obligations(state):
+        raise s.Paused("PAUSED_GOAL_UNAPPROVED", "An unresolved assumption rejection blocks execution")
     contract = state["goal_contract"]
     if value is not None and (value.get("contract_revision") != contract["revision"]
                               or value.get("contract_hash") != contract["hash"]):

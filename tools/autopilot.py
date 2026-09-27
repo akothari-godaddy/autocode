@@ -219,6 +219,225 @@ def _bind_plan(state, value, origin):
     goals.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [])
 
 
+_MACHINE_CATEGORIES = ("technical", "other")
+
+
+def _executable(contract, *, task_only=False):
+    task = (contract.get("initial_task") or {}).get("kind") in ("implement", "validate")
+    return task or (not task_only and bool(contract.get("milestones") or contract.get("technical_approach")))
+
+
+def _outstanding_discoverable(state):
+    """Discoverable questions the applicable handoff (or a pending investigation) still has open."""
+    handoff = (state.get("requirements_handoff") or {}).get("report") or {}
+    rows = {q["id"]: q for q in handoff.get("open_questions", []) if q.get("kind") == "discoverable"}
+    for question in (state.get("investigation_request") or {}).get("questions", []):
+        rows.setdefault(question["id"], question)
+    settled = set(state.get("answers", {})) | {row["question_id"] for row in state.get("machine_resolutions", [])}
+    return {key: row for key, row in rows.items() if key not in settled}
+
+
+def _check_clarifications(state, value, open_ids):
+    """Validate machine_resolutions and access_blockers against the applicable handoff."""
+    outstanding = _outstanding_discoverable(state)
+    expected_hash = goals.handoff_hash(state)
+    seen = set()
+    for row in value.get("machine_resolutions", []):
+        question_id = row["question_id"]
+        question = outstanding.get(question_id)
+        if question_id in seen:
+            raise ValueError(f"Question {question_id} has more than one resolution or blocker")
+        seen.add(question_id)
+        if not question:
+            raise ValueError(f"Machine resolution {question_id} does not name an outstanding discoverable question")
+        if question.get("category", "requested_outcome") not in _MACHINE_CATEGORIES:
+            raise ValueError(f"Question {question_id} is not a technical fact the runner may settle; ask the user")
+        if not row["resolution"].strip() or not row["source_refs"]:
+            raise ValueError(f"Machine resolution {question_id} needs a resolution and the source it read")
+        _check_code_refs(state, row["source_refs"], "machine_resolutions source_refs")
+        if row["handoff_hash"] != expected_hash:
+            raise ValueError(f"Machine resolution {question_id} is bound to a different requirements handoff")
+        if question_id in open_ids:
+            raise ValueError(f"Question {question_id} cannot be both resolved and still open")
+    for row in value.get("access_blockers", []):
+        question_id = row["question_id"]
+        if question_id in seen:
+            raise ValueError(f"Question {question_id} has more than one resolution or blocker")
+        seen.add(question_id)
+        if question_id not in outstanding or not row["reason"].strip():
+            raise ValueError(f"Access blocker {question_id} needs an outstanding discoverable question and a reason")
+        if value.get("contract") is not None and question_id not in open_ids:
+            raise ValueError(f"Access blocker {question_id} must stay in open_blocking_questions for the user")
+    return outstanding
+
+
+def _check_investigation(state, value):
+    """The investigation pass settles each discoverable question exactly one way."""
+    request = state.get("investigation_request")
+    if not request:
+        return
+    resolved = {row["question_id"] for row in value.get("machine_resolutions", [])}
+    blocked = {row["question_id"] for row in value.get("access_blockers", [])}
+    still_open = {row["id"]: row for row in value["open_questions"]}
+    for question in request["questions"]:
+        question_id = question["id"]
+        reopened = still_open.get(question_id)
+        if reopened and (reopened.get("kind") != "decision" or not reopened["why"].strip()):
+            raise ValueError(f"Discoverable question {question_id} must be resolved, reclassified as a "
+                             "decision with a reason, or reported as an access blocker")
+        if (question_id in resolved) + (question_id in blocked) + bool(reopened) != 1:
+            raise ValueError(f"Investigation must settle question {question_id} exactly one way")
+
+
+def _blocker_question(question, reason):
+    # Only schema fields: the Planner must be able to copy this question verbatim.
+    fields = {key: copy.deepcopy(value) for key, value in question.items() if key in goals.QUESTION["properties"]}
+    return {**fields, "kind": "decision", "delegable": False,
+            "why": "The workspace could not answer this: " + reason.strip()}
+
+
+def _record_resolutions(state, stage, value):
+    episode = goals.current_episode(state) or {}
+    for row in value.get("machine_resolutions", []):
+        state.setdefault("machine_resolutions", []).append(
+            {**copy.deepcopy(row), "stage": stage, "episode_id": episode.get("id")})
+
+
+def _mark_blockers(state, value):
+    reasons = {row["question_id"]: row["reason"] for row in value.get("access_blockers", [])}
+    state["pending_questions"] = [{**_blocker_question(row, reasons[row["id"]]), "runner_reclassified": True}
+                                  if row["id"] in reasons else row for row in state["pending_questions"]]
+
+
+def _discoverable_pending(state):
+    handoff = (state.get("requirements_handoff") or {}).get("report") or {}
+    kinds = {q["id"]: q.get("kind") for q in handoff.get("open_questions", [])}
+    # The handoff's classification wins over a Planner copy that silently drops or relabels it.
+    return [row for row in state.get("pending_questions", [])
+            if row.get("kind") == "discoverable"
+            or (kinds.get(row["id"]) == "discoverable" and not row.get("runner_reclassified"))]
+
+
+def _investigate_or_present(state, stage):
+    """Discoverable questions never reach the user (issue #62, E1).
+
+    The first time in a clarification episode, the runner sends them back to
+    the requirements role for one bounded read-only pass. After that pass is
+    spent, the runner does not fabricate an answer or retry: the question is
+    shown as a decision, labeled as one the workspace could not settle.
+    """
+    discoverable = _discoverable_pending(state)
+    if not discoverable:
+        return False
+    episode = goals.ensure_episode(state, "clarification_stop")
+    if not episode["investigation_used"] and "requirements" in state.get("settings", {}).get("roles", {}):
+        episode.update(investigation_used=True, used_at=support.now(), used_stage=stage)
+        state["investigation_request"] = {"episode_id": episode["id"], "stage": stage,
+                                          "handoff_hash": goals.handoff_hash(state),
+                                          "questions": copy.deepcopy(discoverable), "requested_at": support.now()}
+        state.update(status="RUNNING", phase="PLANNING", next_stage="requirements_gather", pending_questions=[])
+        return True
+    ids = {row["id"] for row in discoverable}
+    state["pending_questions"] = [
+        {**row, "kind": "decision", "runner_reclassified": True,
+         "why": "Not settled by this episode's one workspace investigation. " + row["why"]}
+        if row["id"] in ids else row for row in state["pending_questions"]]
+    return False
+
+
+def _check_obligation_trace(state, stage, value):
+    """Rejected assumptions stay rejected and their requirements stay covered;
+    returns the validated remediation records for this report."""
+    trace = {row["requirement_id"]: row["disposition"] for row in value.get("requirement_trace", [])}
+    handoff = (state.get("requirements_handoff") or {}).get("report") or {}
+    known = {row["id"] for row in handoff.get("requirements", [])}
+    rejected = {row.get("assumption_text", "").strip().lower() for row in state.get("deferred_obligations", [])}
+    for row in value["contract"].get("accepted_assumptions", []):
+        if row["text"].strip().lower() in rejected - {""}:
+            raise ValueError("The contract re-adopts an assumption the user rejected: " + row["text"])
+    for obligation in state.get("deferred_obligations", []):
+        for requirement in obligation.get("supports", []):
+            if requirement in known and trace.get(requirement) not in ("covered", "superseded", "excluded"):
+                raise ValueError(f"Requirement {requirement} relied on rejected assumption "
+                                 f"{obligation.get('assumption_id')} and must be covered another way")
+    handoff_ids = {row["id"] for row in (goals.normalize_assumption(raw) for raw in
+                                         handoff.get("proposed_assumptions", [])) if not row["legacy"]}
+    episode = goals.current_episode(state) or {}
+    by_id = {row["id"]: row for row in state.get("deferred_obligations", [])}
+    records, seen = [], set()
+    for record in value.get("remediation_records", []):
+        obligation = by_id.get(record["obligation_id"])
+        if (not obligation or obligation["kind"] != "remediation" or obligation["status"] == "resolved"
+                or record["obligation_id"] in seen):
+            raise ValueError(f"Remediation record {record['obligation_id']} does not name an open remediation obligation")
+        seen.add(record["obligation_id"])
+        if record["assumption_id"] != obligation["assumption_id"]:
+            raise ValueError(f"Remediation record {record['obligation_id']} names the wrong assumption")
+        if not record["approach"].strip() or not record["evidence_refs"]:
+            raise ValueError(f"Remediation record {record['obligation_id']} needs an approach and evidence")
+        _check_code_refs(state, record["evidence_refs"], "remediation evidence_refs")
+        supports = set(obligation.get("supports", []))
+        if (set(record["covered_requirements"]) != supports
+                or any(trace.get(requirement) != "covered" for requirement in supports)):
+            raise ValueError(f"Remediation record {record['obligation_id']} must cover exactly the requirements "
+                             "the rejected assumption supported, each covered in requirement_trace")
+        if obligation["assumption_id"] in handoff_ids:
+            raise ValueError(f"Remediation record {record['obligation_id']} still relies on the rejected assumption")
+        if record["episode_id"] != episode.get("id"):
+            raise ValueError(f"Remediation record {record['obligation_id']} belongs to another clarification episode")
+        records.append((obligation["id"], record))
+    return records
+
+
+def _submit_remediation(state, stage, records):
+    by_id = {row["id"]: row for row in state.get("deferred_obligations", [])}
+    for obligation_id, record in records:
+        by_id[obligation_id].update(status="pending_review", remediation=copy.deepcopy(record),
+                                    remediation_hash=support.digest(record), resolved_by=None,
+                                    submitted_stage=stage)
+
+
+def _decide_obligations(state, stage, value):
+    """Apply a reviewer's obligation_decisions: exactly one per pending remediation."""
+    pending = {row["id"]: row for row in state.get("deferred_obligations", [])
+               if row.get("status") == "pending_review"}
+    decisions = value.get("obligation_decisions", [])
+    ids = [row["obligation_id"] for row in decisions]
+    if len(ids) != len(set(ids)):
+        raise ValueError("Each obligation needs exactly one decision")
+    for row in decisions:
+        obligation = pending.get(row["obligation_id"])
+        if not obligation:
+            raise ValueError(f"Obligation decision {row['obligation_id']} names no remediation awaiting review")
+        if row["remediation_hash"] != obligation["remediation_hash"]:
+            raise ValueError(f"Obligation decision {row['obligation_id']} reviewed a stale remediation")
+    missing = set(pending) - set(ids)
+    if missing:
+        raise ValueError("Plan Reviewer must decide every remediation awaiting review: " + ", ".join(sorted(missing)))
+    report_hash = support.digest(value)
+    for row in decisions:
+        obligation = pending[row["obligation_id"]]
+        if row["resolved"]:
+            if not row["rationale"].strip() or not row["evidence_refs"]:
+                raise ValueError(f"Resolving obligation {obligation['id']} needs a rationale and evidence")
+            obligation.update(status="resolved", resolved_by=f"{stage}:{report_hash}:{obligation['id']}")
+        elif stage == "astra_challenge":
+            if not any(concern["blocking"] and (obligation["id"] == concern["id"]
+                       or obligation["id"] in concern["concern"] or obligation["id"] in concern["requested_change"])
+                       for concern in value["concerns"]):
+                raise ValueError(f"Rejecting remediation {obligation['id']} needs a blocking concern naming it")
+            obligation["status"] = "open"
+        else:
+            contract = value["contract"]
+            asked = any(q["id"] == obligation["id"] and q.get("kind", "decision") == "decision"
+                        for q in contract["open_blocking_questions"])
+            if not asked or (contract.get("initial_task") or {}).get("kind") != "none":
+                raise ValueError(f"Unresolved remediation {obligation['id']} must return to the user as a "
+                                 "decision question with initial_task.kind=none")
+            obligation.update(kind="human_decision", status="open", question_id=obligation["id"],
+                              converted_from="remediation")
+
+
 def apply_planning(state, stage, value, record):
     # Older saved reports predate explicit, user-backed conflict resolutions.
     # An absent list supplies no authority to resolve any conflict.
@@ -236,6 +455,8 @@ def apply_planning(state, stage, value, record):
         if previous:
             state.setdefault("requirements_history", []).append(copy.deepcopy(previous))
         goals.check_requirement_handoff(state, value)
+        outstanding = _check_clarifications(state, value, {question["id"] for question in questions})
+        _check_investigation(state, value)
         input_refs = {"task", *state.get("answers", {})}
         input_refs.update(event["id"] for event in state.get("user_events", []) if event.get("id"))
         # External design/spec references may accompany local inspection evidence;
@@ -243,7 +464,12 @@ def apply_planning(state, stage, value, record):
         local_refs = [ref for ref in value["source_refs"]
                       if ref not in input_refs and not ref.startswith(("https://", "http://"))]
         _check_code_refs(state, local_refs, "source_refs")
+        _record_resolutions(state, stage, value)
+        state.pop("investigation_request", None)
         state["requirements_handoff"] = {"report": copy.deepcopy(value), "output": record["output"]}
+        # An unreadable source becomes a decision the user must make.
+        state["requirements_handoff"]["report"]["open_questions"] += [
+            _blocker_question(outstanding[row["question_id"]], row["reason"]) for row in value.get("access_blockers", [])]
         state.update(status="RUNNING", phase="PLANNING", next_stage="astra_discovery",
                      discovery_summary=value["summary"])
         return
@@ -253,15 +479,26 @@ def apply_planning(state, stage, value, record):
             and any("depends_on" not in row for row in value["contract"].get("milestones", []))):
         raise ValueError("Every planned milestone must declare depends_on (use [] for independent work)")
     if stage == "astra_discovery":
+        preserved = {question["id"] for question in value["contract"]["open_blocking_questions"]}
+        _check_clarifications(state, value, preserved)
         handoff = state.get("requirements_handoff")
         if handoff:
             pending = {question["id"] for question in handoff["report"]["open_questions"]}
-            preserved = {question["id"] for question in value["contract"]["open_blocking_questions"]}
-            missing = pending - preserved - set(state.get("answers", {}))
+            resolved = {row["question_id"] for row in [*state.get("machine_resolutions", []),
+                                                         *value.get("machine_resolutions", [])]}
+            missing = pending - preserved - set(state.get("answers", {})) - resolved
             if missing:
                 raise ValueError("Planner dropped unresolved requirements questions: " + ", ".join(sorted(missing)))
+        if goals.unresolved_obligations(state, "human_decision") and _executable(value["contract"]):
+            raise ValueError("A rejected assumption awaiting the user's decision blocks a real plan; "
+                             "return a clarification-only contract")
+        records = _check_obligation_trace(state, stage, value)
         _bind_plan(state, value, "glm_draft")
+        _record_resolutions(state, stage, value)
+        _submit_remediation(state, stage, records)
         if state.get("pending_questions"):
+            _mark_blockers(state, value)
+            _investigate_or_present(state, stage)
             state["discovery_summary"] = value["summary"]
             return
         # install_draft starts the bounded cycle once clarification is complete.
@@ -274,15 +511,22 @@ def apply_planning(state, stage, value, record):
             raise ValueError("Concern IDs must be nonempty and unique")
         if any(not c[k].strip() for c in concerns for k in ("concern", "requested_change", "acceptance_test")):
             raise ValueError("Each concern needs a concrete change and acceptance test")
+        _decide_obligations(state, stage, value)
         state["next_stage"] = "glm_revise"
     elif stage == "glm_revise":
         concerns = reports["astra_challenge"]["report"]["concerns"]
         planning_unit._coverage(value["responses"], concerns)
         if any(not r["evidence_refs"] for r in value["responses"]):
             raise ValueError("Planner responses must cite investigated evidence")
+        _check_clarifications(state, value, {q["id"] for q in value["contract"]["open_blocking_questions"]})
+        records = _check_obligation_trace(state, stage, value)
         _bind_plan(state, value, stage)
+        _record_resolutions(state, stage, value)
+        _submit_remediation(state, stage, records)
         if state.get("pending_questions"):
             reports[stage] = {"report": copy.deepcopy(value), "output": record["output"]}
+            _mark_blockers(state, value)
+            _investigate_or_present(state, stage)
             state["discovery_summary"] = value["summary"]
             return
         state.update(status="RUNNING", phase="PLANNING", next_stage="astra_finalize", pending_questions=[])
@@ -294,6 +538,12 @@ def apply_planning(state, stage, value, record):
             raise ValueError("Unresolved planning decisions must return to the user as blocking questions")
         if not value["contract"]["open_blocking_questions"] and "initial_task" not in value["contract"]:
             raise ValueError("Final plan needs an initial_task so approval does not spend another Plan Reviewer call")
+        # This report's decisions apply before the finalize gate is evaluated.
+        _decide_obligations(state, stage, value)
+        if goals.unresolved_obligations(state) and _executable(value["contract"], task_only=True):
+            raise ValueError("Unresolved assumption rejections block a real initial_task: "
+                             + ", ".join(row["id"] for row in goals.unresolved_obligations(state)))
+        _check_obligation_trace(state, stage, value)
         _bind_plan(state, value, stage)
         planning["final_token"] = goals.token(state["goal_contract"])
     reports[stage] = {"report": copy.deepcopy(value), "output": record["output"]}

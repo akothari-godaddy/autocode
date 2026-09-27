@@ -12,7 +12,7 @@ import shlex
 import subprocess
 import sys
 import uuid
-from goal_fixtures import body
+from goal_fixtures import body, planning_defaults
 
 
 def report_path():
@@ -45,6 +45,7 @@ def tool_event(part_id, command, code, output):
 
 
 def deliver(value):
+    planning_defaults(data.get("stage") or data.get("original", {}).get("stage", ""), value)
     if not EVENTS:
         report_path().write_text(json.dumps(value))
         return

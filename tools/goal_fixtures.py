@@ -27,6 +27,26 @@ def body(*, questions=False, human=False):
     }
 
 
+# Issue #62 report fields. The runner's generation schema makes every declared
+# property required, so fixture planning reports supply them as empty lists.
+PLANNING_LISTS = {
+    "requirements_gather": ("machine_resolutions", "access_blockers"),
+    "astra_discovery": ("machine_resolutions", "access_blockers", "remediation_records"),
+    "glm_revise": ("machine_resolutions", "access_blockers", "remediation_records"),
+    "astra_challenge": ("obligation_decisions",),
+    "astra_finalize": ("obligation_decisions",),
+}
+
+
+def planning_defaults(stage, report):
+    # Legacy (non-joint) discovery reports use a schema without these fields.
+    if stage == "astra_discovery" and "requirement_trace" not in report:
+        return report
+    for field in PLANNING_LISTS.get(stage, ()):
+        report.setdefault(field, [])
+    return report
+
+
 def envelope(state):
     contract = state["goal_contract"]
     return {"contract_revision": contract["revision"], "contract_hash": contract["hash"],

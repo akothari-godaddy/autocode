@@ -285,6 +285,13 @@ def main() -> int:
                                 "validation_plan": ["Run tests"], "findings": []},
                   "findings": [], "finding_dispositions": [], "agreed_limitations": []}
 
+    # Issue #62 report fields: the generation schema requires every declared property.
+    for field in {"requirements_gather": ("machine_resolutions", "access_blockers"),
+                  "astra_discovery": ("machine_resolutions", "access_blockers", "remediation_records"),
+                  "glm_revise": ("machine_resolutions", "access_blockers", "remediation_records"),
+                  "astra_challenge": ("obligation_decisions",),
+                  "astra_finalize": ("obligation_decisions",)}.get(stage, ()):
+        report.setdefault(field, [])
     output = Path(sys.argv[sys.argv.index("-o") + 1])
     output.write_text(json.dumps(report))
     print(json.dumps({"type": "turn.completed",

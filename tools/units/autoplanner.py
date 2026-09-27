@@ -74,6 +74,27 @@ SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
 SCHEMAS["requirements_gather"]["properties"]["ignored_requirements"] = {
     "type": "array", "items": IGNORED_REQUIREMENT}
 
+# Issue #62 clarification and obligation fields. All optional (never in
+# "required"), so older saved reports validate unchanged; an absent list
+# resolves, blocks, remediates or decides nothing.
+MACHINE_RESOLUTION = obj({"question_id": S, "resolution": S, "source_refs": SS, "handoff_hash": S})
+ACCESS_BLOCKER = obj({"question_id": S, "reason": S})
+REMEDIATION_RECORD = obj({"obligation_id": S, "assumption_id": S, "approach": S, "evidence_refs": SS,
+                          "covered_requirements": SS, "episode_id": S})
+OBLIGATION_DECISION = obj({"obligation_id": S, "remediation_hash": S, "resolved": {"type": "boolean"},
+                           "rationale": S, "evidence_refs": SS})
+OPTIONAL_FIELDS = {
+    "machine_resolutions": ({"type": "array", "items": MACHINE_RESOLUTION},
+                            ("requirements_gather", "astra_discovery", "glm_revise")),
+    "access_blockers": ({"type": "array", "items": ACCESS_BLOCKER},
+                        ("requirements_gather", "astra_discovery", "glm_revise")),
+    "remediation_records": ({"type": "array", "items": REMEDIATION_RECORD}, ("astra_discovery", "glm_revise")),
+    "obligation_decisions": ({"type": "array", "items": OBLIGATION_DECISION}, ("astra_challenge", "astra_finalize")),
+}
+for _field, (_schema, _stages) in OPTIONAL_FIELDS.items():
+    for _stage in _stages:
+        SCHEMAS[_stage]["properties"][_field] = _schema
+
 
 def enabled(state):
     return bool(state.get("settings", {}).get("joint_planning"))
@@ -194,6 +215,20 @@ with the reason. Put unresolved contradictions in conflicts with the requirement
 Do not label an explicit saved clarification or a historical/current distinction as
 an unresolved conflict. Preserve the applicable requirements and their provenance.
 The runner saves this report as a separate artifact for the Planner.
+Classify every open question: kind=discoverable when reading the workspace can answer it,
+inferable when project convention makes the answer obvious (record it as a structured
+assumption with convention_ref and rationale instead of asking), decision when only the
+user can choose. Give each question a category; cost, quota, permission,
+external_side_effect and requested_outcome choices are always decisions.
+Structured assumptions have id, text, kind, category, convention_ref, rationale and
+supports (the requirement ids that rely on them). Never re-propose a rejected assumption id.
+When investigation_request is present, the runner found discoverable questions that must not
+reach the user. Read the cited files and return, for EACH listed question, exactly one of:
+a machine_resolutions entry (question_id, resolution, source_refs of files you read, and
+handoff_hash copied from investigation_request), the question kept in open_questions with
+kind=decision and a why explaining why the workspace cannot settle it, or an access_blockers
+entry (question_id, reason) when the needed source is not readable. Never invent an answer.
+Otherwise use machine_resolutions=[] and access_blockers=[].
 The requirement_coverage_checklist contains the exact task sentences checked by
 the runner. Account for every entry in requirements using a verbatim source_quote,
 or in ignored_statements with the exact statement and a substantive reason.
@@ -213,6 +248,14 @@ contract: preserve known requirements and questions, set technical_approach=[] a
 milestones=[], and do not invent a product, architecture, files, task DAG or initial task.
 Only after blocking questions are answered, originate the concrete technical approach,
 milestones and acceptance tests. Proposed defaults are not answers.
+A discoverable handoff question you settle by reading source goes in machine_resolutions
+(question_id, resolution, source_refs, handoff_hash from requirements_handoff_hash) instead of
+open_blocking_questions; use access_blockers when the source is unreadable. Otherwise [].
+While a human_decision obligation in deferred_obligations is open, return a clarification-only
+contract. For each open remediation obligation you address, add remediation_records
+(obligation_id, assumption_id, approach, evidence_refs you read, covered_requirements equal to
+the rejected assumption's supports and each marked covered in requirement_trace, episode_id
+from clarification_episode). Never reuse a rejected assumption. Otherwise use [].
 Mocks may support tests, but cannot replace the real behavior requested by the user.
 If the real integration interface or implementation is missing, inspect or ask for it;
 do not invent a mock-only deliverable or label real functionality as an accepted limitation.
@@ -237,10 +280,17 @@ the actual integration plan or a user decision about scope. An 'unverified' assu
 does not authorize replacing real behavior with a prototype.
 Give concise, numbered concerns, evidence references,
 requested changes and acceptance tests. Do not manufacture objections or write a second essay.
+For every deferred_obligations row with status pending_review, return exactly one
+obligation_decisions entry (obligation_id, remediation_hash copied from the row, resolved,
+rationale, evidence_refs). Check that the remediation does not reintroduce the rejected
+assumption under different wording. resolved=false also needs a blocking concern naming
+the obligation id. With nothing pending_review, use obligation_decisions=[].
 """,
     "glm_revise": """You are the Planner, investigating the Plan Reviewer's concerns. Respond to EVERY concern by ID
 with evidence_refs, reasoning, the concrete change (or evidence-backed pushback) and a test.
 Revise the complete contract, including depends_on for every milestone, and identify what changed.
+Repair every remediation the Plan Reviewer rejected with a new remediation_records entry,
+under the same rules as discovery; use machine_resolutions/access_blockers as discovery does.
 You are a planning partner, not merely
 a coder: retain your approach where source evidence supports it. Never hide unresolved questions.
 If a concern exposes an unknown real integration or a proposed reduction to mock-only
@@ -259,6 +309,10 @@ Make it a substantial, coherent,
 executable milestone including related changes, tests, local fixes and evidence.
 If blocked with no safe first task, use kind=none and empty task strings/lists.
 Unresolved decisions MUST appear in open_blocking_questions, never silently become assumptions.
+Return exactly one obligation_decisions entry per pending_review obligation (copy its
+remediation_hash). resolved=false means the obligation id must appear as an
+open_blocking_questions entry with kind=decision, and initial_task.kind=none. Any unresolved
+obligation blocks a real initial_task.
 There is no further debate round. The user must approve this exact plan before implementation.
 """,
 }
@@ -328,6 +382,13 @@ def context(state, stage, state_path):
     if state["settings"].get("figma_file"):
         packet["figma_file"] = state["settings"]["figma_file"]
     packet['user_events'] = state.get('user_events', [])
+    packet['clarification_episode'] = state.get('clarification_episode')
+    packet['deferred_obligations'] = state.get('deferred_obligations', [])
+    packet['machine_resolutions'] = state.get('machine_resolutions', [])
+    if stage != "requirements_gather":
+        packet['requirements_handoff_hash'] = goals.handoff_hash(state)
+    if stage == "requirements_gather" and state.get("investigation_request"):
+        packet['investigation_request'] = state["investigation_request"]
     if stage == "requirements_gather":
         packet['previous_requirements_handoff'] = state.get('requirements_handoff')
     if stage in ("requirements_gather", "astra_discovery"):
