@@ -63,7 +63,7 @@ cover five kinds of job and check three things beyond the deliverable:
 | --- | --- | --- | --- |
 | `build` | make or change something | understand → plan → review plan → build → test → review | code |
 | `bugfix` | a reported misbehavior | investigate → diagnose → fix → test → review | code + root-cause note |
-| `review` | judge an existing change | review → test where useful → findings | `review/findings.json` |
+| `review` | judge an existing change | review → test where useful → findings | `review/findings.json` (written by the runner from the Reviewer's report; the run is rejected if anything else changed) |
 | `design` | judge or produce an architecture | understand → challenge → design | `review/design-review.json` |
 | `discuss` | a question, tradeoff or investigation | investigate → conversation | a note under `docs/` |
 

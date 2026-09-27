@@ -25,12 +25,19 @@ class ModuleTests(unittest.TestCase):
     def test_apply_saves_the_kind_and_hands_over(self):
         state = fresh()
         workflows.begin(state, "requirements_gather")
-        workflows.apply(state, {"workflow": "review", "reason": "asks for a review", "signals": ["review"]},
+        workflows.apply(state, {"workflow": "bugfix", "reason": "reports a misbehavior", "signals": ["fix"]},
                         {"output": "/run/recognize_workflow-01.json"})
-        self.assertEqual("review", workflows.kind(state))
-        self.assertEqual("review", run_view.view(state)["workflow"])
+        self.assertEqual("bugfix", workflows.kind(state))
+        self.assertEqual("bugfix", run_view.view(state)["workflow"])
+        # Kinds without a workflow of their own continue into the build pipeline for now.
         self.assertEqual("requirements_gather", state["next_stage"])
         self.assertEqual("model", state["workflow"]["source"])
+
+    def test_a_review_gets_its_own_first_stage(self):
+        state = fresh()
+        workflows.begin(state, "requirements_gather")
+        workflows.apply(state, {"workflow": "review", "reason": "asks for a review", "signals": ["review"]}, {})
+        self.assertEqual(workflows.REVIEW_STAGE, state["next_stage"])
 
     def test_apply_rejects_an_unknown_kind(self):
         state = fresh()

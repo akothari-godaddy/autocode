@@ -3,7 +3,7 @@ import datetime as dt
 import hashlib
 import json
 
-ROLES = {'recognize_workflow': 'Job recognizer', 'astra_resolve': 'Autoresolver', 'terra': 'Builder', 'sol': 'Validator', 'astra_review': 'Completion Owner',
+ROLES = {'recognize_workflow': 'Job recognizer', 'review_change': 'Reviewer', 'astra_resolve': 'Autoresolver', 'terra': 'Builder', 'sol': 'Validator', 'astra_review': 'Completion Owner',
          'astra_checkpoint': 'Completion Owner', 'astra_discovery': 'Requirements Planner',
          'astra_plan': 'Plan Reviewer', 'astra_challenge': 'Plan Reviewer',
          'astra_finalize': 'Plan Reviewer', 'glm_revise': 'Requirements Planner', 'orchestrator': 'Orchestrator', 'builder': 'Builder', 'validator': 'Validator',

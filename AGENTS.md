@@ -70,6 +70,7 @@ mapping (the unit column is `autopilot.unit_for`):
 | `astra_plan` | next-task planning | AutoCode build unit |
 | `terra` | Builder | AutoCode build unit |
 | `sol` | Validator | AutoReview |
+| `review_change` | Reviewer: the review workflow's only stage (`autocode_review_job.py`) | AutoReview |
 | `astra_review`, `astra_checkpoint` | Completion Owner | AutoReview |
 | `astra_resolve` | AutoResolver | AutoResolver |
 

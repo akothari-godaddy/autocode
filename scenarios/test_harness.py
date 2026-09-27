@@ -107,12 +107,12 @@ class RunChecksTests(unittest.TestCase):
 class FakeRunTests(unittest.TestCase):
     """End to end through AutoCode's real CLI, with the scripted model (about 30 s each)."""
 
-    def run_fake(self, solution):
+    def run_fake(self, solution, scenario="bugfix-iso-weeks"):
         with tempfile.TemporaryDirectory(prefix="scenario-test-") as out:
             args = argparse.Namespace(
                 fake=True, profile=None, fake_solution=solution, out=Path(out), autocode=None,
                 max_steps=None, timeout_minutes=10)
-            return run.run_one(catalog.load("bugfix-iso-weeks"), args)
+            return run.run_one(catalog.load(scenario), args)
 
     def test_correct_solution_is_judged_pass(self):
         result = self.run_fake("reference")
@@ -121,6 +121,16 @@ class FakeRunTests(unittest.TestCase):
 
     def test_wrong_solution_that_autocode_accepts_is_judged_false_complete(self):
         result = self.run_fake("broken/special-case")
+        self.assertEqual(verdict.FALSE_COMPLETE, result["verdict"], result["summary"])
+
+    def test_a_review_runs_only_the_reviewer_and_leaves_the_tree_alone(self):
+        result = self.run_fake("reference", "review-clean-pr")
+        self.assertEqual(verdict.PASS, result["verdict"], result["summary"])
+        self.assertEqual("review", result["workflow"])
+        self.assertEqual(["recognize_workflow", "review_change"], result["metrics"]["stage_names"])
+
+    def test_an_invented_blocker_in_a_review_is_judged_false_complete(self):
+        result = self.run_fake("broken/invented-blocker", "review-clean-pr")
         self.assertEqual(verdict.FALSE_COMPLETE, result["verdict"], result["summary"])
 
 

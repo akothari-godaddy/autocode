@@ -17,6 +17,10 @@ import json
 
 STAGE = "recognize_workflow"
 WORKFLOWS = ("build", "bugfix", "review", "design", "discuss")
+# Workflows with their own first stage. The others continue into the build
+# pipeline (the stage saved as ``then`` when recognition began) for now.
+REVIEW_STAGE = "review_change"
+FIRST_STAGE = {"review": REVIEW_STAGE}
 
 DESCRIPTIONS = {
     "build": "Make or change something: a feature, a new tool, a behavior change. The user wants working code "
@@ -95,7 +99,7 @@ def apply(state: dict, value: dict, record: dict) -> None:
     if value.get("workflow") not in WORKFLOWS:
         raise ValueError(f"Unknown workflow {value.get('workflow')!r}; expected one of {WORKFLOWS}")
     pending = state.get("workflow") or {}
-    then = pending.get("then") or "requirements_gather"
+    then = FIRST_STAGE.get(value["workflow"]) or pending.get("then") or "requirements_gather"
     state["workflow"] = {"kind": value["workflow"], "reason": value.get("reason", ""),
                          "signals": list(value.get("signals") or []), "source": "model",
                          "output": record.get("output"), "then": then}

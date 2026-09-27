@@ -111,9 +111,23 @@ def recognize(brief: str) -> dict:
     return {"workflow": kind, "reason": f"Scripted keyword rule: {signal}", "signals": [signal]}
 
 
+def review() -> dict:
+    """The fake's review: the findings from the solution it was told to apply (reference or broken).
+    The runner writes review/findings.json from this report; the fake writes nothing."""
+    path = Path(CONFIG["reference"]) / "review" / "findings.json"
+    saved = json.loads(path.read_text()) if path.is_file() else {}
+    return {"verdict": saved.get("verdict", "approve"), "summary": "Scripted review from the scenario solution",
+            "change_under_review": "the change named in the request",
+            "findings": [{key: f.get(key, [] if key == "lines" else "") for key in
+                          ("id", "severity", "file", "lines", "summary", "evidence")} for f in saved.get("findings", [])],
+            "tests_run": [str(t) for t in saved.get("tests_run", [])]}
+
+
 def report_for(stage: str, data: dict) -> dict:
     if stage == "recognize_workflow":
         return recognize(data.get("task") or CONFIG["brief"])
+    if stage == "review_change":
+        return review()
     task = data.get("current_task") or {}
     revision = data.get("goal_contract") or {"revision": 0, "hash": ""}
     common = {

@@ -9,7 +9,7 @@ try:
     from . import autocode_support as support, autocode_goals as goals
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
-    from .units import autoplanner as planning_unit
+    from .units import autoplanner as planning_unit, autoreview as review_unit
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
@@ -18,7 +18,7 @@ except ImportError:
     import autocode_escalation as escalation
     import autocode_findings as findings_ledger
     import autocode_builder_policy as builder_policy
-    from units import autoplanner as planning_unit
+    from units import autoplanner as planning_unit, autoreview as review_unit
 
 SKIP = object()
 
@@ -69,7 +69,7 @@ def unit_for(stage):
         return "autoplanner"
     if stage in ("astra_plan", "orchestrator", "terra"):
         return "autocode"
-    if stage in ("sol", "astra_review", "astra_checkpoint"):
+    if stage in (review_unit.STAGE, "sol", "astra_review", "astra_checkpoint"):
         return "autoreview"
     raise ValueError(f"No unit owns stage {stage!r}")
 
@@ -90,12 +90,6 @@ def pending_unit(state):
 
 def publish_handoffs(state, run_dir):
     """Export versioned unit outputs; saved state and checked evidence stay authoritative."""
-    try:
-        from . import autocode_goals as goals, autocode_support as support
-    except ImportError:
-        import autocode_goals as goals
-        import autocode_support as support
-    from pathlib import Path
     outputs = {}
     if goals.approved(state):
         contract = state["goal_contract"]
@@ -470,6 +464,9 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
     support, goals, planning = runtime.support, runtime.goals, runtime.planning
     workflow, milestones, escalation = runtime.workflow, runtime.milestones, runtime.escalation
     dispatch, save_record, now = runtime.dispatch, runtime.save_record, runtime.now
+    if stage == review_unit.STAGE:
+        review_unit.apply(state, value, record, workspace)
+        return save_record(state, record)
     if stage == "astra_resolve":
         unit_module(stage).validate(state, value, record, workspace)
         value = unit_module(stage).preserve_review_criteria(state, value)

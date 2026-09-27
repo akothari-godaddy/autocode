@@ -23,12 +23,12 @@ from typing import Any
 import copy
 import uuid
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures
+    from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_review_job as review_job
     from . import autocode_gocode as gocode
     from . import autocode_args as cli_args
     from . import autocode_run_view as run_view
 except ImportError:
-    import autocode_support as support
+    import autocode_support as support, autocode_review_job as review_job
     import autocode_goals as goals
     import autocode_interventions as interventions
     import autocode_providers
@@ -306,7 +306,7 @@ def run_role(
     original_stage = state['next_stage']
     stage = original_stage
     joint_stage = planning.is_planning(state, stage)
-    if state.get("version", 2) >= 3 and stage != "astra_discovery" and not joint_stage:
+    if state.get("version", 2) >= 3 and stage not in ("astra_discovery", review_job.STAGE) and not joint_stage:
         goals.execution_guard(state)
         if not report_only:
             milestones.dispatch_guard(state, stage)
@@ -2437,7 +2437,7 @@ def main(unit=None) -> int:
                 if state["status"] != "TASK_COMPLETE":
                     write_json(state_path, state)
             if state["status"] == "TASK_COMPLETE":
-                print(goals.render_completion(state))
+                print(review_job.render(state) if review_job.owns(state) else goals.render_completion(state))
                 return 0
             if state["status"] in ("WAITING_FOR_USER", "AWAITING_GOAL_APPROVAL"):
                 if args.chat:
@@ -2619,7 +2619,7 @@ def main(unit=None) -> int:
             print(f"{state['status']}: {error}", file=sys.stderr)
             return 2
         if state["status"] == "TASK_COMPLETE":
-            print(goals.render_completion(state))
+            print(review_job.render(state) if review_job.owns(state) else goals.render_completion(state))
         else:
             if args.chat and state["status"] in ("WAITING_FOR_USER", "AWAITING_GOAL_APPROVAL"):
                 if not chat_checkpoint(state, run_dir):
@@ -2627,7 +2627,7 @@ def main(unit=None) -> int:
                     return 2
                 write_json(state_path, state)
                 if state["status"] == "TASK_COMPLETE":
-                    print(goals.render_completion(state))
+                    print(review_job.render(state) if review_job.owns(state) else goals.render_completion(state))
                     return 0
             rendered = goals.present(state)
             write_json(state_path, state)
