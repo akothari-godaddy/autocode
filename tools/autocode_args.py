@@ -100,6 +100,8 @@ def build_parser(*, unit, units, role_models, joint_models):
     parser.add_argument("--max-findings-per-task", type=int,
                         help="Reject a REWORK task that bundles more than this many open findings (default: unlimited; 0 disables)")
     parser.add_argument("--resume-paused", action="store_true", help="Acknowledge a saved pause; uncertain stages still require reconciliation")
+    parser.add_argument("--retry-failed-stage", action="store_true",
+                        help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
                         help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
@@ -137,6 +139,8 @@ def validate(parser, args, unit):
         parser.error("--accept-transport-change requires --run-dir and --resume-paused")
     if args.retry_report and (not args.run_dir or not args.resume_paused):
         parser.error("--retry-report requires --run-dir and --resume-paused")
+    if args.retry_failed_stage and (not args.run_dir or not args.resume_paused):
+        parser.error("--retry-failed-stage requires --run-dir and --resume-paused")
     if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
         parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
     if unit and args.unit != unit:
