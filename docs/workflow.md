@@ -125,6 +125,13 @@ no second pass. The episode, and so the pass, is renewed only by your own new in
 non-delegated `--answer`, `--feedback`, or `--edit-goal`. Delegating a default, rejecting
 an assumption, or the model regenerating question IDs does not renew it.
 
+Whenever planning stops for your answers, the displayed brief starts with a **Plan Preview**
+bound to that exact revision and requirements handoff. It lists what you said (quoted
+requirements), what was read from the workspace, the assumptions the plan would rely on,
+and the decisions only you can make. Readiness is shown as counts only (blocking decisions,
+assumptions relied on, acceptance tests and criteria, open obligations), never as a score.
+Answering nothing leaves execution blocked; the preview never approves anything.
+
 `--reject-assumption A1` turns a structured assumption into an **obligation** the runner
 tracks until it is discharged; the rejected assumption may not reappear. If the assumption
 carried policy weight (cost, quota, permission, external side effect, or the requested

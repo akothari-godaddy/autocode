@@ -642,6 +642,78 @@ def migrate(state):
     state.update(version=3, phase="DISCOVERING", status="RUNNING", pending_questions=[], next_stage=first_stage)
 
 
+def plan_preview(state):
+    """Rule E9 (issue #62): what the run knows, what it would assume, and what only
+    the user can decide, at a planning clarification stop. Counts only; no score.
+    Bound to the displayed contract revision and the requirements handoff hash.
+    Runner-generated permission, blocker and review stops carry a user_request
+    and get no preview."""
+    contract = state.get("goal_contract")
+    questions = state.get("pending_questions") or []
+    if (not contract or state.get("status") != "WAITING_FOR_USER" or not questions
+            or state.get("user_request")):
+        return []
+    handoff_entry = state.get("requirements_handoff") or {}
+    handoff = handoff_entry.get("report") or {}
+    handoff_ref = s.digest(handoff)[:12] if handoff else "none"
+    rejected = {ob.get("assumption_id") for ob in state.get("deferred_obligations", [])}
+    lines = ["", f"PLAN PREVIEW for {token(contract)} (requirements handoff {handoff_ref})",
+             "Answering nothing leaves execution blocked. Nothing here approves the plan."]
+
+    lines += ["", "Known from you:"]
+    lines += [f"  [{row['id']}] {row['text']} (you said: \"{row['source_quote']}\")"
+              for row in handoff.get("requirements", [])] or ["  (no quoted requirements recorded)"]
+
+    lines += ["", "Known from the codebase:"]
+    refs = [ref for ref in handoff.get("source_refs", []) if ref != "task"]
+    if refs:
+        lines.append("  Files read: " + ", ".join(refs))
+    lines += [f"  [{row['question_id']}] {row['resolution']} (source: {', '.join(row['source_refs'])})"
+              for row in state.get("machine_resolutions", [])]
+    if lines[-1] == "Known from the codebase:":
+        lines.append("  (nothing cited from the workspace)")
+
+    structured, legacy = [], []
+    for row in (normalize_assumption(raw) for raw in handoff.get("proposed_assumptions", [])):
+        if row["legacy"]:
+            legacy.append(row)
+        elif row["id"] not in rejected:
+            structured.append(row)
+    planner = []
+    for row in contract["body"].get("accepted_assumptions", []):
+        if row.get("basis") == "agent_proposed" and row["text"] not in planner:
+            planner.append(row["text"])
+    lines += ["", "Assumptions I would make:"]
+    lines += [f"  [{row['id']}] {row['text']} ({row['category']}; evidence: {row['convention_ref'] or 'none'})"
+              for row in structured]
+    lines += [f"  Unstructured, from an older run: {row['text']}" for row in legacy]
+    lines += [f"  Planner: {text}" for text in planner]
+    if not (structured or legacy or planner):
+        lines.append("  (none)")
+
+    lines += ["", "Decisions only you can make:"]
+    for question in questions:
+        lines += [f"  [{question['id']}] {question['question']}", f"    Why: {question['why']}"]
+        lines += ["    Option: " + option for option in question.get("options", [])]
+        if question.get("proposed_default"):
+            lines.append("    Proposed default: " + question["proposed_default"]
+                         + ("" if question.get("delegable") else " (not delegable)"))
+
+    obligations = open_obligations(state)
+    criteria = contract["body"].get("acceptance_criteria", [])
+    lines += ["", "Readiness:",
+              f"  Blocking decisions: {len(questions)}",
+              f"  Assumptions relied on: {len(structured) + len(legacy) + len(planner)}",
+              f"  Acceptance tests in requirements: {len(handoff.get('acceptance_tests', []))}",
+              f"  Acceptance criteria in the contract: {len(criteria)}"
+              f" ({sum(bool(row.get('human_review')) for row in criteria)} need your review)",
+              f"  Open obligations: {sum(ob['kind'] == 'human_decision' for ob in obligations)} for your decision, "
+              f"{sum(ob['kind'] == 'remediation' for ob in obligations)} awaiting remediation"]
+    lines += ["", "Next: --answer QUESTION_ID=TEXT, --delegate-all, --reject-assumption ASSUMPTION_ID, "
+              "or --edit-goal body.json"]
+    return lines
+
+
 def render(state):
     contract = state.get("goal_contract")
     if not contract:
@@ -651,6 +723,7 @@ def render(state):
              f"Approval token: {token(contract)}"]
     if state.get("discovery_summary"):
         lines += ["", "Planning: " + state["discovery_summary"]]
+    lines += plan_preview(state)
     display_order = ("intended_user", "intended_outcome", "end_to_end_flow", "deliverables", "scope_exclusions",
                      "constraints", "permission_boundaries", "accepted_assumptions", "delegated_decisions",
                      "required_behaviors", "important_failure_cases", "acceptance_criteria", "technical_approach",
