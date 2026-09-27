@@ -423,6 +423,10 @@ When deciding what to build next, ask:
 
 If not, it is probably not the next priority.
 
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a checkout, run the suite gate, and propose a change (including the policy on AI-assisted contributions), [SECURITY.md](SECURITY.md) for how to report a vulnerability privately and what counts as one here, and the [Code of Conduct](CODE_OF_CONDUCT.md). Bug reports and feature requests use the issue templates.
+
 ## License
 
 No root-level license file is present in the status snapshot above, and the package metadata does not specify a license. The maintainer still needs to document the project's licensing; this README does not choose a license.
