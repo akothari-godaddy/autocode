@@ -2187,7 +2187,10 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                     if reply.startswith("/"):
                         print("Use /default, /feedback TEXT or /pause, or type your answer.")
                         continue
-                    action(lambda candidate: goals.answer(candidate, question["id"], reply))
+                    if goals.is_operational_response(state.get("user_request")):
+                        action(lambda candidate: goals.resolve_permission(candidate, question["id"], reply))
+                    else:
+                        action(lambda candidate: goals.answer(candidate, question["id"], reply))
                     break
                 print("Please enter an answer, or /default when a suggested default is available.")
     if state["status"] == "AWAITING_GOAL_APPROVAL":
@@ -2728,10 +2731,7 @@ def main(unit=None) -> int:
                         if not sep:
                             raise ValueError("--answer uses QUESTION_ID=TEXT")
                         request = candidate.get("user_request", {})
-                        if request.get("kind") == "permission" or (request.get("kind") == "blocker" and
-                                str(request.get("proposed_delta", "")).startswith((
-                                    "No goal, scope, criterion, or behavior change.",
-                                    "No contract, product, acceptance-criterion, implementation-scope, filesystem, provider or spending change."))):
+                        if goals.is_operational_response(request):
                             goals.resolve_permission(candidate, question, response)
                         elif (request.get("kind") == "blocker" and response == (request.get("options") or [None])[0]
                               and response.startswith("Reconcile ")):
