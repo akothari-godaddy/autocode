@@ -58,6 +58,8 @@ def main():
             result['results'] = ['All tests passed; exit code 0']
             result['commands_run'] = ['python3 -c "raise SystemExit(0)"']
         record('repair')
+    elif data['stage'] == 'recognize_workflow':
+        result = dict(workflow='build', reason='Handwritten fixture: every request is a build', signals=[])
     elif data['stage'] == 'astra_discovery':
         result = dict(contract=spec['contract'], summary='Handwritten fixture plan; no model planning')
     elif data['stage'] == 'terra':

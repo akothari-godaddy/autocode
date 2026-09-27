@@ -77,9 +77,17 @@ meaning must change.
   "next_stage": "orchestrator",
   "iteration": 1,
   "stop_reason": null,
-  "current_task": {"id": "task-1", "objective": "...", "milestone_id": "M1"}
+  "current_task": {"id": "task-1", "objective": "...", "milestone_id": "M1"},
+  "workflow": "build"
 }
 ```
+
+`workflow` is the kind of job AutoCode recognized from the request, decided by
+the first stage of every new run (`recognize_workflow`): one of `build`,
+`bugfix`, `review`, `design` or `discuss` (see `scenarios/README.md`,
+"Workflows"). It is `null` until that stage has run, and for runs that predate
+it. Today it is recorded and reported; the stages that follow are still the
+build pipeline for every kind.
 
 `needs` is `null` when the run is complete. Otherwise its `kind` says what the
 run is waiting for:

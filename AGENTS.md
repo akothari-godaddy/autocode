@@ -62,6 +62,7 @@ mapping (the unit column is `autopilot.unit_for`):
 
 | In code | Role in docs | Unit |
 | --- | --- | --- |
+| `recognize_workflow` | Job recognizer: which of the five workflows (`autocode_workflows.py`) | AutoPlanner |
 | `requirements_gather` | Requirements | AutoPlanner |
 | `astra_discovery`, `glm_revise` | Planner | AutoPlanner |
 | `astra_challenge`, `astra_finalize` | Plan Reviewer | AutoPlanner |

@@ -56,7 +56,9 @@ print(json.dumps({"type": "thread.started", "thread_id": session}))
 if os.environ.get("AUTOCODE_FIXTURE_QUOTA_STAGE") == stage:
     print(json.dumps({"type": "error", "error": {"message": "subscription usage limit reached"}}))
     raise SystemExit(3)
-if stage == "requirements_gather":
+if stage == "recognize_workflow":
+    result = {"workflow": "build", "reason": "Offline fixture: every request is treated as a build", "signals": []}
+elif stage == "requirements_gather":
     draft = body(questions=not data["saved_answers"])
     result = {
         "summary": "Requirements for a local greeting CLI, without an implementation plan",

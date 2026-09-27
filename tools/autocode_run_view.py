@@ -30,6 +30,9 @@ def view(state: dict) -> dict:
         "iteration": state.get("iteration"),
         "stop_reason": state.get("stop_reason"),
         "current_task": {key: task.get(key) for key in ("id", "objective", "milestone_id")} if task else None,
+        # The kind of job recognized from the request (autocode_workflows.WORKFLOWS);
+        # None until the first stage has run, and for runs that predate recognition.
+        "workflow": (state.get("workflow") or {}).get("kind"),
     }
 
 

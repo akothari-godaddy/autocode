@@ -65,7 +65,7 @@ UNITS = ("autoplanner", "autocode", "autoreview", "autoresolver")
 def unit_for(stage):
     if stage == "astra_resolve":
         return "autoresolver"
-    if stage in ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
+    if stage in (planning_unit.RECOGNIZE, "requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
         return "autoplanner"
     if stage in ("astra_plan", "orchestrator", "terra"):
         return "autocode"
@@ -170,7 +170,6 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     return record
 
 
-
 def start_planning(state):
     if state.get("planning"):
         state.setdefault("planning_history", []).append(copy.deepcopy(state["planning"]))
@@ -225,6 +224,8 @@ def apply_planning(state, stage, value, record):
     if "conflict_resolutions" in planning_unit.SCHEMAS[stage]["properties"]:
         value = {"conflict_resolutions": [], **value}
     support.validate_schema(value, planning_unit.SCHEMAS[stage])
+    if stage == planning_unit.RECOGNIZE:
+        return planning_unit.recognize(state, value, record)
     if stage == "requirements_gather":
         if not value["intended_outcome"].strip() or not value["required_behaviors"] or not value["acceptance_tests"]:
             raise ValueError("Requirements handoff needs an outcome, behaviors, and acceptance tests")
@@ -304,7 +305,6 @@ def apply_planning_result(state, stage, value, record):
     if planning_unit.is_planning(state, stage):
         apply_planning(state, stage, value, record)
         return
-    from pathlib import Path
     schema = support.read(Path(record["schema"])) if record.get("schema") else goals.DISCOVERY_SCHEMA
     support.validate_schema(value, schema)
     legacy = not any(key in schema["properties"]["contract"]["properties"] for key in goals.BRIEF_FIELDS)

@@ -2358,7 +2358,7 @@ def main(unit=None) -> int:
                 backup = run_dir / "state.pre-v3.json"
                 if not backup.exists():
                     write_json(backup, state)
-                goals.migrate(state)
+                goals.migrate(state, fresh=not args.run_dir)
                 write_json(state_path, state)
             if args.milestone_checkpoints:
                 milestones.activate(state)

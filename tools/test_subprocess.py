@@ -58,7 +58,7 @@ class SubprocessFlow(unittest.TestCase):
         self.launch(['Build greeting and goodbye', '--chat'], 0, answers='CLI\nyes\n')
         run, state = self.saved()
         self.assertEqual('TASK_COMPLETE', state['status'])
-        execution = [r['stage'] for r in state['stages'] if r['stage'] != 'astra_discovery']
+        execution = [r['stage'] for r in state['stages'] if r['stage'] not in ('recognize_workflow', 'astra_discovery')]
         self.assertEqual(['astra_plan', 'terra', 'sol', 'astra_review', 'terra', 'sol', 'astra_review'], execution)
         self.assertEqual({'M1', 'M2'}, {r['id'] for r in state['milestone_progress'].values() if r['accepted']})
         first = next(r for r in state['milestone_progress'].values() if r['id'] == 'M1')
@@ -128,7 +128,8 @@ class SubprocessFlow(unittest.TestCase):
         self.assertEqual({"sol", "astra"}, {row["source"] for row in handoff["open_findings"]})
         self.assertIn("Acceptance evidence:", result.stdout)
         self.assertIn("End-to-end flow: PASS", result.stdout)
-        executed = [row for row in state["stages"] if row["stage"] != "astra_discovery" and not row.get('runner_owned')]
+        executed = [row for row in state["stages"]
+                    if row["stage"] not in ("recognize_workflow", "astra_discovery") and not row.get('runner_owned')]
         for record in executed:
             prompt = Path(record["prompt"]).read_text()
             data = json.loads(prompt.split("CURRENT HANDOFF DATA\n", 1)[1])
@@ -163,7 +164,7 @@ class SubprocessFlow(unittest.TestCase):
         self.assertEqual(0, resumed.returncode, resumed.stdout + resumed.stderr)
         self.assertEqual([str(run.resolve())], [item["run_dir"] for item in json.loads(resumed.stdout)["runs"]])
         observed = [json.loads(line) for line in probe.read_text().splitlines()]
-        self.assertEqual(2, len(observed))
+        self.assertEqual(3, len(observed))   # job recognition, then discovery on the first and the resumed launch
         self.assertTrue(all(str(run.resolve()) in item["runs"] for item in observed))
 
     def test_registry_failure_preserves_new_run_for_retry_without_a_stage_launch(self):
@@ -313,7 +314,7 @@ class SubprocessFlow(unittest.TestCase):
         _, paused = self.saved()
         self.assertEqual("PAUSED_UNCERTAIN_STAGE", paused["status"])
         self.assertEqual(initial["sessions"], paused["sessions"])
-        self.assertEqual(1, len(paused["stages"]))
+        self.assertEqual(2, len(paused["stages"]), [r["stage"] for r in paused["stages"]])
         status = json.loads(self.launch([*args, "--status"], 0).stdout)
         unchanged = (run / "state.json").read_bytes()
         self.launch([*args, "--abandon-stage", "001/wrong-01"], 2)
@@ -321,7 +322,7 @@ class SubprocessFlow(unittest.TestCase):
         self.launch([*args, "--abandon-stage", status["attempt_id"]], 0)
         _, abandoned = self.saved()
         self.assertEqual("PAUSED_STAGE_ABANDONED", abandoned["status"])
-        self.assertEqual(2, len(abandoned["stages"]))
+        self.assertEqual(3, len(abandoned["stages"]))
         self.assertTrue(abandoned["stages"][-1]["abandoned"])
         self.assertNotIn("astra", abandoned["sessions"])
         self.assertFalse((self.project / "greet.py").exists())
@@ -358,7 +359,7 @@ class SubprocessFlow(unittest.TestCase):
                                           for role,settings in state()["settings"]["roles"].items()})
         self.assertFalse((project / "greet.py").exists())
         launch([*args, "--answer", "Q1=CLI"], 0)
-        self.assertEqual(1, len(state()["stages"]))
+        self.assertEqual(2, len(state()["stages"]), [r["stage"] for r in state()["stages"]])
         launch(args, 2)
         self.assertEqual("AWAITING_GOAL_APPROVAL", state()["phase"])
         self.assertEqual("CLI", state()["answers"]["Q1"]["text"])
@@ -366,7 +367,7 @@ class SubprocessFlow(unittest.TestCase):
         self.assertFalse((project / "greet.py").exists())
         launch([*args, "--approve-goal", state()["displayed_goal"]], 0)
         self.assertEqual("READY_TO_EXECUTE", state()["phase"])
-        self.assertEqual(2, len(state()["stages"]))
+        self.assertEqual(3, len(state()["stages"]))
         launch(args, 2)
         self.assertEqual("WAITING_FOR_USER", state()["phase"])
         self.assertEqual("human_review", state()["user_request"]["kind"])

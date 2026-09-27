@@ -84,7 +84,36 @@ def run_check() -> int:
     return proc.returncode
 
 
+def recognize(brief: str) -> dict:
+    """The fake's script for the job-recognition stage: keyword rules over the brief.
+
+    This is not a model and says nothing about model quality; it exists so the
+    plumbing (the stage runs, its answer reaches the status view) can be proven
+    offline. A live profile is what tests recognition itself.
+    """
+    text = brief.lower()
+
+    def has(*patterns):
+        return any(re.search(pattern, text) for pattern in patterns)
+
+    if has(r"\bimplement (it|this|the design)\b", r"has already been .*approved") and not has(r"do(n't| not) implement anything"):
+        kind, signal = "build", "implement it / already approved"
+    elif has(r"\bdesign\b") and has(r"\breview\b", r"do(n't| not) implement", r"\bdesign how\b", r"^design\b"):
+        kind, signal = "design", "design + review/don't implement"
+    elif has(r"\breview\b", r"look over", r"safe to merge", r"\bpr[- ]?\d+", r"\.patch\b", r"\bdiff\b"):
+        kind, signal = "review", "review/patch"
+    elif has(r"\bfix\b", r"figure out why", r"stopped (working|being)", r"\bbug\b", r"duplicat", r"\btwice\b"):
+        kind, signal = "bugfix", "fix/why/duplicates"
+    elif text.rstrip().endswith("?") or has(r"^should ", r"^why ", r"^what would", r"want to understand", r"the analysis"):
+        kind, signal = "discuss", "a question"
+    else:
+        kind, signal = "build", "no other signal"
+    return {"workflow": kind, "reason": f"Scripted keyword rule: {signal}", "signals": [signal]}
+
+
 def report_for(stage: str, data: dict) -> dict:
+    if stage == "recognize_workflow":
+        return recognize(data.get("task") or CONFIG["brief"])
     task = data.get("current_task") or {}
     revision = data.get("goal_contract") or {"revision": 0, "hash": ""}
     common = {

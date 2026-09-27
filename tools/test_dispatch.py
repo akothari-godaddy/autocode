@@ -378,8 +378,8 @@ class DispatchCliTests(unittest.TestCase):
         self.assertEqual({"M1", "M2", "M3"}, m.accepted_ids(state))
         self.assertEqual(["M1", "M2"], [w["milestone_id"] for w in state["orchestration_history"][0]["workers"]])
         stages = [r["stage"] for r in state["stages"]]
-        self.assertEqual(["astra_discovery", "astra_plan", "terra", "terra", "orchestrator", "sol", "astra_review",
-                          "orchestrator", "terra", "sol", "astra_review"], stages)
+        self.assertEqual(["recognize_workflow", "astra_discovery", "astra_plan", "terra", "terra", "orchestrator",
+                          "sol", "astra_review", "orchestrator", "terra", "sol", "astra_review"], stages)
         self.assertEqual("M3\n", (self.project / "combined.txt").read_text())
         unchanged = (run / "state.json").read_bytes()
         self.launch(["--run-dir", str(run)], 0)

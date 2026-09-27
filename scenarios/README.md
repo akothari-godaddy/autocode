@@ -68,11 +68,14 @@ cover five kinds of job and check three things beyond the deliverable:
 | `discuss` | a question, tradeoff or investigation | investigate → conversation | a note under `docs/` |
 
 1. **Which workflow ran.** The status view (`autocode --status`,
-   docs/task-run.md) is expected to carry a `workflow` field naming one of the
-   five. Oracles check it through `run_checks`, together with which saved
-   stages ran: a review must not dispatch a Builder or ask for plan approval; a
-   bug fix must not start with requirements gathering; a three-line fix must
-   not get plan-review rounds.
+   docs/task-run.md) carries a `workflow` field naming one of the five,
+   decided by the first stage of every run (`recognize_workflow`). Oracles
+   check it through `run_checks`, together with which saved stages ran: a
+   review must not dispatch a Builder or ask for plan approval; a bug fix must
+   not start with requirements gathering; a three-line fix must not get
+   plan-review rounds. In fake mode the scripted provider answers this stage
+   with keyword rules (`harness/fake_codex.py`, `recognize`), which proves the
+   plumbing and nothing about model quality.
 2. **Read-only jobs stay read-only.** Review, design and discussion may leave
    only their report behind (`only_changed_under`); the oracle reads
    `git status` in the delivered workspace.

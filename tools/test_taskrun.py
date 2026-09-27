@@ -23,7 +23,12 @@ FIXTURE_OPTIONS = ("--engine", "codex", "--joint-planning", "--astra-model", "gp
 class RunViewTests(unittest.TestCase):
     def test_contract_fields(self):
         self.assertEqual({"schema", "status", "done", "needs", "phase", "next_stage", "iteration", "stop_reason",
-                          "current_task"}, set(run_view.view({"status": "RUNNING"})))
+                          "current_task", "workflow"}, set(run_view.view({"status": "RUNNING"})))
+
+    def test_workflow_is_none_until_recognized(self):
+        self.assertIsNone(run_view.view({"status": "RUNNING"})["workflow"])
+        self.assertIsNone(run_view.view({"status": "RUNNING", "workflow": {"kind": None, "then": "x"}})["workflow"])
+        self.assertEqual("review", run_view.view({"status": "RUNNING", "workflow": {"kind": "review"}})["workflow"])
 
     def test_complete_needs_nothing(self):
         view = run_view.view({"status": "TASK_COMPLETE"})

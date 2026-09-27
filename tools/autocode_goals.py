@@ -9,11 +9,11 @@ import re
 import uuid
 
 try:
-    from . import autocode_support as s
+    from . import autocode_support as s, autocode_workflows as workflows
     from . import autocode_milestones as checkpoints
     from . import autocode_findings as findings
 except ImportError:
-    import autocode_support as s
+    import autocode_support as s, autocode_workflows as workflows
     import autocode_milestones as checkpoints
     import autocode_findings as findings
 
@@ -506,8 +506,9 @@ def install_draft(state, body, *, origin, allow_legacy=False, changes=None):
             planning.start(state)
 
 
-def migrate(state):
-    """Call only at a saved, idle boundary. Preserve artifacts and execution history."""
+def migrate(state, *, fresh=False):
+    """Call only at a saved, idle boundary. Preserve artifacts and execution history.
+    A fresh run (``fresh``) first recognizes what kind of job the request is."""
     if state.get("active_stage") or state.get("uncertain_artifacts"):
         raise s.Paused("PAUSED_UNCERTAIN_STAGE", "Reconcile the prior request before goal migration")
     if state.get("version", 2) >= 3:
@@ -527,9 +528,10 @@ def migrate(state):
                     "why": "Existing criteria and agent assumptions have no user approval event",
                     "options": [], "proposed_default": ""}])
     install_draft(state, body, origin="migration_draft; no inferred user approval")
-    first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
-                   else "astra_discovery")
+    first_stage = "requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {}) else "astra_discovery"
     state.update(version=3, phase="DISCOVERING", status="RUNNING", pending_questions=[], next_stage=first_stage)
+    if fresh:
+        workflows.begin(state, first_stage)
 
 
 def render(state):
@@ -680,8 +682,7 @@ def feedback(state, text):
     state.setdefault("brief_feedback", []).append(event)
     state["goal_contract"].update(approval_status="draft", approval_event=None)
     invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
-    first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
-                   else "astra_discovery")
+    first_stage = "requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {}) else "astra_discovery"
     state.update(status="RUNNING", phase="DISCOVERING", next_stage=first_stage, pending_questions=[])
 
 
@@ -703,8 +704,7 @@ def apply_intervention_feedback(state, receipt, applied_receipt):
     if contract:
         contract.update(approval_status="draft", approval_event=None)
     invalidate(state, "Queued feedback requires Plan Reviewer review, refreshed approval and validation")
-    first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
-                   else "astra_discovery")
+    first_stage = "requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {}) else "astra_discovery"
     state.update(status="PAUSED_INTERVENTION", phase="PAUSED_OR_BLOCKED", next_stage=first_stage,
                  pending_questions=[], stop_reason="Queued feedback was applied; explicitly continue to Requirements discovery.")
 

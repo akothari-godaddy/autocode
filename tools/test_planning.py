@@ -458,9 +458,11 @@ class JointFlow(unittest.TestCase):
             # Explicitly exercise compatibility with saved no-recovery runs.
             state['settings']['report_repair'] = {'max_attempts': report_repair}
             (run/'state.json').write_text(json.dumps(state))
-        self.assertEqual(["requirements", "glm"], [row["role"] for row in state["stages"]])
+        # The job recognizer runs first on the requirements route, then the Requirements Gatherer.
+        self.assertEqual(["requirements", "requirements", "glm"], [row["role"] for row in state["stages"]])
+        self.assertEqual("recognize_workflow", state["stages"][0]["stage"])
         handoff = state["requirements_handoff"]
-        self.assertEqual(state["stages"][0]["output"], handoff["output"])
+        self.assertEqual(state["stages"][1]["output"], handoff["output"])
         self.assertNotIn("milestones", json.loads(Path(handoff["output"]).read_text()))
         self.assertNotEqual(state["sessions"]["requirements"], state["sessions"]["glm"])
         self.assertEqual("WAITING_FOR_USER", state["status"])
@@ -471,9 +473,9 @@ class JointFlow(unittest.TestCase):
     def test_opencode_planning_approval_then_implementation_and_validation(self):
         run, state = self.draft()
         stages = state["stages"]
-        self.assertEqual(["requirements", "glm", "glm", "astra", "glm", "astra"],
+        self.assertEqual(["requirements", "requirements", "glm", "glm", "astra", "glm", "astra"],
                          [r["role"] for r in stages])
-        self.assertEqual(["opencode"] * 6, [r["engine"] for r in stages])
+        self.assertEqual(["opencode"] * 7, [r["engine"] for r in stages])
         self.assertEqual("AWAITING_GOAL_APPROVAL", state["status"])
         self.assertEqual(2, state["planning"]["astra_calls"])
         self.assertEqual(3, len({state["sessions"][role]
@@ -490,19 +492,19 @@ class JointFlow(unittest.TestCase):
         self.launch([*args, "--approve-goal", state["displayed_goal"]], 0)
         approved = self.saved()[1]
         self.assertEqual("orchestrator", approved["next_stage"])
-        self.assertEqual(6, len(approved["stages"]))
+        self.assertEqual(7, len(approved["stages"]))
         self.assertEqual(approved["goal_contract"]["hash"], approved["current_task"]["contract_hash"])
         self.launch([*args, "--no-chat"], 0)
         final = self.saved()[1]
         self.assertEqual("COMPLETE", final["phase"])
-        self.assertEqual(["orchestrator", "terra", "sol", "astra_review"], [r["stage"] for r in final["stages"][6:]])
-        self.assertEqual(["runner", "opencode", "opencode", "opencode"], [r["engine"] for r in final["stages"][6:]])
-        sol = final["stages"][8]
+        self.assertEqual(["orchestrator", "terra", "sol", "astra_review"], [r["stage"] for r in final["stages"][7:]])
+        self.assertEqual(["runner", "opencode", "opencode", "opencode"], [r["engine"] for r in final["stages"][7:]])
+        sol = final["stages"][9]
         self.assertEqual("zai-coding-plan/glm-5.3", sol["command"][sol["command"].index("--model") + 1])
         self.assertEqual("high", sol["command"][sol["command"].index("--variant") + 1])
         config = json.loads(Path(sol["output"]).with_suffix(".opencode.json").read_text())
         self.assertEqual("deny", config["agent"]["autocode_sol"]["permission"]["edit"])
-        completion = final["stages"][9]
+        completion = final["stages"][10]
         self.assertEqual("astra", completion["role"])
         self.assertEqual("completion", completion["route_role"])
         self.assertEqual("zai-coding-plan/glm-5.3", completion["command"][completion["command"].index("--model") + 1])
@@ -520,7 +522,7 @@ class JointFlow(unittest.TestCase):
         self.assertEqual("COMPLETE", final["phase"])
         self.assertEqual(["orchestrator", "terra", "sol", "astra_review", "astra_resolve",
                           "orchestrator", "terra", "sol", "astra_review"],
-                         [r["stage"] for r in final["stages"][6:]])
+                         [r["stage"] for r in final["stages"][7:]])
         resolution = next(r for r in final['stages'] if r['stage'] == 'astra_resolve')
         self.assertEqual('resolver', resolution['route_role'])
         self.assertIsNone(resolution['expected_session'])
@@ -542,7 +544,7 @@ class JointFlow(unittest.TestCase):
         self.launch([*args, "--answer", "Q1=CLI"], 0)
         self.launch([*args, "--no-chat"], 2)
         state = self.saved()[1]
-        self.assertEqual(["opencode"] * 6,
+        self.assertEqual(["opencode"] * 7,
                          [stage["engine"] for stage in state["stages"]])
         self.launch([*args, "--approve-goal", state["displayed_goal"]], 0)
         self.launch([*args, "--no-chat"], 0)
@@ -583,7 +585,7 @@ class JointFlow(unittest.TestCase):
         self.assertEqual(2, state["planning"]["astra_calls"])
         self.launch(["--run-dir", str(run), "--approve-goal", state["displayed_goal"]], 2)
         self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
-        self.assertEqual(6, len(self.saved()[1]["stages"]))
+        self.assertEqual(7, len(self.saved()[1]["stages"]))
 
     def test_failed_final_cannot_trigger_third_astra_call_on_resume(self):
         run, state = self.draft("planning-invalid", report_repair=0)
@@ -592,7 +594,7 @@ class JointFlow(unittest.TestCase):
         self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
         paused = self.saved()[1]
         self.assertEqual("PAUSED_PLANNING_BUDGET", paused["status"])
-        self.assertEqual(6, len(paused["stages"]))
+        self.assertEqual(7, len(paused["stages"]))
         self.assertNotIn("active_stage", paused)
         self.env["AUTOCODE_FIXTURE_MODE"] = "no-human"
         self.launch(["--run-dir", str(run), "--feedback", "Try the simpler version"], 0)
@@ -720,7 +722,7 @@ with tempfile.TemporaryDirectory() as temp:'''))
         recovered = self.saved()[1]
         self.assertEqual("AWAITING_GOAL_APPROVAL", recovered["status"])
         self.assertEqual(2, recovered["planning"]["astra_calls"])
-        self.assertEqual(6, len(recovered["stages"]))
+        self.assertEqual(7, len(recovered["stages"]))
         self.assertIn("recovered_at", recovered["stages"][-1])
         self.assertEqual(final["planning"]["final_token"], recovered["planning"]["final_token"])
 
@@ -736,7 +738,7 @@ with tempfile.TemporaryDirectory() as temp:'''))
         self.assertEqual("PAUSED_BUDGET", paused["status"])
         self.assertEqual("opencode", paused["active_stage"]["engine"])
         self.assertEqual(1, paused["planning"]["astra_calls"])
-        self.assertEqual(3, len(paused["stages"]))
+        self.assertEqual(4, len(paused["stages"]))
         del self.env["AUTOCODE_FIXTURE_QUOTA_STAGE"]
         self.launch([*args, "--resume-paused"], 2)
         still = self.saved()[1]
@@ -762,7 +764,7 @@ class NativeJointFlow(unittest.TestCase):
     def test_native_codex_review_precedes_approval_and_uses_separate_sessions(self):
         run, state = self.draft()
         self.assertEqual('AWAITING_GOAL_APPROVAL', state['status'])
-        self.assertEqual(['requirements_gather', 'astra_discovery', 'astra_discovery',
+        self.assertEqual(['recognize_workflow', 'requirements_gather', 'astra_discovery', 'astra_discovery',
                           'astra_challenge', 'glm_revise', 'astra_finalize'],
                          [record['stage'] for record in state['stages']])
         self.assertEqual({'codex'}, {record['engine'] for record in state['stages']})
@@ -780,7 +782,7 @@ class NativeJointFlow(unittest.TestCase):
         final = self.saved()[1]
         self.assertEqual('TASK_COMPLETE', final['status'])
         self.assertEqual(['orchestrator', 'terra', 'sol', 'astra_review'],
-                         [record['stage'] for record in final['stages'][6:]])
+                         [record['stage'] for record in final['stages'][7:]])
         self.assertEqual(3, len({final['sessions'][role] for role in ('plan_reviewer', 'sol', 'completion')}))
 
     def test_saved_codex_work_reenters_requirements_before_independent_review(self):

@@ -390,7 +390,8 @@ class RepairSubprocessTests(unittest.TestCase):
         support.atomic_json(run/'state.json',state)
         # Merely opening/continuing without explicit retry cannot replay it.
         self.launch(['--run-dir',str(run),'--no-chat'],2)
-        self.assertEqual(1,len(self.saved()[1]['stages']))
+        _,opened=self.saved()
+        self.assertEqual(2,len(opened['stages']),(opened['status'],[r['stage'] for r in opened['stages']]))
         self.launch(['--run-dir',str(run),'--no-chat','--resume-paused'],2)
         _,saved=self.saved()
         self.assertEqual('WAITING_FOR_USER',saved['status'])
@@ -417,7 +418,7 @@ class RepairSubprocessTests(unittest.TestCase):
         self.launch(['Build greeting','--no-chat'],2)
         _,state = self.saved()
         self.assertEqual('WAITING_FOR_USER',state['status'])
-        self.assertEqual(['astra_discovery','astra_discovery_report_repair'],[r['stage'] for r in state['stages']])
+        self.assertEqual(['recognize_workflow','astra_discovery','astra_discovery_report_repair'],[r['stage'] for r in state['stages']])
         self.assertNotEqual('approved',state['goal_contract']['approval_status'])
 
 

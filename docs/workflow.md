@@ -16,6 +16,7 @@ in the same conversation. Implementation starts only after you explicitly approv
 After approval, Autocode handles the handoffs:
 
 ```text
+You → Autopilot: recognize the kind of job (build, bugfix, review, design, discuss); saved as `workflow`
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG
 Planner → Plan Reviewer → Planner revision → Plan Reviewer final → your approval

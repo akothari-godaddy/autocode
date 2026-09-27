@@ -8,12 +8,16 @@ from pathlib import Path
 import re
 
 try:
-    from .. import autocode_goals as goals, autocode_support as s
+    from .. import autocode_goals as goals, autocode_support as s, autocode_workflows as workflows
 except ImportError:
     import autocode_goals as goals
     import autocode_support as s
+    import autocode_workflows as workflows
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
+# The first stage of every new run: which kind of job this is (autocode_workflows).
+# It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
+RECOGNIZE = workflows.STAGE
 S, SS, obj = goals.STRING, goals.STRINGS, goals.obj
 CONCERN = obj({"id": S, "concern": S, "evidence_refs": SS, "requested_change": S,
                "acceptance_test": S, "blocking": {"type": "boolean"}})
@@ -61,6 +65,7 @@ SCHEMAS = {
 # Optional for old saved reports; new prompts require this whenever intent must change.
 SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
     "type": "array", "items": obj({"requirement_id": S, "proposal": S, "question_id": S})}
+SCHEMAS[RECOGNIZE] = workflows.SCHEMA
 
 
 def enabled(state):
@@ -68,10 +73,13 @@ def enabled(state):
 
 
 def is_planning(state, stage):
-    return enabled(state) and stage in STAGES
+    # Recognition is a read-only planning stage on every run, joint or not.
+    return stage == RECOGNIZE or (enabled(state) and stage in STAGES)
 
 
 def role_for(state, stage):
+    if stage == RECOGNIZE:
+        return "requirements" if "requirements" in state.get("settings", {}).get("roles", {}) else "astra"
     if is_planning(state, stage) and stage == "requirements_gather":
         return "requirements"
     if is_planning(state, stage) and stage in ("astra_discovery", "glm_revise"):
@@ -90,6 +98,8 @@ def route_for(state, stage, role=None):
         return "resolver"
     if stage == "requirements_gather":
         return "requirements"
+    if stage == RECOGNIZE:
+        return role_for(state, stage)
     role = role or role_for(state, stage)
     roles = state.get("settings", {}).get("roles", {})
     if stage in ("astra_challenge", "astra_finalize") and "plan_reviewer" in roles:
@@ -365,6 +375,13 @@ def context(state, stage, state_path):
 
 def prepare(state, stage, state_path, schema_dir):
     from .common import ModelRequest
+    if stage == RECOGNIZE:
+        state["phase"] = "DISCOVERING"
+        role = role_for(state, stage)
+        prompt, metrics = workflows.prompt(state, workspace_inventory(state["workspace"], state["task"]),
+                                          state["settings"].get("context_soft_tokens", 10000),
+                                          engine_for(state["settings"], route_for(state, stage, role)))
+        return ModelRequest(role, route_for(state, stage, role), prompt, metrics, workflows.SCHEMA, False)
     if stage not in STAGES:
         raise ValueError(f"Autoplanner cannot run {stage}")
     joint = is_planning(state, stage)
@@ -373,6 +390,12 @@ def prepare(state, stage, state_path, schema_dir):
     role = role_for(state, stage)
     return ModelRequest(role, route_for(state, stage, role), prompt, metrics,
                         SCHEMAS[stage] if joint else goals.DISCOVERY_SCHEMA, False)
+
+
+def recognize(state, value, record):
+    """Save the recognized kind of job; the run then continues with its first real stage."""
+    workflows.apply(state, value, record)
+    state["phase"] = "DISCOVERING"
 
 
 def apply_result(state, stage, value, record):
