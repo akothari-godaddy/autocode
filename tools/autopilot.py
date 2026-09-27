@@ -6,19 +6,19 @@ import json
 import re
 from pathlib import Path
 try:
-    from . import autocode_support as support, autocode_goals as goals
+    from . import autocode_support as support, autocode_goals as goals, autocode_jobs as jobs
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
-    from .units import autoplanner as planning_unit, autoreview as review_unit
+    from .units import autoplanner as planning_unit
 except ImportError:
-    import autocode_support as support
+    import autocode_support as support, autocode_jobs as jobs
     import autocode_goals as goals
     import autocode_workflow as workflow
     import autocode_milestones as milestones
     import autocode_escalation as escalation
     import autocode_findings as findings_ledger
     import autocode_builder_policy as builder_policy
-    from units import autoplanner as planning_unit, autoreview as review_unit
+    from units import autoplanner as planning_unit
 
 SKIP = object()
 
@@ -63,13 +63,15 @@ UNITS = ("autoplanner", "autocode", "autoreview", "autoresolver")
 
 
 def unit_for(stage):
+    if stage in jobs.UNIT:
+        return jobs.UNIT[stage]
     if stage == "astra_resolve":
         return "autoresolver"
     if stage in (planning_unit.RECOGNIZE, "requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
         return "autoplanner"
     if stage in ("astra_plan", "orchestrator", "terra"):
         return "autocode"
-    if stage in (review_unit.STAGE, "sol", "astra_review", "astra_checkpoint"):
+    if stage in ("sol", "astra_review", "astra_checkpoint"):
         return "autoreview"
     raise ValueError(f"No unit owns stage {stage!r}")
 
@@ -464,8 +466,8 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
     support, goals, planning = runtime.support, runtime.goals, runtime.planning
     workflow, milestones, escalation = runtime.workflow, runtime.milestones, runtime.escalation
     dispatch, save_record, now = runtime.dispatch, runtime.save_record, runtime.now
-    if stage == review_unit.STAGE:
-        review_unit.apply(state, value, record, workspace)
+    if stage in jobs.UNIT:
+        unit_module(stage).apply_job(state, value, record, workspace)
         return save_record(state, record)
     if stage == "astra_resolve":
         unit_module(stage).validate(state, value, record, workspace)

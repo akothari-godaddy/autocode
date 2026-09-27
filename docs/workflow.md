@@ -18,6 +18,8 @@ After approval, Autocode handles the handoffs:
 ```text
 You → Autopilot: recognize the kind of job (build, bugfix, review, design, discuss); saved as `workflow`
    review → Reviewer only: findings written to review/findings.json, repository untouched, run complete
+   bugfix → Investigator first: diagnosis written to docs/bugs/<name>.json, repository untouched;
+            not reproduced → run complete; reproduced → the build pipeline below
    everything else, for now → the build pipeline below
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG

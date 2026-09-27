@@ -1,0 +1,30 @@
+"""Workflow-owned stages ("jobs"): stages that belong to one workflow rather than to the build pipeline.
+
+Each job module is pure (prompt, schema, transition, rendering) and has
+``STAGE``, ``apply(state, value, record, workspace)``, ``owns(state)`` (the run
+ended in this job) and ``render(state)``. This table is what the runner and
+Autopilot consult, so adding a job means adding it here, not editing them.
+"""
+from __future__ import annotations
+
+try:
+    from . import autocode_bug_job as bug_job, autocode_review_job as review_job
+except ImportError:
+    import autocode_bug_job as bug_job
+    import autocode_review_job as review_job
+
+JOBS = (review_job, bug_job)
+# Which unit prepares and applies each job's stage (autopilot.unit_for).
+UNIT = {review_job.STAGE: "autoreview", bug_job.STAGE: "autoresolver"}
+STAGES = tuple(UNIT)
+
+
+def ended_in(state: dict):
+    """The job that ended this run, or None when it ended in the build pipeline."""
+    return next((job for job in JOBS if job.owns(state)), None)
+
+
+def render(state: dict, fallback) -> str:
+    """The completion summary: the job's own, or ``fallback(state)`` for a build-pipeline completion."""
+    job = ended_in(state)
+    return job.render(state) if job else fallback(state)

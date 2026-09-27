@@ -131,11 +131,33 @@ def review() -> dict:
             "tests_run": [str(t) for t in saved.get("tests_run", [])], "delivered_tests": delivered}
 
 
+def investigate() -> dict:
+    """The fake's investigation: the diagnosis note in the solution it was told to apply, if any.
+    A note with "reproduced": false ends the run; anything else hands over to the build pipeline,
+    where the fake Builder applies the solution. The runner writes the note; the fake writes nothing."""
+    notes = sorted((Path(CONFIG["reference"]) / "docs" / "bugs").glob("*.json"))
+    saved = json.loads(notes[0].read_text()) if notes else {}
+    reproduced = saved.get("reproduced", True) is not False
+    text = lambda *keys: next((str(saved[key]) for key in keys if saved.get(key)), "")
+    return {"outcome": "reproduced" if reproduced else "not_reproduced",
+            "note_path": f"docs/bugs/{notes[0].name}" if notes else "docs/bugs/scripted-diagnosis.json",
+            "observed": text("observed", "observed_by_reporter") or CONFIG["title"],
+            "reproduction": text("reproduction", "reproduction_attempted") or "Scripted reproduction",
+            "root_cause": text("root_cause") or ("Scripted root cause" if reproduced else ""),
+            "affected_paths": (saved.get("affected_paths") or [p for p in PATHS if p.endswith(".py")]) if reproduced else [],
+            "invariant": text("invariant") or ("Scripted invariant" if reproduced else ""),
+            "conclusion": text("conclusion", "finding", "fix") or "Scripted conclusion",
+            "fix_size": "small" if reproduced else "none", "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
+            "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"]}
+
+
 def report_for(stage: str, data: dict) -> dict:
     if stage == "recognize_workflow":
         return recognize(data.get("task") or CONFIG["brief"])
     if stage == "review_change":
         return review()
+    if stage == "investigate_bug":
+        return investigate()
     task = data.get("current_task") or {}
     revision = data.get("goal_contract") or {"revision": 0, "hash": ""}
     common = {

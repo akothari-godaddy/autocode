@@ -20,7 +20,8 @@ WORKFLOWS = ("build", "bugfix", "review", "design", "discuss")
 # Workflows with their own first stage. The others continue into the build
 # pipeline (the stage saved as ``then`` when recognition began) for now.
 REVIEW_STAGE = "review_change"
-FIRST_STAGE = {"review": REVIEW_STAGE}
+INVESTIGATE_STAGE = "investigate_bug"
+FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE}
 
 DESCRIPTIONS = {
     "build": "Make or change something: a feature, a new tool, a behavior change. The user wants working code "
@@ -98,12 +99,13 @@ def apply(state: dict, value: dict, record: dict) -> None:
     """Save the recognized kind and hand over to the stage recognition deferred."""
     if value.get("workflow") not in WORKFLOWS:
         raise ValueError(f"Unknown workflow {value.get('workflow')!r}; expected one of {WORKFLOWS}")
-    pending = state.get("workflow") or {}
-    then = FIRST_STAGE.get(value["workflow"]) or pending.get("then") or "requirements_gather"
+    # ``then`` stays the build pipeline's entry stage: a workflow with its own first
+    # stage (FIRST_STAGE) may still hand over to the build pipeline afterwards.
+    then = (state.get("workflow") or {}).get("then") or "requirements_gather"
     state["workflow"] = {"kind": value["workflow"], "reason": value.get("reason", ""),
                          "signals": list(value.get("signals") or []), "source": "model",
                          "output": record.get("output"), "then": then}
-    state.update(status="RUNNING", next_stage=then)
+    state.update(status="RUNNING", next_stage=FIRST_STAGE.get(value["workflow"]) or then)
 
 
 def kind(state: dict) -> str | None:

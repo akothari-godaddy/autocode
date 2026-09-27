@@ -9,4 +9,4 @@ category = "bugfix"
 check = "python3 -m unittest discover -s tests -t ."
 
 [run]
-known_failure = "AutoCode puts every task through requirements gathering and the full plan-review cycle"
+known_failure = "A reproduced small bug still goes through requirements gathering and the full plan-review cycle (issue #43)"

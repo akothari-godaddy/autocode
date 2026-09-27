@@ -1,17 +1,37 @@
-"""Read-only diagnosis and bounded repair planning; never writes application code."""
+"""Read-only diagnosis and bounded repair planning; never writes application code.
+
+Owns two stages: ``astra_resolve`` (why did a reviewed build fail, and what bounded
+rework fixes it) and the bug-fix workflow's ``investigate_bug`` (autocode_bug_job:
+reproduce a reported misbehavior and diagnose it before any fix exists)."""
 import copy
 import json
 from pathlib import Path
 try:
-    from .. import autocode_support as support, autocode_goals as goals
+    from .. import autocode_support as support, autocode_goals as goals, autocode_bug_job as bug_job
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
+    import autocode_bug_job as bug_job
+from . import autoplanner
 from .common import ModelRequest, execution_request
 
 
+def prepare_investigation(state):
+    """The Investigator inherits the planner model on its own route and session, so its
+    reproduction context never leaks into later planning or review. It may write, but only
+    to a scratch copy of its own; the runner rejects any change to the workspace itself."""
+    state["phase"] = "INVESTIGATING"
+    state["settings"]["roles"].setdefault("investigator", copy.deepcopy(state["settings"]["roles"]["astra"]))
+    prompt, metrics = bug_job.prompt(
+        state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
+        state["settings"].get("context_soft_tokens", 10000),
+        autoplanner.engine_for(state["settings"], "investigator"))
+    return ModelRequest("astra", "investigator", prompt, metrics, bug_job.SCHEMA, True)
 
 
+def apply_job(state, value, record, workspace):
+    """Autopilot hands the Investigator's validated report here."""
+    bug_job.apply(state, value, record, workspace)
 
 def guard(state, workspace):
     goals.execution_guard(state)
@@ -26,6 +46,8 @@ def guard(state, workspace):
 
 
 def prepare(state, stage, state_path, schema_dir):
+    if stage == bug_job.STAGE:
+        return prepare_investigation(state)
     if stage != 'astra_resolve':
         raise ValueError(f'Autoresolver cannot run {stage}')
     guard(state, Path(state['workspace']))

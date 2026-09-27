@@ -11,4 +11,3 @@ check = "python3 -m unittest discover -s tests -t ."
 
 [run]
 expected = "any"
-known_failure = "AutoCode plans and builds a change for every bug report; it has no investigate-first step that can end in 'not reproduced'"

@@ -35,8 +35,8 @@ class RoutingTests(unittest.TestCase):
         self.assertEqual(review_job.STAGE, state["next_stage"])
         self.assertEqual("autoreview", autopilot.unit_for(review_job.STAGE))
 
-    def test_other_kinds_still_continue_into_the_build_pipeline(self):
-        for kind in ("build", "bugfix", "design", "discuss"):
+    def test_kinds_without_their_own_first_stage_continue_into_the_build_pipeline(self):
+        for kind in ("build", "design", "discuss"):
             state = state_for()
             workflows.begin(state, "requirements_gather")
             workflows.apply(state, {"workflow": kind, "reason": "", "signals": []}, {"output": "o"})

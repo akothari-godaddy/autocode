@@ -34,6 +34,6 @@ def prepare(state, stage, state_path, schema_dir):
     return request
 
 
-def apply(state, value, record, workspace):
+def apply_job(state, value, record, workspace):
     """Autopilot hands the Reviewer's validated report here; the review completes the run."""
     review_job.apply(state, value, record, workspace)
