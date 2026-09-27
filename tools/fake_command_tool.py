@@ -80,9 +80,9 @@ if data.get("report_repair"):
         deliver({"summary": "Repaired requirements", "intended_outcome": draft["intended_outcome"],
                  "required_behaviors": draft["required_behaviors"], "constraints": draft["constraints"],
                  "acceptance_tests": ["Valid and invalid CLI input have the requested outcomes"],
-                 "source_refs": ["task"], "proposed_assumptions": ["Use a local CLI"],
+                 "source_refs": ["task"], "proposed_assumptions": [{"id": "A1", "text": "Use a local CLI", "kind": "inferable", "category": "behavior", "convention_ref": "task", "rationale": "The task asks for a local tool", "supports": []}],
                  "open_questions": [], "requirements": [], "ignored_statements": [], "conflicts": [],
-                 "proposed_reframes": []})
+                 "proposed_reframes": [], "ignored_requirements": [], "machine_resolutions": [], "access_blockers": []})
     elif stage in ("astra_discovery", "glm_revise"):
         draft = dict((original.get("contract") or {}).get("body") or body(questions=True, human=False))
         if draft.get("open_blocking_questions"):
@@ -91,16 +91,16 @@ if data.get("report_repair"):
             draft.pop("initial_task", None)
         deliver({"contract": draft, "summary": "Repaired planning report",
                  "code_refs": ["goal_contract.body"], "alternatives": [], "uncertainties": [],
-                 "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [],
+                 "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [], "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
                  **({"responses": []} if stage == "glm_revise" else {})})
     elif stage == "astra_challenge":
-        deliver({"summary": "Repaired challenge", "concerns": []})
+        deliver({"summary": "Repaired challenge", "obligation_decisions": [], "concerns": []})
     elif stage == "astra_finalize":
         draft = body(questions=False, human=False)
         draft["initial_task"] = {"objective": "Implement greeting CLI", "affected_paths": ["greet.py"],
             "kind": "implement", "milestone_id": "M1", "requirements": ["Greet names"],
             "acceptance_criteria": ["C1"], "validation_plan": ["Execute valid and empty input"]}
-        deliver({"contract": draft, "summary": "Repaired finalize", "decisions": [],
+        deliver({"contract": draft, "summary": "Repaired finalize", "obligation_decisions": [], "decisions": [],
                  "contract_changes": [], "conflict_resolutions": [], "requirement_trace": []})
     else:
         deliver({"summary": "Repaired report", "changed_files": ["greet.py"], "commands_run": [],
@@ -128,10 +128,10 @@ if stage == "requirements_gather":
         "constraints": draft["constraints"],
         "acceptance_tests": ["Valid and invalid CLI input have the requested outcomes"],
         "source_refs": ["task"],
-        "proposed_assumptions": ["Use a local CLI if the user chooses that interface"],
+        "proposed_assumptions": [{"id": "A1", "text": "Use a local CLI if the user chooses that interface", "kind": "inferable", "category": "behavior", "convention_ref": "task", "rationale": "The task asks for a local tool", "supports": []}],
         "open_questions": draft["open_blocking_questions"],
         "requirements": [], "ignored_statements": [], "conflicts": [],
-        "proposed_reframes": [],
+        "proposed_reframes": [], "ignored_requirements": [], "machine_resolutions": [], "access_blockers": [],
     }
 elif stage == "astra_discovery":
     draft = body(questions=not data["saved_answers"], human=False)
@@ -145,9 +145,10 @@ elif stage == "astra_discovery":
     result = {"contract": draft, "summary": "Build a small local greeting CLI with a clear invalid-input failure",
               "code_refs": ["greet.py:1"] if Path("greet.py").is_file() else ["goal_contract.body"],
               "alternatives": ["A web endpoint would need deployment"],
-              "uncertainties": [], "contract_changes": [], "conflict_resolutions": [], "requirement_trace": []}
+              "uncertainties": [], "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [],
+              "machine_resolutions": [], "remediation_records": [], "access_blockers": []}
 elif stage == "astra_challenge":
-    result = {"summary": "Check whitespace-only input", "concerns": [{"id": "P1", "concern": "Empty includes whitespace",
+    result = {"summary": "Check whitespace-only input", "obligation_decisions": [], "concerns": [{"id": "P1", "concern": "Empty includes whitespace",
         "evidence_refs": ["goal_contract.body.important_failure_cases"], "requested_change": "Specify whitespace rejection",
         "acceptance_test": "Whitespace input exits 2", "blocking": True}]}
 elif stage == "glm_revise":
@@ -156,7 +157,7 @@ elif stage == "glm_revise":
     draft["important_failure_cases"] = [*draft["important_failure_cases"], "Reject whitespace-only input"]
     result = {"contract": draft, "summary": "Added whitespace case",
               "code_refs": ["greet.py:1"] if Path("greet.py").is_file() else ["goal_contract.body"],
-              "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [],
+              "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [], "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
         "responses": [{"concern_id": "P1", "response": "Whitespace is invalid", "evidence_refs": ["goal_contract.body"],
                        "change": "Added whitespace case", "acceptance_test": "Whitespace input exits 2"}]}
 elif stage == "astra_finalize":
@@ -166,7 +167,7 @@ elif stage == "astra_finalize":
         "acceptance_criteria": ["C1"], "validation_plan": ["Execute valid, empty and whitespace input"]}
     result = {"contract": draft, "summary": "Ready for approval",
         "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [],
-        "decisions": [{"concern_id": "P1", "decision": "Reject whitespace",
+        "obligation_decisions": [], "decisions": [{"concern_id": "P1", "decision": "Reject whitespace",
             "rationale": "Consistent invalid-input contract", "acceptance_test": "Whitespace input exits 2", "resolved": True}]}
 elif stage == "terra":
     Path("greet.py").write_text("import sys\nif len(sys.argv) != 2 or not sys.argv[1].strip():\n    raise SystemExit(2)\nprint('Hello, ' + sys.argv[1])\n")

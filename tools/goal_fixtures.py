@@ -22,7 +22,8 @@ def body(*, questions=False, human=False):
                                   "verification_method": "Execute greeting and invalid-input regression checks", "human_review": human}],
         "open_blocking_questions": [{"id": "Q1", "question": "Should the greeting be a CLI or web endpoint?",
             "why": "This determines the delivered interface", "options": ["CLI: local use", "Web: requires a server"],
-            "proposed_default": "CLI: local use without a server"}] if questions else [],
+            "proposed_default": "CLI: local use without a server",
+            "kind": "decision", "category": "behavior", "delegable": True}] if questions else [],
     }
 
 
