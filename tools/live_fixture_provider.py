@@ -222,16 +222,16 @@ def main() -> int:
             "contract": _contract(),
             "code_refs": [], "alternatives": [], "uncertainties": [],
             "contract_changes": [], "conflict_resolutions": [],
-            "machine_resolutions": [], "access_blockers": [],
+            "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
             "requirement_trace": _trace(*TRACE_ROWS),
         }
     elif stage == "astra_challenge":
-        report = {"summary": "Handwritten plan review; no concerns", "concerns": []}
+        report = {"summary": "Handwritten plan review; no concerns", "obligation_decisions": [], "concerns": []}
     elif stage == "astra_finalize":
         report = {
             "summary": "Handwritten final plan",
             "contract": _planning_contract(),
-            "decisions": [], "contract_changes": [],
+            "obligation_decisions": [], "decisions": [], "contract_changes": [],
             "conflict_resolutions": [],
             "requirement_trace": _trace(*TRACE_ROWS),
         }
@@ -241,7 +241,7 @@ def main() -> int:
             "contract": _contract(),
             "code_refs": [], "responses": [], "contract_changes": [],
             "conflict_resolutions": [],
-            "machine_resolutions": [], "access_blockers": [],
+            "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
             "requirement_trace": _trace(*TRACE_ROWS),
         }
     elif stage == "terra":

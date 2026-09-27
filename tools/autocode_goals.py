@@ -744,6 +744,9 @@ def approve(state, selected):
     validate_body(state, contract["body"], ready=True, allow_legacy=True)
     if contract["body"]["open_blocking_questions"] or state.get("pending_questions"):
         raise ValueError("Blocking questions still need answers")
+    if open_obligations(state):
+        raise ValueError("Rejected assumptions still have unresolved obligations: "
+                         + ", ".join(ob["id"] for ob in open_obligations(state)))
     joint = state.get("settings", {}).get("joint_planning")
     if joint and (state.get("planning", {}).get("final_token") != selected or "initial_task" not in contract["body"]):
         raise ValueError("Joint planning requires the Plan Reviewer's final plan before approval")
@@ -789,6 +792,7 @@ def feedback(state, text):
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
     start_clarification_episode(state, event["id"])
+    resolve_cited_obligations(state, event)
     state["goal_contract"].update(approval_status="draft", approval_event=None)
     invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
     first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
@@ -807,6 +811,7 @@ def apply_intervention_feedback(state, receipt, applied_receipt):
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
     start_clarification_episode(state, event["id"])
+    resolve_cited_obligations(state, event)
     if state.get("status") == "TASK_COMPLETE":
         state.setdefault("completion_archive", []).append({
             "completed_at": state.pop("completed_at", None), "decision": state.pop("final_decision", None),
@@ -838,6 +843,9 @@ def answer(state, question_id, text, *, delegated=False):
     state.setdefault("answers", {})[question_id] = event
     if not delegated:
         start_clarification_episode(state, "answer:" + question_id)
+        # An obligation returned to the user is asked under its own id; only the
+        # user's own answer discharges it, never a delegated default.
+        resolve_obligation(state, question_id, "answer:" + question_id)
     state["pending_questions"] = [row for row in state["pending_questions"] if row["id"] != question_id]
     body = state.get("goal_contract", {}).get("body", {})
     if "open_blocking_questions" in body:
@@ -870,6 +878,27 @@ def start_clarification_episode(state, started_by):
 def clarification_episode(state):
     """The current episode, created on first use. Legacy runs have none."""
     return state.get("clarification_episode") or start_clarification_episode(state, "initial_task")
+
+
+def open_obligations(state, kind=None):
+    """Unresolved deferred obligations; legacy runs have none."""
+    return [ob for ob in state.get("deferred_obligations", [])
+            if ob.get("status") != "resolved" and (kind is None or ob.get("kind") == kind)]
+
+
+def resolve_obligation(state, obligation_id, resolved_by):
+    for ob in open_obligations(state):
+        if ob["id"] == obligation_id:
+            ob.update(status="resolved", resolved_by=resolved_by, resolved_at=s.now())
+            return ob
+    return None
+
+
+def resolve_cited_obligations(state, event):
+    """Saved feedback that names an obligation id, as a whole token, discharges it."""
+    for ob in open_obligations(state):
+        if re.search(r"(?<![\w-])" + re.escape(ob["id"]) + r"(?![\w-])", str(event.get("text", ""))):
+            resolve_obligation(state, ob["id"], event["id"])
 
 
 def delegate_all(state):
@@ -913,11 +942,11 @@ def reject_assumption(state, assumption_id):
     kind = "human_decision" if category in NON_INFERABLE_CATEGORIES else "remediation"
     contract = state.get("goal_contract") or {}
     event = {"kind": "reject_assumption", "id": "reject-" + uuid.uuid4().hex[:12], "actor": "user_cli",
-             "at": s.now(), "assumption_id": assumption_id, "category": category,
+             "at": s.now(), "assumption_id": assumption_id, "category": category, "text": row["text"],
              "contract_token": token(contract) if contract else None}
     state.setdefault("user_events", []).append(event)
     obligation = {"id": "obligation-" + uuid.uuid4().hex[:12], "kind": kind, "assumption_id": assumption_id,
-                  "category": category, "supports": list(row["supports"]),
+                  "category": category, "text": row["text"], "supports": list(row["supports"]),
                   "contract_revision": contract.get("revision"), "created_at": event["at"], "status": "open",
                   "remediation": None, "remediation_hash": None, "resolved_by": None,
                   "reject_event_id": event["id"]}

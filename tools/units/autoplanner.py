@@ -86,6 +86,17 @@ INVESTIGATION_STAGES = ("requirements_gather", "astra_discovery", "glm_revise")
 for _stage in INVESTIGATION_STAGES:
     SCHEMAS[_stage]["properties"]["machine_resolutions"] = {"type": "array", "items": MACHINE_RESOLUTION}
     SCHEMAS[_stage]["properties"]["access_blockers"] = {"type": "array", "items": ACCESS_BLOCKER}
+# A rejected assumption becomes a runner-owned obligation. The Planner proposes
+# how the requirements it supported are still met (remediation_records); only a
+# Plan Reviewer decision bound to that exact record's hash discharges it.
+REMEDIATION = obj({"obligation_id": S, "assumption_id": S, "approach": S, "evidence_refs": SS,
+                   "covered_requirements": SS, "episode_id": S})
+OBLIGATION_DECISION = obj({"obligation_id": S, "remediation_hash": S, "resolved": {"type": "boolean"},
+                           "rationale": S, "evidence_refs": SS})
+for _stage in ("astra_discovery", "glm_revise"):
+    SCHEMAS[_stage]["properties"]["remediation_records"] = {"type": "array", "items": REMEDIATION}
+for _stage in ("astra_challenge", "astra_finalize"):
+    SCHEMAS[_stage]["properties"]["obligation_decisions"] = {"type": "array", "items": OBLIGATION_DECISION}
 
 
 def enabled(state):
@@ -345,6 +356,22 @@ return the complete report as before.
 """
 
 
+OBLIGATION_POLICY = """
+REJECTED ASSUMPTIONS. deferred_obligations lists assumptions the user rejected; never rely on a
+rejected assumption again, even reworded. An open obligation of kind human_decision must be asked
+as a kind="decision" question whose id is the obligation id; the plan stays clarification-only
+until the user answers it. For an open remediation obligation, the Planner may add a
+remediation_records entry {obligation_id, assumption_id, approach, evidence_refs,
+covered_requirements (exactly the obligation's supports, each covered in requirement_trace),
+episode_id (clarification_episode.id)}. The Plan Reviewer must add one obligation_decisions entry
+{obligation_id, remediation_hash, resolved, rationale, evidence_refs} for every pending_review
+obligation, using its current remediation_hash; resolved=false in the first review needs a
+blocking concern citing the obligation id. At final review, any obligation still unresolved is
+asked as a decision question under its id, and initial_task.kind must be "none". Otherwise use
+[] for remediation_records and obligation_decisions.
+"""
+
+
 def workspace_inventory(workspace, task, limit=40, scan_limit=5000):
     """Bounded filesystem inventory; works in repositories and ordinary directories."""
     root = Path(workspace)
@@ -424,6 +451,10 @@ def context(state, stage, state_path):
         goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY)
     clarification_policy = ("" if stage == "astra_challenge" else QUESTION_POLICY) + (
         ASSUMPTION_POLICY if stage == "requirements_gather" else "")
+    if stage != "requirements_gather":
+        packet["deferred_obligations"] = state.get("deferred_obligations", [])
+        packet["clarification_episode"] = state.get("clarification_episode")
+        clarification_policy += OBLIGATION_POLICY
     request = state.get("investigation_request")
     if request and request.get("stage") == stage:
         # Correctness must not depend on provider-session memory: the pass gets

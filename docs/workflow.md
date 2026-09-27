@@ -124,6 +124,18 @@ Anything still discoverable afterwards is shown to you as a labelled decision; t
 no second pass. The episode, and so the pass, is renewed only by your own new input: a
 non-delegated `--answer`, `--feedback`, or `--edit-goal`. Delegating a default, rejecting
 an assumption, or the model regenerating question IDs does not renew it.
+
+`--reject-assumption A1` turns a structured assumption into an **obligation** the runner
+tracks until it is discharged; the rejected assumption may not reappear. If the assumption
+carried policy weight (cost, quota, permission, external side effect, or the requested
+outcome), it becomes your decision: the plan stays clarification-only and you are asked a
+question under the obligation's id. Otherwise the Planner may propose a remediation that
+still covers every requirement the assumption supported, and only a Plan Reviewer decision
+bound to the hash of that exact proposal discharges it; a revised proposal needs a new
+decision. Anything still open at final review comes back to you as a question, and the
+plan has no executable first task. Answering that question yourself, or `--feedback` that
+names the obligation id, discharges it; a delegated default does not. Approval is refused
+while any obligation is open.
 Reviewer concerns have stable IDs; every concern requires a Planner response and a reviewer decision,
 including a concrete acceptance test. The final displayed brief includes the technical
 approach, milestones, and **first bounded implementation task**, all covered by its

@@ -93,9 +93,9 @@ elif stage == "astra_discovery":
         result.update(code_refs=[f"{source}:1"] if source else ["goal_contract.body"],
                       alternatives=["A web endpoint would need deployment"],
                       uncertainties=[], contract_changes=[], requirement_trace=[], conflict_resolutions=[],
-                      machine_resolutions=[], access_blockers=[])
+                      machine_resolutions=[], access_blockers=[], remediation_records=[])
 elif stage == "astra_challenge":
-    result = {"summary": "Check whitespace-only input", "concerns": [{"id": "P1", "concern": "Empty includes whitespace",
+    result = {"summary": "Check whitespace-only input", "obligation_decisions": [], "concerns": [{"id": "P1", "concern": "Empty includes whitespace",
         "evidence_refs": ["goal_contract.body.important_failure_cases"], "requested_change": "Specify whitespace rejection",
         "acceptance_test": "Whitespace input exits 2", "blocking": True}]}
 elif stage == "glm_revise":
@@ -105,7 +105,7 @@ elif stage == "glm_revise":
     source = next((name for name in ("greet.py", "bye.py") if Path(name).is_file()), None)
     result = {"contract": draft, "summary": "Added whitespace case",
         "code_refs": [f"{source}:1"] if source else ["goal_contract.body"],
-        "contract_changes": [], "requirement_trace": [], "conflict_resolutions": [], "machine_resolutions": [], "access_blockers": [],
+        "contract_changes": [], "requirement_trace": [], "conflict_resolutions": [], "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
         "responses": [{"concern_id": "P1", "response": "Whitespace is invalid", "evidence_refs": ["goal_contract.body"],
                        "change": "Added whitespace case", "acceptance_test": "Whitespace input exits 2"}]}
 elif stage == "astra_finalize":
@@ -120,7 +120,7 @@ elif stage == "astra_finalize":
             "kind": "decision", "category": "behavior", "delegable": False}]
     result = {"contract": draft, "summary": "Ready for approval" if not blocked else "User decision required",
         "contract_changes": [], "requirement_trace": [], "conflict_resolutions": [],
-        "decisions": [{"concern_id": "P1", "decision": "Reject whitespace" if not blocked else "Ask the user",
+        "obligation_decisions": [], "decisions": [{"concern_id": "P1", "decision": "Reject whitespace" if not blocked else "Ask the user",
             "rationale": "Consistent invalid-input contract", "acceptance_test": "Whitespace input exits 2", "resolved": not blocked}]}
     if mode == "planning-invalid":
         result["decisions"] = []

@@ -336,6 +336,117 @@ def _label_unresolved(state, questions):
             goals.clarification_episode(state).setdefault("converted_to_decision", []).append(question["id"])
 
 
+def _surface_obligations(obligations, questions, where):
+    """An unresolved obligation returns to the user as a decision question under
+    its own id. The three-question cap limits presentation per round, not the
+    obligation: with the cap full it waits for the next round."""
+    ids = {ob["id"] for ob in obligations}
+    for question in questions:
+        if question["id"] in ids and question.get("kind", "decision") != "decision":
+            raise ValueError(f"Obligation {question['id']} must be asked as a kind=decision question")
+    missing = sorted(ids - {question["id"] for question in questions})
+    if missing and len(questions) < 3:
+        raise ValueError(f"{where}: unresolved obligations must return to the user as decision questions "
+                         "under their own ids: " + ", ".join(missing))
+
+
+def _apply_obligations(state, stage, value):
+    """Rule E8 (issue #62): rejected assumptions become runner-owned obligations.
+
+    A remediation obligation is discharged only by a Plan Reviewer decision on
+    astra_challenge or astra_finalize, bound to the hash of the exact remediation
+    record it judged; a repaired record resets it to pending review. A human
+    decision obligation, or any obligation still open at final review, goes back
+    to the user as a question under its own id. Agent output alone never
+    discharges an obligation. At finalize, the report's own decisions are applied
+    before the gate is evaluated.
+    """
+    obligations = {ob["id"]: ob for ob in goals.open_obligations(state)}
+    if stage == "requirements_gather":
+        rejected = {ob["assumption_id"] for ob in obligations.values()}
+        reused = sorted(rejected & {row.get("id") for row in value.get("proposed_assumptions") or []
+                                    if isinstance(row, dict)})
+        if reused:
+            raise ValueError("A rejected assumption cannot reappear: " + ", ".join(reused))
+        return
+    if stage in ("astra_discovery", "glm_revise"):
+        trace = {row.get("requirement_id"): row.get("disposition") for row in value.get("requirement_trace") or []}
+        episode_id = goals.clarification_episode(state)["id"]
+        seen = set()
+        for record in value.get("remediation_records") or []:
+            obligation_id = record["obligation_id"]
+            obligation = obligations.get(obligation_id)
+            if obligation_id in seen:
+                raise ValueError(f"Duplicate remediation record for {obligation_id}")
+            seen.add(obligation_id)
+            if obligation is None or obligation["kind"] != "remediation":
+                raise ValueError(f"remediation_records {obligation_id} does not name an open remediation obligation")
+            if record["assumption_id"] != obligation["assumption_id"]:
+                raise ValueError(f"remediation_records {obligation_id} names a different assumption")
+            if not record["approach"].strip() or not record["evidence_refs"]:
+                raise ValueError(f"remediation_records {obligation_id} needs an approach and evidence")
+            _check_code_refs(state, record["evidence_refs"], "remediation_records.evidence_refs")
+            covered = record["covered_requirements"]
+            if len(covered) != len(set(covered)) or set(covered) != set(obligation.get("supports") or []):
+                raise ValueError(f"remediation_records {obligation_id} must cover exactly the requirements "
+                                 "the rejected assumption supported")
+            uncovered = sorted(rid for rid in covered if trace.get(rid) != "covered")
+            if uncovered:
+                raise ValueError(f"remediation_records {obligation_id} claims requirements the trace does not "
+                                 "cover: " + ", ".join(uncovered))
+            if record["episode_id"] != episode_id:
+                raise ValueError(f"remediation_records {obligation_id} is bound to a previous clarification episode")
+            obligation.update(remediation=copy.deepcopy(record), remediation_hash=support.digest(record),
+                              status="pending_review")
+        if stage == "astra_discovery":
+            human = [ob for ob in obligations.values() if ob["kind"] == "human_decision"]
+            if human:
+                contract = value["contract"]
+                if (contract.get("milestones") or contract.get("technical_approach")
+                        or contract.get("initial_task", {}).get("kind") in ("implement", "validate")):
+                    raise ValueError("A rejected assumption with policy weight needs the user's decision first; "
+                                     "return a clarification-only draft")
+                _surface_obligations(human, contract["open_blocking_questions"], "Discovery")
+        return
+    if stage not in ("astra_challenge", "astra_finalize"):
+        return
+    report_hash = support.digest(value)
+    pending = {oid: ob for oid, ob in obligations.items() if ob["status"] == "pending_review"}
+    decided = set()
+    for decision in value.get("obligation_decisions") or []:
+        obligation_id = decision["obligation_id"]
+        obligation = pending.get(obligation_id)
+        if obligation_id in decided:
+            raise ValueError(f"Duplicate obligation decision for {obligation_id}")
+        decided.add(obligation_id)
+        if obligation is None:
+            raise ValueError(f"obligation_decisions {obligation_id} does not name a remediation awaiting review")
+        if decision["remediation_hash"] != obligation["remediation_hash"]:
+            raise ValueError(f"Decision for {obligation_id} refers to a superseded remediation")
+        if decision["resolved"]:
+            if not decision["rationale"].strip() or not decision["evidence_refs"]:
+                raise ValueError(f"Accepting remediation {obligation_id} needs a rationale and evidence")
+            obligation.update(status="resolved", resolved_by=f"{stage}:{report_hash}:{obligation_id}",
+                              judged_hash=obligation["remediation_hash"], resolved_at=support.now())
+        else:
+            if stage == "astra_challenge" and not any(
+                    concern.get("blocking") and obligation_id in (concern.get("evidence_refs") or [])
+                    for concern in value["concerns"]):
+                raise ValueError(f"Rejecting remediation {obligation_id} needs a blocking concern citing it")
+            obligation["status"] = "open"
+    missing = sorted(set(pending) - decided)
+    if missing:
+        raise ValueError("Every remediation awaiting review needs one obligation_decisions entry: "
+                         + ", ".join(missing))
+    if stage == "astra_finalize":
+        remaining = goals.open_obligations(state)
+        if remaining:
+            contract = value["contract"]
+            if contract.get("initial_task", {}).get("kind") in ("implement", "validate"):
+                raise ValueError("Unresolved obligations block an executable initial_task")
+            _surface_obligations(remaining, contract["open_blocking_questions"], "Final review")
+
+
 def apply_planning(state, stage, value, record):
     # Older saved reports predate explicit, user-backed conflict resolutions.
     # An absent list supplies no authority to resolve any conflict.
@@ -350,6 +461,7 @@ def apply_planning(state, stage, value, record):
     value, deferred = _clarify_discoverable(state, stage, value, record)
     if deferred:
         return
+    _apply_obligations(state, stage, value)
     if stage == "requirements_gather":
         if not value["intended_outcome"].strip() or not value["required_behaviors"] or not value["acceptance_tests"]:
             raise ValueError("Requirements handoff needs an outcome, behaviors, and acceptance tests")
