@@ -131,7 +131,8 @@ class SmallCorrectionTests(unittest.TestCase):
                            cwd=workspace, check=True)
         state = {**state_for(str(workspace)), "task_id": "task-under-test", "iteration": 1, "answers": {},
                  "user_events": [], "history": [], "sessions": {}}
-        autoresolver.apply_job(state, diagnosis(**overrides), {"changed_files": [], "output": "o"}, str(workspace))
+        autoresolver.apply_job(bug_job.STAGE, state, diagnosis(**overrides), {"changed_files": [], "output": "o"},
+                               str(workspace))
         return state
 
     def test_the_diagnosis_becomes_an_approved_one_task_contract(self):

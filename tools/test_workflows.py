@@ -33,8 +33,9 @@ class ModuleTests(unittest.TestCase):
         self.assertEqual("requirements_gather", state["next_stage"])
         self.assertEqual("model", state["workflow"]["source"])
 
-    def test_review_and_bugfix_get_their_own_first_stage_and_keep_the_build_entry(self):
-        for kind, stage in (("review", workflows.REVIEW_STAGE), ("bugfix", workflows.INVESTIGATE_STAGE)):
+    def test_review_bugfix_and_design_get_their_own_first_stage_and_keep_the_build_entry(self):
+        for kind, stage in (("review", workflows.REVIEW_STAGE), ("bugfix", workflows.INVESTIGATE_STAGE),
+                            ("design", workflows.DESIGN_STAGE)):
             state = fresh()
             workflows.begin(state, "requirements_gather")
             workflows.apply(state, {"workflow": kind, "reason": "", "signals": []}, {})
@@ -83,8 +84,8 @@ class PlannerUnitTests(unittest.TestCase):
     def test_recognize_applies_and_keeps_the_run_running(self):
         state = fresh()
         workflows.begin(state, "requirements_gather")
-        autoplanner.recognize(state, {"workflow": "design", "reason": "r", "signals": []}, {"output": "o"})
-        self.assertEqual("design", run_view.view(state)["workflow"])
+        autoplanner.recognize(state, {"workflow": "discuss", "reason": "r", "signals": []}, {"output": "o"})
+        self.assertEqual("discuss", run_view.view(state)["workflow"])
         self.assertEqual(("RUNNING", "requirements_gather"), (state["status"], state["next_stage"]))
 
 

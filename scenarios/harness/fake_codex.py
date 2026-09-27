@@ -111,9 +111,23 @@ def recognize(brief: str) -> dict:
     return {"workflow": kind, "reason": f"Scripted keyword rule: {signal}", "signals": [signal]}
 
 
+def stray_edits(allowed: str) -> None:
+    """Behave like a model that edits files it was told not to: copy every solution file outside
+    ``allowed`` into the workspace. A read-only job's runner must then reject the attempt, which is
+    how a broken solution such as review-planted-defects/broken/edits-code is proven to be caught."""
+    root = Path(CONFIG["reference"])
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root).as_posix()
+        if path.is_file() and not relative.startswith(allowed) and "__pycache__" not in relative:
+            target = Path.cwd() / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+
+
 def review() -> dict:
     """The fake's review: the findings from the solution it was told to apply (reference or broken).
-    The runner writes review/findings.json from this report; the fake writes nothing."""
+    The runner writes review/findings.json from this report."""
+    stray_edits("review/")
     path = Path(CONFIG["reference"]) / "review" / "findings.json"
     saved = json.loads(path.read_text()) if path.is_file() else {}
     # Targeted tests in the solution are delivered into the workspace under review/tests/,
@@ -154,11 +168,33 @@ def investigate() -> dict:
             "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"]}
 
 
+def design() -> dict:
+    """The fake's Architect: the design review in the solution it was told to apply, if any. With none
+    (a request for a new design, such as architecture-two-services), it hands over to the build pipeline."""
+    path = Path(CONFIG["reference"]) / "review" / "design-review.json"
+    if path.is_file():
+        stray_edits("review/")
+    if not path.is_file():
+        return {"mode": "propose", "design_under_review": "", "verdict": "not_applicable",
+                "summary": "A new design is requested", "satisfied": [], "concerns": [], "questions": []}
+    saved = json.loads(path.read_text())
+    concerns = [{key: str(c.get(key, "")) for key in ("id", "area", "severity", "summary", "evidence")}
+                for c in saved.get("concerns", [])]
+    return {"mode": "review", "design_under_review": "the design named in the request",
+            "verdict": "request_changes" if any(c["severity"] == "blocking" for c in concerns) else "approve",
+            "summary": "Scripted design review from the scenario solution",
+            "satisfied": [str(s) for s in saved.get("satisfied", [])], "concerns": concerns,
+            "questions": [{"id": str(q.get("id", "")), "question": str(q.get("question", "")),
+                           "options": [str(o) for o in q.get("options", [])]} for q in saved.get("questions", [])]}
+
+
 def report_for(stage: str, data: dict) -> dict:
     if stage == "recognize_workflow":
         return recognize(data.get("task") or CONFIG["brief"])
     if stage == "review_change":
         return review()
+    if stage == "review_design":
+        return design()
     if stage == "investigate_bug":
         return investigate()
     task = data.get("current_task") or {}

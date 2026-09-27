@@ -21,7 +21,8 @@ WORKFLOWS = ("build", "bugfix", "review", "design", "discuss")
 # pipeline (the stage saved as ``then`` when recognition began) for now.
 REVIEW_STAGE = "review_change"
 INVESTIGATE_STAGE = "investigate_bug"
-FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE}
+DESIGN_STAGE = "review_design"
+FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE, "design": DESIGN_STAGE}
 
 # Who may approve a goal contract. Normally only the user (actor "user_cli"). A
 # contract a workflow built under a policy the user agreed to carries one of these

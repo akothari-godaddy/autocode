@@ -9,6 +9,3 @@ category = "design"
 
 [fake]
 check = "python3 -c \"import json; json.load(open('review/design-review.json')); print('ok')\""
-
-[run]
-known_failure = "AutoCode has no design-review workflow; it turns every prompt into a build brief"

@@ -24,6 +24,9 @@ You → Autopilot: recognize the kind of job (build, bugfix, review, design, dis
               criterion, a regression test that fails before the fix), approved under a recorded policy
               instead of by you (approval actor "workflow_policy"), then Validator and Completion Owner;
             reproduced, large → the build pipeline below
+   design → Architect first: a design review is written to review/design-review.json (goals met,
+            blocking/advisory concerns, questions for you), repository untouched, run complete;
+            a request for a NEW design → the build pipeline below
    everything else, for now → the build pipeline below
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG

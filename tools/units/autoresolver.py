@@ -29,7 +29,7 @@ def prepare_investigation(state):
     return ModelRequest("astra", "investigator", prompt, metrics, bug_job.SCHEMA, True)
 
 
-def apply_job(state, value, record, workspace):
+def apply_job(stage, state, value, record, workspace):
     """Autopilot hands the Investigator's validated report here. A small reproduced bug
     becomes one Builder task at once; anything else continues where bug_job.apply sent it."""
     bug_job.apply(state, value, record, workspace)

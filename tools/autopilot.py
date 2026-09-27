@@ -467,7 +467,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
     workflow, milestones, escalation = runtime.workflow, runtime.milestones, runtime.escalation
     dispatch, save_record, now = runtime.dispatch, runtime.save_record, runtime.now
     if stage in jobs.UNIT:
-        unit_module(stage).apply_job(state, value, record, workspace)
+        unit_module(stage).apply_job(stage, state, value, record, workspace)
         return save_record(state, record)
     if stage == "astra_resolve":
         unit_module(stage).validate(state, value, record, workspace)

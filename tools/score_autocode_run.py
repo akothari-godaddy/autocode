@@ -88,7 +88,7 @@ def stage_token_rows(state: dict) -> list[dict]:
     role_model = {role: (cfg or {}).get("model") for role, cfg in roles.items()}
     # stage id -> role key used in settings
     stage_role = {
-        "recognize_workflow": "requirements", "review_change": "sol", "investigate_bug": "investigator",
+        "recognize_workflow": "requirements", "review_change": "sol", "investigate_bug": "investigator", "review_design": "architect",
         "requirements_gather": "requirements", "requirements_gather_report_repair": "requirements",
         "astra_discovery": "astra", "astra_challenge": "plan_reviewer",
         "glm_revise": "glm", "astra_finalize": "plan_reviewer",
