@@ -898,8 +898,8 @@ function syncModelOptions(data={}) {
   const usable=data.usable===true&&catalogue.length>0;
   modelCatalogue={models:catalogue,usable,lastUsableModels:usable?catalogue:modelCatalogue.lastUsableModels,loading:data.loading===true,error:typeof data.error==='string'?data.error:null,reasoning_levels:data.reasoning_levels||data.reasoningLevels||{}};
   const configured=typeof data.provider==='string'&&data.provider!=='opencode';
-  const defaults=configured?Object.fromEntries(['glm','astra','terra','sol','completion'].map(role=>[role,data.provider+' config'])):{glm:'GLM-5.3 · OpenCode',astra:'GPT-5.6 Sol · high',terra:'GPT-5.6 Terra · medium',sol:'GPT-5.6 Sol · high',completion:'GPT-5.6 Sol · medium'};
-  for (const role of ['glm','astra','terra','sol','completion']) {
+  const defaults=configured?Object.fromEntries(['glm','plan_reviewer','astra','terra','sol','completion'].map(role=>[role,data.provider+' config'])):{glm:'GLM-5.3 · OpenCode',plan_reviewer:'MiMo 2.6 Pro · high',astra:'GPT-5.6 Sol · high',terra:'GPT-5.6 Terra · medium',sol:'GPT-5.6 Sol · high',completion:'GPT-5.6 Sol · medium'};
+  for (const role of ['glm','plan_reviewer','astra','terra','sol','completion']) {
     const select = $('#'+role+'-model');if(!select)continue;
     const previous = select.value,values=catalogue;
     select.replaceChildren(Object.assign(n('option','Default · '+defaults[role]),{value:''}));
@@ -1036,8 +1036,8 @@ $('#watch-root').onsubmit=event=>{event.preventDefault();rootAction('add',event.
 $('#create').onsubmit=async event=>{
   event.preventDefault();if(creatingConversation)return;
   const text=$('#new-goal').value.trim(),error=$('#create-error');if(!text)return;
-  const models=Object.fromEntries(['glm','astra','terra','sol','completion'].map(role=>[role+'_model',$('#'+role+'-model').value]));
-  for(const role of ['astra','terra','sol','completion'])models[role+'_reasoning_effort']=$('#'+role+'-reasoning-effort').value;
+  const models=Object.fromEntries(['glm','plan_reviewer','astra','terra','sol','completion'].map(role=>[role+'_model',$('#'+role+'-model').value]));
+  for(const role of ['plan_reviewer','astra','terra','sol','completion'])models[role+'_reasoning_effort']=$('#'+role+'-reasoning-effort').value;
   const signature=JSON.stringify({text,models});
   if(!conversationRequest||conversationRequest.signature!==signature)conversationRequest=savedRequest('create-request',{text,models});
   creatingConversation=true;$('#create-submit').disabled=true;$('#create-submit').textContent='Starting conversation…';error.hidden=true;
@@ -1049,8 +1049,8 @@ $('#create').onsubmit=async event=>{
 };
 $('#new-goal').value=stored('new-idea');
 $('#new-goal').oninput=event=>persist('new-idea',event.target.value);
-for(const role of ['glm','astra','terra','sol','completion']){const select=$('#'+role+'-model'),value=stored('model:'+role);if(value&&!Array.from(select.options).some(option=>option.value===value))select.append(Object.assign(n('option',value),{value}));select.value=value;select.onchange=()=>persist('model:'+role,select.value);}
-for(const role of ['astra','terra','sol','completion']){const select=$('#'+role+'-reasoning-effort'),value=stored('reasoning:'+role);if(value&&Array.from(select.options).some(option=>option.value===value))select.value=value;select.onchange=()=>persist('reasoning:'+role,select.value);}
+for(const role of ['glm','plan_reviewer','astra','terra','sol','completion']){const select=$('#'+role+'-model'),value=stored('model:'+role);if(value&&!Array.from(select.options).some(option=>option.value===value))select.append(Object.assign(n('option',value),{value}));select.value=value;select.onchange=()=>persist('model:'+role,select.value);}
+for(const role of ['plan_reviewer','astra','terra','sol','completion']){const select=$('#'+role+'-reasoning-effort'),value=stored('reasoning:'+role);if(value&&Array.from(select.options).some(option=>option.value===value))select.value=value;select.onchange=()=>persist('reasoning:'+role,select.value);}
 
 function openConversation(doc) {
   $('#archive-conversation').disabled=true;$('#conversation-archived-banner').hidden=true;
@@ -1337,7 +1337,7 @@ function renderSessionCheckpoints(run,checkpoints) {
   host.append(n('h2','Session checkpoints'),Object.assign(n('p','Meaningful stages saved during this session. Open a checkpoint to see what changed, what was verified, which findings existed, and which candidate it was.'),{className:'field-note'}));
   const visible=checkpoints.length>CHECKPOINT_DISPLAY_LIMIT?checkpoints.slice(-CHECKPOINT_DISPLAY_LIMIT):checkpoints;
   if(visible.length<checkpoints.length)host.append(Object.assign(n('p','Showing the latest '+visible.length+' of '+checkpoints.length+' saved checkpoints.'),{className:'field-note'}));
-  const list=n('ol','checkpoint-list'),latest=checkpoints[checkpoints.length-1];
+  const list=Object.assign(n('ol'),{className:'checkpoint-list'}),latest=checkpoints[checkpoints.length-1];
   for(const cp of visible){
     const detail=card('','checkpoint-detail');
     const at=Date.parse(cp.at),stamp=at?new Date(at).toLocaleString(undefined,{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}):'time unavailable';
@@ -1354,7 +1354,7 @@ function renderSessionCheckpoints(run,checkpoints) {
       restore.title='Drafts a restore request in the composer below. Sending chat never approves a plan or starts work on its own.';
       detail.append(restore);
     }
-    const item=n('li','checkpoint-item checkpoint-'+cp.kind);
+    const item=Object.assign(n('li'),{className:'checkpoint-item checkpoint-'+cp.kind});
     item.append(toggle,detail);list.append(item);
   }
   host.append(list);
@@ -1621,7 +1621,7 @@ function readModelReplacement(run,role){
 function saveModelReplacement(run,role,value){
   const key=modelReplacementKey(run,role);if(typeof modelReplacementState!=='undefined'){if(value)modelReplacementState.set(key,value);else modelReplacementState.delete(key);}persist(key,value?JSON.stringify(value):'');return value;
 }
-function modelRoleName(role){return ({glm:'Requirements planning',astra:'Plan review',terra:'Builder',sol:'Validator',completion:'Completion owner'})[role]||human(role);}
+function modelRoleName(role){return ({glm:'Requirements planning',plan_reviewer:'Independent plan reviewer',astra:'Plan review director',terra:'Builder',sol:'Validator',completion:'Completion owner'})[role]||human(role);}
 function canEditFutureTaskSettings(run){return !taskReadError&&!Object.keys(run.active_stage||{}).length&&!taskActionBusy(run)&&statusInfo(run).group!=='complete'&&run.interventions?.mode!=='unavailable';}
 function replacementCapability(run,role,saved){
   const catalogue=modelCatalogueSnapshot(),declared=run.model_settings?.replacement_support?.[role]||run.model_settings?.replacement_capabilities?.[role];
@@ -1702,7 +1702,7 @@ function renderTaskModelSettings(run){
 }
 function renderTaskReasoning(run){
   const efforts=run.model_settings?.role_efforts||{},roles=run.model_settings?.roles||{},active=!!Object.keys(run.active_stage||{}).length,blocked=active||taskActionBusy(run)||!!taskReadError||['running','complete'].includes(statusInfo(run).group),catalogue=modelCatalogueSnapshot();
-  for(const role of ['astra','terra','sol','completion']){
+  for(const role of ['plan_reviewer','astra','terra','sol','completion']){
     const select=$('#task-'+role+'-reasoning');if(!select)continue;
     const levels=supportedReasoningLevels(catalogue,role,roles[role]);if(select.dataset.levels!==JSON.stringify(levels)){const previous=efforts[role]||select.value;select.replaceChildren(Object.assign(n('option','Current rung'),{value:''}));for(const level of levels)select.append(Object.assign(n('option',level==='max'?'Maximum':human(level)),{value:level}));select.value=levels.includes(previous)?previous:'';select.dataset.levels=JSON.stringify(levels);}else select.value=efforts[role]||'';
     select.disabled=blocked;
@@ -1713,7 +1713,7 @@ function renderTaskReasoning(run){
 $('#task-reasoning-form').onsubmit=async event=>{
   event.preventDefault();const run=latestRun;if(!run||taskActionBusy(run)||Object.keys(run.active_stage||{}).length)return;
   const payload={workspace:run.workspace,run:run.run,action:'set_reasoning'};
-  for(const role of ['astra','terra','sol','completion']){const value=$('#task-'+role+'-reasoning').value;if(value)payload[role+'_reasoning_effort']=value;}
+  for(const role of ['plan_reviewer','astra','terra','sol','completion']){const value=$('#task-'+role+'-reasoning').value;if(value)payload[role+'_reasoning_effort']=value;}
   const status=$('#task-reasoning-status'),button=$('#save-task-reasoning');button.disabled=true;status.textContent='Saving reasoning settings…';status.className='field-note';
   try{await post('/api/action',payload);status.textContent='Reasoning change queued. It will apply to the next model step.';await refresh();}
   catch(error){status.textContent=error.message;status.className='error';button.disabled=false;}
