@@ -14,6 +14,12 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow (depth-1) clone:
+          # tests.test_catalogue_t14.SystematicCase.test_sys07_saved_failing_trace_replays
+          # reads a specific historical commit (`git show <sha>:tools/autocode_support.py`)
+          # to replay a saved regression, and a shallow clone doesn't have it.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
