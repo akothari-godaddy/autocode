@@ -16,6 +16,42 @@ runner, support = base.runner, base.s
 class RepairTests(unittest.TestCase):
     setUp = base.RetrofitTest.setUp
 
+    def test_plan_review_missing_blocking_is_preserved_as_blocking(self):
+        schema = self.run / 'plan-review.schema.json'
+        schema.write_text(json.dumps(runner.planning.SCHEMAS['astra_challenge']))
+        concern = {'id': 'C-1', 'concern': 'The build gate is premature',
+                   'evidence_refs': ['goal_contract.body'],
+                   'requested_change': 'Move the gate',
+                   'acceptance_test': 'Review happens after build'}
+        raw = {'summary': 'Rework is needed', 'concerns': [concern, {
+            **concern, 'id': 'C-2', 'blocking': False}]}
+        for stage in ('astra_challenge', 'astra_challenge_report_repair'):
+            with self.subTest(stage=stage):
+                output = self.run / f'{stage}.json'
+                record = {'stage': stage, 'engine': 'opencode',
+                          'events': str(self.run / f'{stage}.jsonl'),
+                          'output': str(output), 'schema': str(schema)}
+                with patch.object(runner.opencode, 'final_report', return_value=raw):
+                    result = runner.load_stage_report(record)
+                self.assertEqual([True, False], [row['blocking'] for row in result['concerns']])
+                self.assertEqual(raw, json.loads(output.with_suffix('.reported.json').read_text()))
+                self.assertEqual(result, json.loads(output.read_text()))
+                self.assertEqual(str(output.with_suffix('.reported.json')), record['reported_output'])
+
+    def test_plan_review_normalization_does_not_hide_other_schema_errors(self):
+        schema = self.run / 'plan-review.schema.json'
+        schema.write_text(json.dumps(runner.planning.SCHEMAS['astra_challenge']))
+        record = {'stage': 'astra_challenge', 'engine': 'opencode',
+                  'events': str(self.run / 'plan-review.jsonl'),
+                  'output': str(self.run / 'plan-review.json'), 'schema': str(schema)}
+        raw = {'summary': 'Rework is needed', 'concerns': [{
+            'id': 'C-1', 'concern': 'Missing requested change',
+            'evidence_refs': ['goal_contract.body'], 'acceptance_test': 'Gate passes'}]}
+        with patch.object(runner.opencode, 'final_report', return_value=raw):
+            with self.assertRaises(ValueError):
+                runner.load_stage_report(record)
+        self.assertEqual(raw, support.read(Path(record['output'])))
+
     def test_builder_repair_preserves_failed_results_commands_and_user_decisions(self):
         report = self.run / 'original-builder.json'
         original = {'stage': 'terra', 'output': str(report), 'events': str(self.run / 'events.jsonl')}
@@ -105,7 +141,7 @@ class RepairTests(unittest.TestCase):
             ('astra_challenge', {'summary': 'Review', 'concerns': [{
                 'id': 'P1', 'concern': 'Failure is not handled', 'evidence_refs': ['app.py:10'],
                 'requested_change': 'Handle failure', 'acceptance_test': 'Failure test passes',
-                'blocking': True}]}, '$.concerns[0]: missing blocking'),
+                'blocking': True}]}, '$.concerns[0]: missing requested_change'),
             ('astra_discovery', {'contract': body(), 'summary': 'Draft', 'code_refs': [],
                 'alternatives': [], 'uncertainties': [], 'contract_changes': [],
                 'conflict_resolutions': [], 'requirement_trace': []}, '$: missing code_refs'),
@@ -120,7 +156,7 @@ class RepairTests(unittest.TestCase):
                 schema = runner.planning.SCHEMAS[stage]
                 validate(report, schema)
                 if stage == 'astra_challenge':
-                    del report['concerns'][0]['blocking']
+                    del report['concerns'][0]['requested_change']
                 else:
                     del report['code_refs']
                 text = json.dumps(report)
@@ -843,7 +879,7 @@ class RepairSubprocessTests(unittest.TestCase):
         self.assertNotIn('pending_report_repair',saved)
         self.assertNotEqual(str(old_output),saved['stages'][-1]['output'])
         self.assertIn('invented-conversation-id',old_output.read_text())
-        self.assertEqual(0, saved['report_repair_archive'][-1]['repair']['attempts'])
+        self.assertEqual(2, saved['report_repair_archive'][-1]['repair']['attempts'])
 
     def test_completed_implementation_is_not_replayed_to_fix_report(self):
         self.env.update(AUTOCODE_FIXTURE_MODE='no-human', AUTOCODE_FIXTURE_REPORT_REPAIR_STAGE='terra')

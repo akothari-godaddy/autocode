@@ -111,6 +111,42 @@ The Requirements Gatherer saves a separate structured report under the run's `it
 directory. The Planner receives that artifact, originates alternatives and a task DAG,
 and can push back on the Plan Reviewer using source evidence. Unanswered requirements
 questions cannot silently disappear from the draft.
+
+Each question is classified by `kind` (`discoverable`, `inferable`, or `decision`),
+`category`, and `delegable`. A **discoverable** question, one the workspace can answer,
+is never shown to you. The first time the Requirements Gatherer or Planner asks one in a
+clarification episode, the runner holds that report back and re-runs the same stage once
+with the questions, the report that raised them, and its hash. That single pass must
+resolve each question from cited workspace files (a `machine_resolution`, accepted only
+for technical facts, never for cost, quota, permission, side-effect or outcome choices),
+keep it as a decision, or record an `access_blocker` when the source is missing.
+Anything still discoverable afterwards is shown to you as a labelled decision; there is
+no second pass. The episode, and so the pass, is renewed only by your own new input: a
+non-delegated `--answer`, `--feedback`, or `--edit-goal`. Delegating a default, rejecting
+an assumption, or the model regenerating question IDs does not renew it.
+
+Whenever planning stops for your answers, the displayed brief starts with a **Plan Preview**
+bound to that exact revision and requirements handoff. It lists what you said (quoted
+requirements), what was read from the workspace, the assumptions the plan would rely on,
+and the decisions only you can make. Readiness is shown as counts only (blocking decisions,
+assumptions relied on, acceptance tests and criteria, open obligations), never as a score.
+Answering nothing leaves execution blocked; the preview never approves anything.
+
+`--reject-assumption A1` turns a structured assumption into an **obligation** the runner
+tracks until it is discharged; the rejected assumption may not reappear. If the assumption
+carried policy weight (cost, quota, permission, external side effect, or the requested
+outcome), it becomes your decision: the plan stays clarification-only and you are asked a
+question under the obligation's id. Otherwise the Planner may propose a remediation that
+still covers every requirement the assumption supported, and only a Plan Reviewer decision
+bound to the hash of that exact proposal discharges it; a revised proposal needs a new
+decision. Anything still open at final review comes back to you as a question, and the
+plan has no executable first task. Only your own answer to that question discharges it;
+feedback that merely mentions the obligation does not, and such a question cannot be
+delegated. A rejected assumption can never be restored, even after its obligation is
+resolved. Proposing a remediation under one intent does not carry over a change of intent:
+a new answer or feedback returns it to be proposed and reviewed again. Approval is refused
+while any obligation is open. `--delegate-all` and `--reject-assumption` act only on the
+revision you were shown, so both take its token with `--review-token`.
 Reviewer concerns have stable IDs; every concern requires a Planner response and a reviewer decision,
 including a concrete acceptance test. The final displayed brief includes the technical
 approach, milestones, and **first bounded implementation task**, all covered by its
