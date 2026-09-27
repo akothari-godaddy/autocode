@@ -206,6 +206,27 @@ def repair_limit(state):
     return limit
 
 
+def reset_report_repair_for_resume(state):
+    """Clear the bounded report-repair attempt count for an explicit resume.
+
+    Mirrors resolver_runtime.reset_for_resume: the count is a current-cycle
+    allowance an operator can renew after fixing the underlying cause, not a
+    lifetime cap, but clearing it is recorded rather than silent, and the
+    erased attempts fold into a lifetime total this function never resets.
+    """
+    pending = state.get('pending_report_repair')
+    if not isinstance(pending, dict):
+        return
+    prior = pending.get('attempts', 0)
+    pending['attempts'] = 0
+    if not prior:
+        return
+    state['report_repair_lifetime_attempts'] = state.get('report_repair_lifetime_attempts', 0) + prior
+    state.setdefault('user_events', []).append({
+        'kind': 'report_repair_resume_epoch', 'actor': 'user_cli', 'at': now(),
+        'cleared_attempts': prior, 'lifetime_attempts': state['report_repair_lifetime_attempts']})
+
+
 def recover_legacy_report_repair(state, run_dir, workspace):
     """Upgrade one pre-report-repair checkpoint at an explicit resume boundary.
 
@@ -2468,14 +2489,13 @@ def main(unit=None) -> int:
                             if isinstance(row, dict):
                                 row["seconds"] = 0
                                 row["seconds_by_role"] = {}
-                    # Reset report repair attempts on explicit resume
-                    pending = state.get("pending_report_repair")
-                    if pending and isinstance(pending, dict):
-                        pending["attempts"] = 0
-                    # Reset resolver attempts
-                    resolver_state = state.get("resolver")
-                    if resolver_state and isinstance(resolver_state, dict):
-                        resolver_state["attempts"] = {}
+                    # Reset the report-repair and resolver current-cycle attempt
+                    # budgets on explicit resume. Both resets are recorded, not
+                    # silent, and accumulate into a lifetime total neither
+                    # function resets (see reset_report_repair_for_resume and
+                    # resolver_runtime.reset_for_resume).
+                    reset_report_repair_for_resume(state)
+                    resolver_runtime.reset_for_resume(state)
                     if args.retry_report:
                         try:
                             retry_format_failed_report(state, run_dir, workspace, args.retry_report)

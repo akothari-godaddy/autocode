@@ -291,6 +291,14 @@ class ResolverTests(unittest.TestCase):
         self.assertEqual(r.SAFE_KINDS, frozenset({"implementation", "validation", "milestone", "tooling", "plan_detail", "model_output"}))
         self.assertEqual(r.RISK_FLAGS, frozenset({"permission", "external-system", "destructive", "security-sensitive", "access", "protected-data"}))
 
+    def test_receipt_defaults_to_current_version(self):
+        # A receipt built without naming `version` (as every existing call site
+        # does) must still record the current version, so an old saved receipt
+        # dict is indistinguishable from a freshly created one on this point.
+        decision, receipt = r.resolve(request())
+        self.assertEqual(r.RECEIPT_VERSION, receipt.version)
+        self.assertIn(r.RECEIPT_VERSION, r.SUPPORTED_RECEIPT_VERSIONS)
+
 
 if __name__ == "__main__":
     unittest.main()

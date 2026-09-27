@@ -28,10 +28,58 @@ def plain(value):
     return value
 
 
+_DECISION_FIELDS = frozenset(f.name for f in fields(policy.Decision))
+_RECEIPT_FIELDS = frozenset(f.name for f in fields(policy.Receipt)) - {'version'}
+_OPTIONAL_STR = lambda value: value is None or isinstance(value, str)
+_OPTIONAL_MAPPING = lambda value: value is None or isinstance(value, Mapping)
+
+
+def _require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def _validate_decision_dict(raw):
+    """Reject a malformed or reinterpreted Decision before construction.
+
+    A dataclass constructor does not check runtime types: ``Decision(**raw)``
+    would happily accept a non-string action or a list-valued payload. Every
+    field here is authority-bearing (it drives dispatch), so each one is
+    checked explicitly rather than trusted to the constructor.
+    """
+    _require(isinstance(raw, Mapping) and set(raw) == _DECISION_FIELDS, 'malformed decision fields')
+    _require(isinstance(raw['action'], str) and raw['action'] in policy.ACTIONS, 'invalid decision action')
+    _require(isinstance(raw['payload'], Mapping), 'invalid decision payload')
+    _require(isinstance(raw['rationale'], str) and isinstance(raw['in_scope_reason'], str), 'invalid decision rationale')
+    return policy.Decision(**raw)
+
+
+def _validate_receipt_dict(raw):
+    """Reject a malformed, retyped or unsupported-version Receipt before construction."""
+    _require(isinstance(raw, Mapping), 'malformed receipt')
+    version = raw.get('version', 1)
+    _require(type(version) is int and version in policy.SUPPORTED_RECEIPT_VERSIONS, 'unsupported receipt version')
+    present = set(raw) - {'version'}
+    _require(present == _RECEIPT_FIELDS, 'malformed receipt fields')
+    _require(isinstance(raw['blocker_id'], str) and isinstance(raw['blocker_digest'], str), 'invalid receipt identity')
+    _require(isinstance(raw['classifier_outcome'], str) and isinstance(raw['rationale'], str)
+              and isinstance(raw['in_scope_reason'], str), 'invalid receipt narrative fields')
+    _require(_OPTIONAL_STR(raw['budget_key']) and _OPTIONAL_STR(raw['idempotency_key']), 'invalid receipt budget/idempotency key')
+    _require(raw['attempt'] is None or (type(raw['attempt']) is int and raw['attempt'] >= 0), 'invalid receipt attempt')
+    _require(isinstance(raw['action'], str) and raw['action'] in policy.ACTIONS, 'invalid receipt action')
+    _require(_OPTIONAL_STR(raw['proposal_rationale']) and _OPTIONAL_STR(raw['reviewer_rationale']), 'invalid receipt review narrative')
+    _require(raw['review_verdict'] in (None, 'approved', 'vetoed'), 'invalid receipt review verdict')
+    # The type must be exactly bool: a list-valued callbacks_used would pass a
+    # bare isinstance/truthiness check but is not the boolean the policy emits.
+    _require(type(raw['callbacks_used']) is bool, 'invalid receipt callbacks_used type')
+    _require(_OPTIONAL_MAPPING(raw['prior_lineage']) and _OPTIONAL_MAPPING(raw['new_lineage']), 'invalid receipt lineage')
+    return policy.Receipt(**{**raw, 'version': version})
+
+
 def load_ledger(saved):
     return policy.Ledger(
         attempts=dict(saved.get('attempts', {})), outcomes=dict(saved.get('outcomes', {})),
-        cache={key: (policy.Decision(**pair[0]), policy.Receipt(**pair[1]))
+        cache={key: (_validate_decision_dict(pair[0]), _validate_receipt_dict(pair[1]))
                for key, pair in saved.get('cache', {}).items()})
 
 
@@ -140,3 +188,27 @@ def boundary(runner, state, run_dir, workspace):
             raise support.Paused(status, decision.rationale)
     runner.write_json(Path(run_dir) / 'state.json', state)
     return True
+
+
+def reset_for_resume(state):
+    """Clear the resolver's per-incident attempt budget for an explicit resume.
+
+    The per-blocker attempt count is a current-cycle allowance, not a lifetime
+    cap: --resume-paused clears it so an operator can retry after fixing the
+    underlying cause. That clearing must not be silent. Each reset records how
+    many attempts it erased and folds them into a lifetime total that this
+    function itself never resets, so a future run-level diagnostic cap has a
+    real number to check instead of restarting at zero on every resume.
+    """
+    saved = state.get('resolver')
+    if not isinstance(saved, dict):
+        return
+    prior = {key: value for key, value in saved.get('attempts', {}).items() if isinstance(value, int)}
+    saved['attempts'] = {}
+    if not prior:
+        return
+    total = sum(prior.values())
+    saved['lifetime_attempts'] = saved.get('lifetime_attempts', 0) + total
+    state.setdefault('user_events', []).append({
+        'kind': 'resolver_resume_epoch', 'actor': 'user_cli', 'at': support.now(),
+        'cleared_attempts': prior, 'cleared_total': total, 'lifetime_attempts': saved['lifetime_attempts']})
