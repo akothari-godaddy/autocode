@@ -137,6 +137,25 @@ def check_evidence_options(record):
             'capture_context': record.get('capture_context')}
 
 
+def normalize_plan_challenge_blocking(value, record):
+    """Conservatively retain plan findings when only their blocking flag is omitted.
+
+    Missing flags cannot clear a finding. The raw provider report is preserved by
+    load_stage_report, and the complete normalized report still faces its schema.
+    """
+    if record.get('stage') not in ('astra_challenge', 'astra_challenge_report_repair') or not isinstance(value, dict):
+        return value
+    concerns = value.get('concerns')
+    if not isinstance(concerns, list) or not any(
+            isinstance(row, dict) and 'blocking' not in row for row in concerns):
+        return value
+    if any(not isinstance(row, dict) for row in concerns):
+        return value
+    return {**value, 'concerns': [
+        {**row, 'blocking': True} if 'blocking' not in row else row
+        for row in concerns]}
+
+
 def load_stage_report(record, workspace=None, evidence_record=None):
     if record.get("engine") == "opencode":
         # Raw provider events are authoritative, including during recovery.
@@ -144,6 +163,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
     else:
         value = final_json(Path(record["output"]))
     reported = copy.deepcopy(value)
+    value = normalize_plan_challenge_blocking(value, record)
     evidence_record = evidence_record or record
     validation = value.get('validation', value)
     checks = validation.get('checks') if isinstance(validation, dict) else None
@@ -171,7 +191,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
         record['derived_check_metadata'] = [
             {'check_index': index, 'field': 'exit_code', 'value': check['exit_code'],
              'evidence_ref': check['evidence_ref'], 'events': evidence_record['events']}
-            for index, check in enumerate(checks)
+            for index, check in enumerate(checks or [])
             if 'exit_code' not in (reported.get('validation', reported)['checks'][index])]
     if record.get('engine') == 'opencode' or value != reported:
         write_json(Path(record['output']), value)
