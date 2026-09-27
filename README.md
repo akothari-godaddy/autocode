@@ -82,6 +82,64 @@ Rough idea + repository context
 
 This describes the standard code workflow. Saved runs and explicitly selected alternate workflows can retain different routing; they must not be silently upgraded or stripped of their existing approval rules. See [workflow details](docs/workflow.md).
 
+### Runtime requirements and GoCode support
+
+Requires Python 3.11+ and Git. The legacy OpenCode route remains available for
+existing runs. For a GoCode-native run, GoCode must be in managed mode with its
+credential bundle available; the runner launches `gocode exec codex exec` and
+does not launch OpenCode.
+macOS/Linux are supported; Windows needs WSL because the inherited process and lock
+mechanisms use POSIX APIs. There are no Python runtime dependencies. Installation does
+not change Codex or OpenCode settings. `--engine codex` still starts a Codex-only run.
+
+The current development priority is **reliable completion of agreed work**. Focus on
+completion, recovery, trustworthy status, and clear requests for human input. New
+features require an identified user need and an explicit scope decision; competitor
+feature parity is not a reason to expand scope. See [the reliability priorities](RELIABILITY.md).
+
+## Run or install
+
+Run directly from this checkout:
+
+```sh
+python3 /path/to/autocode/tools/autocode.py "Build a greeting CLI" \
+  --workspace /path/to/project --engine gocode --reasoning-effort high
+```
+
+Install the command once with `pipx` to invoke it from any project:
+
+```sh
+pipx install --editable /path/to/autocode
+```
+
+Or install into your own virtual environment:
+
+```sh
+python3 -m venv .venv
+.venv/bin/pip install .
+.venv/bin/autocode "Build a greeting CLI" --workspace /path/to/project
+```
+
+New GoCode runs use joint GLM/Astra planning. `--joint-planning` is accepted and
+redundant. `--engine codex` is the explicit single-CLI loop; it does not use joint planning.
+`--engine opencode` remains the compatibility route for existing OpenCode runs.
+
+The GoCode-native four-role route is explicit and model-pinned:
+
+| Role | GoCode model |
+| --- | --- |
+| GLM — planning and revision | `gocode-openai/luna` |
+| Astra — challenge and final review | `gocode-openai/astra` |
+| Terra — implementation | `gocode-openai/terra` |
+| Sol — independent validation | `gocode-openai/sol` |
+
+Override a role only with another `gocode-openai/<model>` identifier. The
+runner checks GoCode's managed identity before dispatch and stores it in the
+checkpoint, so a resumed run cannot silently switch routes.
+The saved display names resolve to the API's exact model IDs: `astra` to
+`gpt-6-astra`, and `terra`, `sol`, and `luna` to their `gpt-5.6-*` IDs.
+The `gocode-openai/` display prefix is never sent as part of the API model ID.
+
 ### One controller, four bounded units
 
 | Component | Responsibility | Output—not authority to do everything |

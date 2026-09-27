@@ -82,6 +82,22 @@ def workspace_lock(workspace):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+@contextlib.contextmanager
+def run_lock(run_dir):
+    """Serialize mutations for one run without blocking independent runs."""
+    path = Path(run_dir) / "writer.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Paused("PAUSED_RUN_BUSY", "Another autocode runner holds this run lock")
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
 def duplicate_runner_command(command):
     """True only for processes that are themselves the runner or a codex exec call.
     Wrappers (zsh -lc '... autocode.py ...') and helper apps whose argv embeds
@@ -100,7 +116,7 @@ def duplicate_runner_command(command):
 
 def assert_no_legacy_process(run_dir, workspace):
     """Read process metadata internally; never print unrelated command arguments."""
-    marker_path = Path(workspace) / ".autocode" / "active-processes.json"
+    marker_path = Path(run_dir) / "active-processes.json"
     if marker_path.exists():
         try:
             from . import autocode_process as processes
@@ -113,7 +129,15 @@ def assert_no_legacy_process(run_dir, workspace):
     try:
         result = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error:
+        if isinstance(error, OSError) and "operation not permitted" in str(error).lower():
+            # The per-workspace flock still serializes writers when process listing is blocked.
+            return
         raise Paused("PAUSED_PROCESS_CHECK", "Cannot inspect legacy workers; refuse possible duplicate launch") from error
+    if result.returncode and "operation not permitted" in (result.stderr or "").lower():
+        # The per-workspace flock above still serializes writers for this
+        # workspace. Sandboxed hosts may deny a machine-wide process listing,
+        # which must not prevent an independent workspace from running.
+        return
     if result.returncode:
         raise Paused("PAUSED_PROCESS_CHECK", "Cannot inspect legacy workers; refuse possible duplicate launch")
     marker = str(Path(run_dir).resolve())

@@ -20,9 +20,24 @@ assert.equal(context.stageName({...joint,stage:'astra_review'}),'Completion owne
 assert.equal(context.planReady({...joint,status:'WAITING_FOR_USER',goal:{origin:'glm_draft'}}),false);
 assert.equal(context.planReady({...joint,status:'AWAITING_GOAL_APPROVAL',goal:{origin:'glm_revise'}}),false);
 assert.equal(context.planReady({...joint,status:'AWAITING_GOAL_APPROVAL',goal:{origin:'astra_finalize'}}),true);
+const gocodeJoint={model_settings:{joint_planning:true,engine:'gocode'}};
 assert.equal(context.planningSpeaker({...joint,goal:{origin:'glm_draft'}}),'Planner');
 assert.equal(context.planningSpeaker({...joint,goal:{origin:'astra_finalize'}}),'Plan reviewer');
 assert.equal(context.planningSpeaker({}),'Planner');
+assert.equal(context.planningSpeaker({...gocodeJoint,goal:{origin:'glm_draft'}}),'GLM');
+assert.equal(context.planningSpeaker({...gocodeJoint,goal:{origin:'astra_finalize'}}),'Astra');
+assert.equal(context.planningSpeaker(gocodeJoint),'Astra');
+const approvedGocode={...gocodeJoint,goal:{approval_status:'approved'},monitor:{roles:{
+  glm:{model:'gocode-anthropic/claude-opus-5'},
+  terra:{model:'gocode-openai/gpt-5.6-terra'},
+  sol:{model:'gocode-anthropic/claude-opus-5'}
+}}};
+assert.deepEqual(JSON.parse(JSON.stringify(context.workflowRoleConfig(approvedGocode,{role:'sol',active:true,verified:true}))),[
+ ['glm','GLM','Draft & revise'],
+ ['astra','Astra','Plan & direct'],
+ ['terra','Terra','Implement'],
+ ['sol','Sol','Review']
+]);
 const approvedJoint={...joint,goal:{approval_status:'approved'}};
 assert.deepEqual(JSON.parse(JSON.stringify(context.workflowConfig(approvedJoint,{role:'sol'}))).map(item=>item[1]),
  ['Requirements Gatherer','Planner','Plan reviewer','Orchestrator','Builder','Validator','Completion owner','Resolver']);

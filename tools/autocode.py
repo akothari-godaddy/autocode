@@ -24,12 +24,14 @@ import copy
 import uuid
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures
+    from . import autocode_gocode as gocode
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
     import autocode_interventions as interventions
     import autocode_providers
     import autocode_opencode as opencode
+    import autocode_gocode as gocode
     import autocode_process as processes
     import autocode_registry as registry
     import autocode_planning as planning
@@ -68,6 +70,8 @@ DEFAULT_ROLE_MODELS = {
     "sol": "gpt-5.6-sol",
     "completion": "gpt-5.6-sol",
 }
+# Keep the historical OpenCode default for existing saved/dashboard flows. New
+# GoCode-native runs select --engine gocode explicitly and never launch OpenCode.
 DEFAULT_ENGINE = "opencode"
 
 
@@ -196,9 +200,9 @@ class ReportRepairQueued(Exception):
 
 
 def repair_limit(state):
-    limit = state.get('settings', {}).get('report_repair', {}).get('max_attempts', 0)
-    if type(limit) is not int or not 0 <= limit <= 2:
-        raise ValueError('report_repair.max_attempts must be an integer from 0 to 2')
+    limit = state.get('settings', {}).get('report_repair', {}).get('max_attempts', 4)
+    if type(limit) is not int or not 0 <= limit <= 6:
+        raise ValueError('report_repair.max_attempts must be an integer from 0 to 6')
     return limit
 
 
@@ -345,6 +349,9 @@ def run_role(
         prompt = opencode.prompt_for_schema(prompt, read_json(schema), events)
         if not configured_tool:
             write_json(base.with_suffix(".opencode.json"), overrides)
+    elif engine == "gocode":
+        command = gocode.launch(role=role, workspace=workspace, session=session, model=model,
+                                effort=effort, sandbox=sandbox, schema=schema, output=output)
     else:
         command = ["codex", "exec", "-C", str(workspace), "--sandbox", sandbox, *transport_args]
         if planning.enabled(state):
@@ -403,7 +410,7 @@ def run_role(
     timed_out = False
     interrupted = False
     cleanup_error = None
-    worker_path = workspace / ".autocode" / "active-processes.json"
+    worker_path = run_dir / "active-processes.json"
     with processes.interruption_handler(), prompt_file.open("r") as stdin, events.open("w") as stdout:
         try:
             # Preparation can be slow. Linearize immediately before the durable
@@ -777,10 +784,16 @@ def abandon_stage(state, run_dir, workspace, selected):
     # Report repair is an internal transport stage. A fresh attempt must route
     # to the owning workflow stage, never to the unowned *_report_repair name.
     retry_stage = record.get("original_stage") or record["stage"].removesuffix("_report_repair")
-    next_stage = (retry_stage if record["role"] == "astra" or record.get("planning") else
-                  "terra" if workflow.final_only(state) and record["role"] in ("terra", "sol") else
+    # Abandonment invalidated validation; a completion retry must obtain it again.
+    # Builder and Validator abandonment re-dispatches the same role to inspect
+    # partial work and retry. Only completion (astra_review) routes to a fresh
+    # review stage.
+    next_stage = (workflow.review_stage(state) if retry_stage == "astra_review" else
+                  retry_stage if record["role"] == "astra" or record.get("planning") else
+                  retry_stage if record["role"] in ("terra", "sol") else
                   "astra_review")
     recovery_role = ("Requirements Planner" if planning.is_planning(state, next_stage) else
+                     "Validator" if next_stage == "sol" else
                      "Builder" if next_stage == "terra" else "Plan Reviewer")
     state.update(status="PAUSED_STAGE_ABANDONED", phase="PAUSED_OR_BLOCKED", next_stage=next_stage,
                  stop_reason=f"Partial work retained. Resume explicitly for {recovery_role} to inspect it and choose the next step.")
@@ -789,8 +802,8 @@ def abandon_stage(state, run_dir, workspace, selected):
         artifact.unlink(missing_ok=True)
 
 
-MAX_AUTOMATIC_RECOVERIES = 3
-MAX_AUTOMATIC_CAPACITY_RECOVERIES = 2
+MAX_AUTOMATIC_RECOVERIES = 6
+MAX_AUTOMATIC_CAPACITY_RECOVERIES = 3
 
 
 def automatically_recover_capacity_stage(state, run_dir, workspace, error):
@@ -878,10 +891,11 @@ def timeout_recovery_guard(state):
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
     consecutive = limit and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
-        cause = state.get("recovery_context", {}).get("timeout_reason") or state.get("recovery_context", {}).get("instruction", "Inspect saved provider logs")
+        ctx = state.get("recovery_context") or {}
+        cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")
         raise support.Paused("PAUSED_TIMEOUT_RECOVERY",
             f"Automatic recovery budget exhausted; no further provider will launch. Last cause: {cause}. "
-            "Fix the cause, then explicitly resume. Accepted review reports and extended task budgets do not reset this limit.")
+            "Fix the cause, then explicitly resume with --resume-paused to reset the recovery budget.")
 
 
 def count_automatic_recovery(state):
@@ -1159,8 +1173,102 @@ def retry_format_failed_report(state, run_dir, workspace, selected):
     write_json(run_dir / 'state.json', state)
 
 
+def prepare_abandoned_completion_revalidation(state, run_dir, workspace):
+    """Repair old completion-abandonment routing on explicit resume only."""
+    if (state.get('status') not in ('PAUSED_STAGE_ABANDONED', 'PAUSED_INVALID_OUTPUT', 'PAUSED_REPEATED_FAILURE')
+            or state.get('next_stage') != 'astra_review' or state.get('validation')
+            or any(state.get(key) for key in ('active_stage', 'pending_report_repair', 'uncertain_artifacts'))):
+        return False
+    recovery = state.get('recovery_context') or {}
+    selected = recovery.get('attempt_id')
+    stages = state.get('stages', [])
+    index = next((i for i in range(len(stages) - 1, -1, -1)
+                  if stages[i].get('abandoned') and attempt_id(stages[i]) == selected), None)
+    if index is None:
+        return False
+    abandoned = stages[index]
+    owner = abandoned.get('original_stage') or abandoned['stage'].removesuffix('_report_repair')
+    if (owner != 'astra_review'
+            or abandoned.get('contract_hash') != (state.get('goal_contract') or {}).get('hash')
+            or abandoned.get('task_id') != (state.get('current_task') or {}).get('id')
+            or not any(e.get('kind') == 'stage_abandoned' and e.get('attempt_id') == selected
+                       for e in state.get('user_events', []))
+            or not any(v.get('reason') == 'Uncertain stage abandoned' for v in state.get('validation_archive', []))):
+        return False
+    revision = support.snapshot(workspace)['revision']
+    if abandoned.get('source_revision') != revision or recovery.get('source_revision') != revision:
+        return False
+    # Only failed completion requests (and their runner-owned repair routing)
+    # may follow this boundary. Never reinterpret later accepted work.
+    retries = [r for r in stages[index + 1:]
+               if not (r.get('runner_owned') and r.get('stage') == 'resolver'
+                       and (r.get('decision') or {}).get('action') == 'retry')]
+    if any(not r.get('rejected') or r.get('abandoned') or r.get('source_revision') != revision
+           or (r.get('original_stage') or r.get('stage')) != 'astra_review' for r in retries):
+        return False
+    missing = 'Completion rejected: missing, stale, failed or unverified independent evidence'
+    if retries:
+        last = retries[-1]
+        failure = (state.get('failure_history') or {}).get(last.get('failure_key'), {})
+        if (failure.get('identity') != {'stage': 'astra_review', 'artifact_hash': revision,
+                                       'error_class': 'PAUSED_COMPLETION_GATE'}
+                or last.get('rejection_reason') != missing
+                or any(r.get('rejection_reason') not in (missing,
+                       'OpenCode final message is not a JSON report; inspect the saved raw events') for r in retries)):
+            return False
+        attempts = {r.get('failure_attempt') for r in retries if r.get('rejection_reason') == missing}
+        if not failure.get('attempts') or not set(failure['attempts']) <= attempts:
+            return False
+    elif state['status'] != 'PAUSED_STAGE_ABANDONED':
+        return False
+    stage = workflow.review_stage(state)
+    if failures.repeated(state, {'stage': stage, 'source_revision': revision}):
+        return False
+    state.setdefault('reconciliation_notes', []).append({
+        'at': now(), 'attempt_id': selected, 'previous_status': state['status'], 'stage': stage,
+        'reason': 'Explicit resume requires fresh validation after abandoned completion'})
+    state.update(status='PAUSED_STAGE_ABANDONED', phase='PAUSED_OR_BLOCKED', next_stage=stage,
+                 stop_reason='Completion abandonment invalidated validation. Resume explicitly for fresh review.')
+    write_json(run_dir / 'state.json', state)
+    return True
+
+
+def authorize_failure_retry(state, run_dir, workspace):
+    """Authorize one fresh attempt for an inspected, unchanged repeated failure.
+
+    Explicit operator action only: it never runs from a plain resume. It clears
+    exactly the recorded failure identity, keeps every other failure and its
+    history, and records the authorization durably for audit.
+    """
+    if state.get('status') != 'PAUSED_REPEATED_FAILURE':
+        raise ValueError('--retry-failed-stage requires a run paused for repeated failure')
+    pending = state.get('pending_report_repair') or {}
+    record = pending.get('original') or next(
+        (row for row in reversed(state.get('stages', [])) if row.get('failure_key')), None)
+    repeated = failures.repeated(state, record) if record else None
+    if not repeated:
+        raise ValueError('No unchanged repeated failure to authorize; fix the cause, then resume')
+    selected = record.get('failure_key')
+    state.setdefault('failure_retry_authorizations', []).append({
+        'at': now(), 'failure_key': selected, 'identity': repeated['identity'],
+        'count': repeated['count'], 'source_revision': support.snapshot(workspace)['revision']})
+    state.setdefault('user_events', []).append({
+        'kind': 'failure_retry_authorized', 'at': now(), 'failure_key': selected,
+        'stage': repeated['identity'].get('stage'), 'count': repeated['count']})
+    state.setdefault('failure_history', {}).pop(selected, None)
+    for row in state.get('stages', []):
+        if row.get('failure_key') == selected:
+            row.pop('failure_key', None)
+    write_json(run_dir / 'state.json', state)
+
+
 def repeated_failure_resume_guard(state, workspace):
-    """A restart or explicit resume cannot erase an unchanged repeated failure."""
+    """A restart or plain resume cannot erase an unchanged repeated failure.
+
+    A recognized recovery path that reroutes the run changes the saved status
+    before this guard runs. An operator who has inspected the failure can
+    authorize one fresh attempt with --retry-failed-stage.
+    """
     if state.get('status') != 'PAUSED_REPEATED_FAILURE':
         return
     pending = state.get('pending_report_repair') or {}
@@ -1173,7 +1281,8 @@ def repeated_failure_resume_guard(state, workspace):
         raise support.Paused('PAUSED_REPEATED_FAILURE',
             f"Unchanged {record.get('original_stage') or record['stage']} artifact failed "
             f"{repeated['count']} times with {repeated['identity']['error_class']}; "
-            "inspect failure_history and fix the cause before resuming.")
+            "inspect failure_history and fix the cause before resuming, or authorize "
+            "one inspected retry with --retry-failed-stage.")
 
 
 def reconcile_active(state, run_dir, workspace):
@@ -1329,6 +1438,8 @@ def configure(args, state):
         joint = requested_joint
     else:
         joint = True
+    if joint and engine not in ("codex", "opencode", "gocode"):
+        raise ValueError("--joint-planning requires a supported planning engine")
     if (getattr(args, "requirements_model", None) or getattr(args, "requirements_reasoning_effort", None)
             or getattr(args, "glm_reasoning_effort", None) or getattr(args, "plan_reviewer_model", None)
             or getattr(args, "plan_reviewer_reasoning_effort", None)) and not joint:
@@ -1337,8 +1448,9 @@ def configure(args, state):
         raise ValueError("--glm-model requires --joint-planning")
     if started and engine != saved_engine:
         raise ValueError("Start a new run to change engines; Codex and OpenCode session IDs are not interchangeable")
-    if engine == "opencode" and any(getattr(args, f"{r}_provider", None) for r in DEFAULT_ROLE_MODELS):
-        raise ValueError("For OpenCode use --<role>-model provider/model instead of --<role>-provider")
+    if engine in ("opencode", "gocode") and any(getattr(args, f"{r}_provider", None) for r in DEFAULT_ROLE_MODELS):
+        route = "OpenCode" if engine == "opencode" else "GoCode"
+        raise ValueError(f"For {route} use --<role>-model instead of --<role>-provider")
     if state.get("settings"):
         settings = json.loads(json.dumps(state["settings"]))
         settings.setdefault("provider", provider_name)
@@ -1370,6 +1482,10 @@ def configure(args, state):
                 settings["roles"][role]["reasoning_effort"] = role_effort or args.reasoning_effort
         for role in getattr(args, "pin_model_role", []):
             settings["roles"][role]["model_pinned"] = True
+        if engine == "gocode":
+            glm_effort = getattr(args, "glm_reasoning_effort", None)
+            if glm_effort or args.reasoning_effort:
+                settings["roles"]["glm"]["reasoning_effort"] = glm_effort or args.reasoning_effort
         if args.headroom is not None:
             settings["headroom"]["enabled"] = args.headroom == "on"
         if args.context_soft_tokens is not None:
@@ -1397,7 +1513,10 @@ def configure(args, state):
             opencode.check_models(settings["roles"], Path(state["workspace"]))
             opencode.check_subscription_routes(settings["roles"], Path(state["workspace"]))
         if joint:
-            configure_joint(settings, args, fresh=False)
+            if engine == "gocode":
+                configure_gocode_joint(settings, args, fresh=False)
+            else:
+                configure_joint(settings, args, fresh=False)
         if getattr(args,'unlimited_iterations',False):
             settings.setdefault('limits',{})['iteration_ceiling']=None
         if getattr(args, 'max_milestone_seconds', None) is not None:
@@ -1434,7 +1553,12 @@ def configure(args, state):
                 raise ValueError("Start a new run to enable milestone orchestration")
             settings["orchestration"]["max_parallel"] = args.max_parallel_builders
         return settings
-    local = opencode.local_settings(state["workspace"]) if engine == "opencode" else support.local_settings()
+    if engine == "opencode":
+        local = opencode.local_settings(state["workspace"])
+    elif engine == "gocode":
+        local = gocode.local_settings(Path(state["workspace"]))
+    else:
+        local = support.local_settings()
     models = {}
     providers = {}
     for record in state.get("history", []):
@@ -1447,7 +1571,11 @@ def configure(args, state):
     # Custom providers ship their own DEFAULT_MODELS (TOML [roles]); never
     # force the builtin OpenCode catalogue onto fixturetool/kilocode/etc.
     provider_mod = autocode_providers.resolve(provider_name) if provider_name else opencode
-    defaults = provider_mod.DEFAULT_MODELS if engine == "opencode" else DEFAULT_ROLE_MODELS
+    defaults = DEFAULT_ROLE_MODELS.copy()
+    if engine == "gocode":
+        defaults.update(gocode.DEFAULT_MODELS)
+    elif engine == "opencode":
+        defaults.update(provider_mod.DEFAULT_MODELS)
     roles = {r: {"model": getattr(args, f"{r}_model", None) or models.get(r) or defaults[r],
                  "reasoning_effort": getattr(args, f"{r}_reasoning_effort", None) or args.reasoning_effort or local.get("model_reasoning_effort") or opencode.DEFAULT_REASONING_EFFORTS[r],
                  "provider": getattr(args, f"{r}_provider", None) or providers.get(r) or local.get("model_provider")}
@@ -1488,7 +1616,10 @@ def configure(args, state):
             config["provider"] = "openai"
         settings.update(figma_file=figma.design_url(figma_file), figma_review=getattr(args, "figma_review", None) or "automatic")
     if joint:
-        configure_joint(settings, args, fresh=True)
+        if engine == "gocode":
+            configure_gocode_joint(settings, args, fresh=True)
+        else:
+            configure_joint(settings, args, fresh=True)
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
     return settings
@@ -1607,6 +1738,27 @@ def configure_codex_joint(settings, args):
     settings.setdefault("transport_identities", {}).setdefault("codex", settings["transport_identity"])
 
 
+def configure_gocode_joint(settings, args, *, fresh):
+    """Configure the four-role planning/implementation loop on direct GoCode routes."""
+    if fresh:
+        settings["joint_planning"] = True
+        for role in ("glm", "astra", "terra", "sol"):
+            model = getattr(args, f"{role}_model", None) or gocode.DEFAULT_MODELS[role]
+            effort = (getattr(args, "glm_reasoning_effort", None) if role == "glm"
+                      else getattr(args, f"{role}_reasoning_effort", None)) or args.reasoning_effort
+            settings["roles"].setdefault(role, {}).update(engine="gocode", provider=None, model=model,
+                                                           reasoning_effort=effort)
+        completion_model = getattr(args, "completion_model", None) or gocode.DEFAULT_MODELS["sol"]
+        completion_effort = getattr(args, "completion_reasoning_effort", None) or args.reasoning_effort
+        settings["roles"].setdefault("completion", {}).update(
+            engine="gocode", provider=None, model=completion_model, reasoning_effort=completion_effort)
+        settings["transport_identities"] = {"gocode": settings["transport_identity"]}
+    for role, config in settings["roles"].items():
+        if planning.engine_for(settings, role) != "gocode":
+            raise ValueError("GoCode joint-planning roles cannot switch engines on resume")
+        gocode.validate_model(config["model"])
+
+
 def migrate_opencode_roles(state, run_dir, workspace):
     """Move old mixed-CLI runs to OpenCode at a recovered, locked boundary."""
     settings = state["settings"]
@@ -1659,6 +1811,11 @@ def check_subscription(identity):
 
 def check_joint_transports(state, workspace):
     identities = state["settings"]["transport_identities"]
+    if "gocode" in identities:
+        current = gocode.local_settings(workspace)
+        if gocode.transport_drift(current, identities["gocode"]):
+            raise support.Paused("PAUSED_TRANSPORT_CHANGED", "GoCode managed identity changed")
+        return
     roles = {role: config for role, config in state["settings"]["roles"].items()
              if planning.engine_for(state["settings"], role) == "codex"}
     codex_changed = False
@@ -1953,19 +2110,19 @@ def main(unit=None) -> int:
     parser.add_argument("--figma-file", help="Figma Design URL to implement using the connected Codex plugin")
     parser.add_argument("--ui-run", type=Path, help="Accepted autocode-ui run to implement")
     parser.add_argument("--figma-review", choices=["automatic", "human"], help="Visual review policy for new Figma runs (default: automatic)")
-    parser.add_argument("--engine", choices=["codex", "opencode"],
-                        help="New-run default is OpenCode joint planning; Codex supports optional --joint-planning. Resumes keep the saved engine")
+    parser.add_argument("--engine", choices=["codex", "gocode", "opencode"],
+                        help="Select Codex, GoCode, or OpenCode; resumes keep the saved engine")
     parser.add_argument("--provider", default=None,
                         help="Tool that runs each role for a new run. Default: AUTOCODE_PROVIDER, then default_provider in "
                              "~/.config/autocode/config.toml, then opencode. Other names load ~/.config/autocode/providers/<name>.toml")
     parser.add_argument("--joint-planning", action="store_true",
-                        help="Separate requirements, planning, and independent review; default for new OpenCode runs, opt-in for Codex at a clean boundary")
+                        help="Separate requirements, planning, and independent review; default for new OpenCode/GoCode runs, opt-in for Codex")
     parser.add_argument("--glm-model", help="Planner model: OpenCode provider/model or native Codex GPT name")
+    parser.add_argument("--glm-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
+                        help="Override planner draft and revision reasoning effort")
     parser.add_argument("--requirements-model", help="Independent requirements-gatherer model for the saved engine")
     parser.add_argument("--requirements-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override independent requirements-gatherer reasoning effort")
-    parser.add_argument("--glm-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
-                        help="Override planner draft and revision reasoning effort")
     parser.add_argument("--plan-reviewer-model",
                         help="Override the independent plan-reviewer model for the saved engine")
     parser.add_argument("--plan-reviewer-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
@@ -2011,7 +2168,7 @@ def main(unit=None) -> int:
     parser.add_argument("--request-milestone-checkpoints", action="store_true",
                         help="Queue a boundary pause and milestone configuration for an active saved run; never launches or stops workers")
     parser.add_argument("--max-milestone-seconds", type=int,
-                        help="Active-time budget per milestone, checked at stage boundaries (new-run default: 5400; 0 disables)")
+                        help="Active-time budget per milestone; with --resume-paused this also resets spent time (default: 5400; 0 disables)")
     parser.add_argument("--max-milestone-replans", type=int,
                         help="Maximum changed-approach replans per milestone (saved default: 1; 0 means unbounded)")
     parser.add_argument("--max-milestone-stalled-reviews", type=int,
@@ -2027,6 +2184,10 @@ def main(unit=None) -> int:
     parser.add_argument("--max-findings-per-task", type=int,
                         help="Reject a REWORK task that bundles more than this many open findings (default: unlimited; 0 disables)")
     parser.add_argument("--resume-paused", action="store_true", help="Acknowledge a saved pause; uncertain stages still require reconciliation")
+    parser.add_argument("--retry-failed-stage", action="store_true",
+                        help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
+    parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
+                        help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
                         help="With --resume-paused, retry an exact exhausted format-failed report as fresh independent validation")
     parser.add_argument("--accept-transport-change", action="store_true",
@@ -2063,6 +2224,10 @@ def main(unit=None) -> int:
         parser.error("--accept-transport-change requires --run-dir and --resume-paused")
     if args.retry_report and (not args.run_dir or not args.resume_paused):
         parser.error("--retry-report requires --run-dir and --resume-paused")
+    if args.retry_failed_stage and (not args.run_dir or not args.resume_paused):
+        parser.error("--retry-failed-stage requires --run-dir and --resume-paused")
+    if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
+        parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
     if unit and args.unit != unit:
         parser.error(f"This entry point runs only {unit}")
     if args.unit in ("autocode", "autoreview", "autoresolver") and not args.run_dir:
@@ -2076,7 +2241,8 @@ def main(unit=None) -> int:
                bool(args.answer or args.delegate), bool(args.delegate_all), bool(args.reject_assumption),
                bool(args.approve_goal), bool(args.edit_goal),
                bool(args.approve_review), bool(args.reconcile_review),
-               args.feedback is not None, args.accept_completion, args.abandon_stage is not None, args.request_milestone_checkpoints]
+               args.feedback is not None, args.accept_completion, args.abandon_stage is not None,
+               args.request_milestone_checkpoints, args.planning_review_call_limit is not None]
     if sum(bool(a) for a in actions) > 1:
         parser.error("Choose one action per invocation; answering and approving are separate events")
     if args.retry_builder and any(actions):
@@ -2151,6 +2317,7 @@ def main(unit=None) -> int:
         parser.error("workspace differs from checkpoint; use the original --workspace")
     if not run_dir.is_relative_to(workspace / ".autocode" / "runs"):
         parser.error("run-dir must belong to this project's .autocode/runs")
+    registry.configure_workspace_storage(workspace)
     if args.request_milestone_checkpoints:
         request = milestones.queue_activation(run_dir, args.max_milestone_seconds)
         print(json.dumps({'queued': True, 'run_dir': str(run_dir), 'request': request,
@@ -2203,7 +2370,7 @@ def main(unit=None) -> int:
         parser.error(str(error))
     # Legacy runner does not own our new lock; detect it before touching state.
     support.assert_no_legacy_process(run_dir, workspace)
-    with support.workspace_lock(workspace):
+    with support.run_lock(run_dir):
         support.assert_no_legacy_process(run_dir, workspace)
         if args.run_dir:
             # A competing user command may have finished between the first read
@@ -2276,6 +2443,28 @@ def main(unit=None) -> int:
             # Recovery interprets terminal artifacts only. It never replays a model call.
             try:
                 if args.resume_paused:
+                    # Explicit resume resets the recovery budget so operators can
+                    # retry after fixing the underlying cause (provider timeout,
+                    # rate limit, transient failure).
+                    state["automatic_recoveries_since_resume"] = 0
+                    state["consecutive_timeout_recoveries"] = 0
+                    state.setdefault("automatic_timeout_recoveries", [])
+                    if state.get("recovery_context") is None:
+                        state["recovery_context"] = {}
+                    # Reset milestone budget counters when raising the limit
+                    if args.max_milestone_seconds is not None:
+                        for row in state.get("milestone_progress", {}).values():
+                            if isinstance(row, dict):
+                                row["seconds"] = 0
+                                row["seconds_by_role"] = {}
+                    # Reset report repair attempts on explicit resume
+                    pending = state.get("pending_report_repair")
+                    if pending and isinstance(pending, dict):
+                        pending["attempts"] = 0
+                    # Reset resolver attempts
+                    resolver_state = state.get("resolver")
+                    if resolver_state and isinstance(resolver_state, dict):
+                        resolver_state["attempts"] = {}
                     if args.retry_report:
                         try:
                             retry_format_failed_report(state, run_dir, workspace, args.retry_report)
@@ -2283,6 +2472,15 @@ def main(unit=None) -> int:
                             print(f"Input rejected: {error}", file=sys.stderr)
                             return 2
                     else:
+                        if args.retry_failed_stage:
+                            try:
+                                authorize_failure_retry(state, run_dir, workspace)
+                                print("Failure retry authorized for the recorded repeated failure; "
+                                      "one fresh attempt proceeds under existing limits.", flush=True)
+                            except ValueError as error:
+                                print(f"Input rejected: {error}", file=sys.stderr)
+                                return 2
+                        prepare_abandoned_completion_revalidation(state, run_dir, workspace)
                         repeated_failure_resume_guard(state, workspace)
                         prepare_planning_retry(state, run_dir)
                         prepare_exhausted_execution_report_retry(state, run_dir, workspace)
@@ -2326,7 +2524,8 @@ def main(unit=None) -> int:
             user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
                                args.approve_goal, args.edit_goal,
                                args.approve_review, args.reconcile_review,
-                               args.feedback is not None, args.accept_completion))
+                               args.feedback is not None, args.accept_completion,
+                               args.planning_review_call_limit is not None))
             if user_action:
                 metadata = intervention_metadata(workspace, run_dir, state)
                 if metadata["pending_count"] or metadata["inbox_error"]:
@@ -2334,6 +2533,8 @@ def main(unit=None) -> int:
                                          "Queued intervention must be applied before approval, review, or completion")
                 candidate = copy.deepcopy(state)
                 try:
+                    if args.planning_review_call_limit is not None:
+                        planning.set_review_call_limit(candidate, args.planning_review_call_limit)
                     for item in args.answer:
                         question, sep, response = item.partition("=")
                         if not sep:
@@ -2461,12 +2662,20 @@ def main(unit=None) -> int:
                         and current.get("no_progress_batches",0) >= limits["no_progress_batches"]):
                     raise support.Paused("PAUSED_NO_PROGRESS", "Repeated unchanged implementation batches require review")
                 # Do not silently change auth/provider when local config changes.
-                using_opencode = current["settings"].get("engine") == "opencode"
+                engine = current["settings"].get("engine")
+                using_opencode = engine == "opencode"
+                using_gocode = engine == "gocode"
                 if planning.enabled(current):
                     check_joint_transports(current, workspace)
-                current_settings = opencode.local_settings(workspace) if using_opencode else support.local_settings()
-                drifted = (opencode.transport_drift(current_settings, current["settings"]["transport_identity"]) if using_opencode else
-                           support.transport_drift(current_settings, current["settings"]["transport_identity"], current["settings"]["roles"]))
+                if using_opencode:
+                    current_settings = opencode.local_settings(workspace)
+                    drifted = opencode.transport_drift(current_settings, current["settings"]["transport_identity"])
+                elif using_gocode:
+                    current_settings = gocode.local_settings(workspace)
+                    drifted = gocode.transport_drift(current_settings, current["settings"]["transport_identity"])
+                else:
+                    current_settings = support.local_settings()
+                    drifted = support.transport_drift(current_settings, current["settings"]["transport_identity"], current["settings"]["roles"])
                 if drifted:
                     raise support.Paused("PAUSED_TRANSPORT_CHANGED", "Local model/auth/provider settings differ from checkpoint")
                 if using_opencode and current["settings"]["transport_identity"].get("identity_version", 1) < 2:
