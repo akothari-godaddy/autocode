@@ -850,8 +850,7 @@ def automatically_recover_capacity_stage(state, run_dir, workspace, error):
     state["human_reviews"] = {}
     state.pop("displayed_review", None)
 
-    next_stage = ("terra" if workflow.final_only(state) and record["role"] in ("terra", "sol")
-                  else "astra_review" if record["role"] != "astra" else record["stage"])
+    next_stage, phase = timeout_recovery_route(state, record)
     retry_number = len(recovered) + 1
     recovery = {"at": now(), "attempt_id": attempt_id(record), "role": record["role"],
                 "stage": record["stage"], "source_revision": after["revision"],
@@ -869,7 +868,7 @@ def automatically_recover_capacity_stage(state, run_dir, workspace, error):
         "at": recovery["at"], "attempt_id": recovery["attempt_id"], "retry_number": retry_number,
         "next_stage": next_stage, "changed_files": record["changed_files"]})
     state["recovery_context"] = recovery
-    state.update(status="RUNNING", phase="EXECUTING", next_stage=next_stage)
+    state.update(status="RUNNING", phase=phase, next_stage=next_stage)
     state.pop("stop_reason", None)
     write_json(run_dir / "state.json", state)
     for artifact in originals:
@@ -900,6 +899,28 @@ def timeout_recovery_guard(state):
 
 def count_automatic_recovery(state):
     state["automatic_recoveries_since_resume"] = recovery_count(state) + 1
+
+
+def timeout_recovery_route(state, record):
+    """Return the (next_stage, phase) that continues after an archived timeout.
+
+    Planning and discovery stages run read-only against an unapproved draft, so
+    a timed-out attempt returns to its own owner under the existing planning
+    caps (``autoplanner.charge`` still applies). Routing them to the execution
+    reviewer would fail the next admission with PAUSED_GOAL_UNAPPROVED.
+    """
+    stage, role = record["stage"], record["role"]
+    if planning.is_planning(state, stage):
+        return stage, "PLANNING"
+    if stage == "astra_discovery":
+        return stage, "DISCOVERING"
+    if stage == "astra_plan":
+        return stage, "READY_TO_EXECUTE"
+    # Final-audit-only runs keep the Builder in charge of implementation. Other routing
+    # modes retain the established Plan Reviewer recovery review before another writer.
+    if workflow.final_only(state) and role in ("terra", "sol"):
+        return "terra", "EXECUTING"
+    return ("astra_review" if role != "astra" else stage), "EXECUTING"
 
 
 def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
@@ -949,10 +970,7 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     state["human_reviews"] = {}
     state.pop("displayed_review", None)
 
-    # Final-audit-only runs keep the Builder in charge of implementation. Other routing
-    # modes retain the established Plan Reviewer recovery review before another writer.
-    next_stage = ("terra" if workflow.final_only(state) and record["role"] in ("terra", "sol")
-                  else "astra_review" if record["role"] != "astra" else record["stage"])
+    next_stage, phase = timeout_recovery_route(state, record)
     recovery = {"at": now(), "attempt_id": attempt_id(record), "role": record["role"],
                 "stage": record["stage"], "source_revision": after["revision"],
                 "task_id": record.get("task_id", (state.get("current_task") or {}).get("id")),
@@ -975,7 +993,7 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     state["recovery_context"] = recovery
     state["no_progress_batches"] = state.get("no_progress_batches", 0) + 1
     state["consecutive_timeout_recoveries"] = state.get("consecutive_timeout_recoveries", 0) + 1
-    state.update(status="RUNNING", phase="EXECUTING", next_stage=next_stage)
+    state.update(status="RUNNING", phase=phase, next_stage=next_stage)
     state.pop("stop_reason", None)
     write_json(run_dir / "state.json", state)
     for artifact in originals:
@@ -2681,6 +2699,10 @@ def main(unit=None) -> int:
                     return orchestrator.SKIP
 
             def dispatch_code_stage(current, stage):
+                # Admission parity with autopilot.dispatch_unit: a paused Builder
+                # retry lane blocks the serial writer launch here as well.
+                if stage == "terra":
+                    autopilot.builder_policy.guard(current)
                 milestones.dispatch_guard(current, stage)
                 workflow.dispatch_guard(current,stage,workspace)
                 if stage == "orchestrator":

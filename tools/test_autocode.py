@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
 import autocode_support as s
 import autocode_goals as goals
+import autocode_builder_policy as builder_policy
 from goal_fixtures import approve_fixture, envelope
 
 
@@ -697,6 +698,68 @@ class RetrofitTest(unittest.TestCase):
         self.assertFalse(runner.automatically_recover_timed_out_stage(self.state, self.run, self.root, error))
         self.assertEqual(original, self.state)
 
+    def test_automatic_timeout_recovery_returns_planning_stage_to_its_owner(self):
+        # A timed-out read-only planning/discovery attempt continues at its own
+        # stage and phase. Routing it to astra_review would fail the next
+        # admission against the unapproved draft with PAUSED_GOAL_UNAPPROVED.
+        cases = [("requirements_gather", "requirements", True, "PLANNING"),
+                 ("astra_discovery", "glm", True, "PLANNING"),
+                 ("glm_revise", "glm", True, "PLANNING"),
+                 ("astra_challenge", "astra", True, "PLANNING"),
+                 ("astra_discovery", "astra", False, "DISCOVERING")]
+        for iteration, (stage, role, joint, phase) in enumerate(cases, start=1):
+            with self.subTest(stage=stage, joint=joint):
+                state = copy.deepcopy(self.state)
+                state["settings"]["joint_planning"] = joint
+                state.update(status="RUNNING", phase=phase, next_stage=stage)
+                before = s.snapshot(self.root)
+                base = self.run / f"iterations/{iteration:03d}/{stage}-01"
+                base.parent.mkdir(parents=True)
+                s.atomic_json(base.with_suffix(".before.json"), before)
+                base.with_suffix(".jsonl").write_text('{"type":"thread.started","thread_id":"planning-session"}\n')
+                state["active_stage"] = {"role": role, "stage": stage, "iteration": iteration, "duration_seconds": 3,
+                    "output": str(base.with_suffix(".json")), "events": str(base.with_suffix(".jsonl")),
+                    "before_ref": str(base.with_suffix(".before.json")), "exit_code": -15, "timed_out": True,
+                    "processes": []}
+                error = s.Paused("PAUSED_PROVIDER_TIMEOUT", "timed out")
+                self.assertTrue(runner.automatically_recover_timed_out_stage(state, self.run, self.root, error))
+                self.assertEqual("RUNNING", state["status"])
+                self.assertEqual(stage, state["next_stage"])
+                self.assertEqual(phase, state["phase"])
+                self.assertEqual(stage, state["recovery_context"]["next_stage"])
+                self.assertNotIn("active_stage", state)
+
+    def test_automatic_capacity_recovery_returns_planning_stage_to_its_owner(self):
+        before = s.snapshot(self.root)
+        base = self.run / "iterations/001/astra_discovery-01"
+        base.parent.mkdir(parents=True)
+        s.atomic_json(base.with_suffix(".before.json"), before)
+        base.with_suffix(".jsonl").write_text('{"type":"turn.failed","error":{"message":"model is at capacity"}}\n')
+        self.state["settings"]["joint_planning"] = True
+        self.state.update(status="RUNNING", phase="PLANNING", next_stage="astra_discovery")
+        self.state["active_stage"] = {"role": "glm", "stage": "astra_discovery", "iteration": 1, "duration_seconds": 3,
+            "output": str(base.with_suffix(".json")), "events": str(base.with_suffix(".jsonl")),
+            "before_ref": str(base.with_suffix(".before.json")), "exit_code": 1, "processes": []}
+        error = s.Paused("PAUSED_PROVIDER_CAPACITY", "model is at capacity")
+        with patch.object(runner.time, "sleep"):
+            self.assertTrue(runner.automatically_recover_capacity_stage(self.state, self.run, self.root, error))
+        self.assertEqual(("astra_discovery", "PLANNING", "RUNNING"),
+                         (self.state["next_stage"], self.state["phase"], self.state["status"]))
+
+    def test_automatic_timeout_recovery_keeps_execution_routing(self):
+        before = s.snapshot(self.root)
+        base = self.run / "iterations/005/sol-01"
+        base.parent.mkdir(parents=True)
+        s.atomic_json(base.with_suffix(".before.json"), before)
+        base.with_suffix(".jsonl").write_text('{"type":"thread.started","thread_id":"sol-session"}\n')
+        self.state.update(status="RUNNING", phase="EXECUTING", next_stage="sol")
+        self.state["active_stage"] = {"role": "sol", "stage": "sol", "iteration": 5, "duration_seconds": 3,
+            "output": str(base.with_suffix(".json")), "events": str(base.with_suffix(".jsonl")),
+            "before_ref": str(base.with_suffix(".before.json")), "exit_code": -15, "timed_out": True, "processes": []}
+        error = s.Paused("PAUSED_PROVIDER_TIMEOUT", "timed out")
+        self.assertTrue(runner.automatically_recover_timed_out_stage(self.state, self.run, self.root, error))
+        self.assertEqual(("astra_review", "EXECUTING"), (self.state["next_stage"], self.state["phase"]))
+
     def test_automatic_external_directory_denial_retries_workspace_only(self):
         before = s.snapshot(self.root)
         base = self.run / "iterations/005/terra-01"
@@ -802,6 +865,31 @@ class RetrofitTest(unittest.TestCase):
             self.assertEqual("TASK_COMPLETE",s.read(self.run/"state.json")["status"])
             self.assertEqual(0,runner.main())
             self.assertEqual(3,len(called))
+
+    def test_serial_dispatch_blocks_paused_builder_lane_before_launch(self):
+        # Admission parity on the production path: autocode.main's dispatch
+        # callback must honour builder_policy.guard like autopilot.dispatch_unit.
+        approve_fixture(self.state, goals)
+        local = {"auth_mode": "fixture"}
+        self.settings.update(transport_identity=local, builder_retry=dict(builder_policy.DEFAULTS),
+                             limits={"iteration_ceiling": 18, "max_seconds": None, "max_reported_tokens": None,
+                                     "no_progress_batches": 3, "automatic_retries": 0})
+        self.state["workspace"] = str(self.root.resolve())
+        lane = builder_policy.key(self.state)
+        self.state["builder_retry_key"] = lane
+        self.state["builder_retries"] = {lane: {"initial_route": copy.deepcopy(self.settings["roles"]["terra"]),
+                                                 "failures": ["review-1", "review-2", "review-3"], "action": "pause"}}
+        s.atomic_json(self.run / "state.json", self.state)
+        argv = ["autocode.py", "--workspace", str(self.root.resolve()), "--run-dir", str(self.run.resolve())]
+        with patch.object(sys, "argv", argv), patch.object(s, "assert_no_legacy_process"), \
+             patch.object(s, "local_settings", return_value=local), \
+             patch.object(runner, "run_role", side_effect=AssertionError("Paused Builder lane must not launch")), \
+             contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(2, runner.main())
+        saved = s.read(self.run / "state.json")
+        self.assertEqual("PAUSED_BUILDER_RETRY_LIMIT", saved["status"])
+        self.assertEqual("terra", saved["next_stage"])
+        self.assertNotIn("active_stage", saved)
 
     def test_compression_failure_returns_original_not_false_pass(self):
         path=self.run/"evidence/uncompressed.json"
