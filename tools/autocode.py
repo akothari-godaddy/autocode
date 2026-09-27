@@ -137,6 +137,25 @@ def check_evidence_options(record):
             'capture_context': record.get('capture_context')}
 
 
+def normalize_plan_challenge_blocking(value, record):
+    """Conservatively retain plan findings when only their blocking flag is omitted.
+
+    Missing flags cannot clear a finding. The raw provider report is preserved by
+    load_stage_report, and the complete normalized report still faces its schema.
+    """
+    if record.get('stage') not in ('astra_challenge', 'astra_challenge_report_repair') or not isinstance(value, dict):
+        return value
+    concerns = value.get('concerns')
+    if not isinstance(concerns, list) or not any(
+            isinstance(row, dict) and 'blocking' not in row for row in concerns):
+        return value
+    if any(not isinstance(row, dict) for row in concerns):
+        return value
+    return {**value, 'concerns': [
+        {**row, 'blocking': True} if 'blocking' not in row else row
+        for row in concerns]}
+
+
 def load_stage_report(record, workspace=None, evidence_record=None):
     if record.get("engine") == "opencode":
         # Raw provider events are authoritative, including during recovery.
@@ -144,6 +163,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
     else:
         value = final_json(Path(record["output"]))
     reported = copy.deepcopy(value)
+    value = normalize_plan_challenge_blocking(value, record)
     evidence_record = evidence_record or record
     validation = value.get('validation', value)
     checks = validation.get('checks') if isinstance(validation, dict) else None
@@ -171,7 +191,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
         record['derived_check_metadata'] = [
             {'check_index': index, 'field': 'exit_code', 'value': check['exit_code'],
              'evidence_ref': check['evidence_ref'], 'events': evidence_record['events']}
-            for index, check in enumerate(checks)
+            for index, check in enumerate(checks or [])
             if 'exit_code' not in (reported.get('validation', reported)['checks'][index])]
     if record.get('engine') == 'opencode' or value != reported:
         write_json(Path(record['output']), value)
@@ -909,7 +929,9 @@ def recovery_count(state):
 def timeout_recovery_guard(state):
     limit = state.get("settings", {}).get("limits", {}).get("no_progress_batches", 3)
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
-    consecutive = limit and state.get("consecutive_timeout_recoveries", 0) >= limit
+    # A configured limit of 0 means zero tolerance, not "no limit" — `limit and ...`
+    # would treat 0 as falsy and silently skip the check.
+    consecutive = limit is not None and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
         ctx = state.get("recovery_context") or {}
         cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")
@@ -2242,6 +2264,12 @@ def main(unit=None) -> int:
     parser.add_argument("--feedback", metavar="TEXT", help="Send brief feedback to the Requirements Gatherer; never approves implementation")
     parser.add_argument("--delegate", action="append", default=[], metavar="QUESTION_ID",
                         help="Explicitly accept the proposed default and delegate this decision")
+    parser.add_argument("--delegate-all", action="store_true",
+                        help="Delegate every currently pending question marked delegable with a proposed default; "
+                             "never grants approval and invalidates any existing one")
+    parser.add_argument("--reject-assumption", action="append", default=[], metavar="ASSUMPTION_ID",
+                        help="Reject a structured assumption from the current requirements handoff; "
+                             "never grants approval and invalidates any existing one")
     parser.add_argument("--approve-goal", metavar="TOKEN", help="Approve exactly a previously displayed revision")
     parser.add_argument("--edit-goal", type=Path, help="Load a revised contract body JSON; invalidates approval")
     parser.add_argument("--approve-review", action="append", default=[], metavar="CRITERION_ID")
@@ -2249,7 +2277,8 @@ def main(unit=None) -> int:
                         help="Bind an authenticated legacy acceptance to current validated evidence without a new approval")
     parser.add_argument("--accept-completion", action="store_true",
                         help="Operator-accept completion after the runner itself verifies every gate; use when the model's completion report cannot be produced")
-    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token")
+    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token; "
+                        "also required by --delegate-all and --reject-assumption")
     args = parser.parse_args()
     if args.max_parallel_builders is not None and args.max_parallel_builders < 1:
         parser.error('--max-parallel-builders must be positive')
@@ -2279,7 +2308,8 @@ def main(unit=None) -> int:
         if getattr(args, flag) is not None and getattr(args, flag) < 0:
             parser.error(f"--{flag.replace('_', '-')} must be nonnegative")
     actions = [args.status, args.dry_run, args.migrate_only, args.show_goal,
-               bool(args.answer or args.delegate), bool(args.approve_goal), bool(args.edit_goal),
+               bool(args.answer or args.delegate), bool(args.delegate_all), bool(args.reject_assumption),
+               bool(args.approve_goal), bool(args.edit_goal),
                bool(args.approve_review), bool(args.reconcile_review),
                args.feedback is not None, args.accept_completion, args.abandon_stage is not None,
                args.request_milestone_checkpoints, args.planning_review_call_limit is not None]
@@ -2287,8 +2317,12 @@ def main(unit=None) -> int:
         parser.error("Choose one action per invocation; answering and approving are separate events")
     if args.retry_builder and any(actions):
         parser.error("--retry-builder is a resume action; do not combine it with another action")
-    if args.review_token and not (args.approve_review or args.reconcile_review):
-        parser.error("--review-token requires --approve-review or --reconcile-review")
+    if (args.delegate_all or args.reject_assumption) and not args.review_token:
+        parser.error("--delegate-all and --reject-assumption require --review-token with the displayed goal token")
+    if args.review_token and not (args.approve_review or args.reconcile_review
+                                  or args.delegate_all or args.reject_assumption):
+        parser.error("--review-token requires --approve-review, --reconcile-review, --delegate-all "
+                     "or --reject-assumption")
     if args.reconcile_review and not args.review_token:
         parser.error("--reconcile-review requires --review-token")
     if not args.run_dir and any(actions[2:]):
@@ -2531,6 +2565,14 @@ def main(unit=None) -> int:
                         repeated_failure_resume_guard(state, workspace)
                         prepare_planning_retry(state, run_dir)
                         prepare_exhausted_execution_report_retry(state, run_dir, workspace)
+                    # Reset report repair attempts on explicit resume, for whatever
+                    # repair record is still pending. An exhaustion-gated retry
+                    # above (which requires and archives the true attempt count)
+                    # already consumed it if one applied; resetting first would
+                    # corrupt that archived count and always fail those guards.
+                    pending = state.get("pending_report_repair")
+                    if pending and isinstance(pending, dict):
+                        pending["attempts"] = 0
                 reconcile_active(state, run_dir, workspace)
             except ReportRepairQueued:
                 pass  # Durable pending repair is dispatched below, not original work.
@@ -2568,10 +2610,11 @@ def main(unit=None) -> int:
             if args.migrate_only:
                 print("Migrated to an unapproved draft; saved work retained; no agent launched")
                 return 0
-            user_action = any((args.show_goal, args.answer, args.delegate, args.approve_goal, args.edit_goal,
-                                args.approve_review, args.reconcile_review,
-                                args.feedback is not None, args.accept_completion,
-                                args.planning_review_call_limit is not None))
+            user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
+                               args.approve_goal, args.edit_goal,
+                               args.approve_review, args.reconcile_review,
+                               args.feedback is not None, args.accept_completion,
+                               args.planning_review_call_limit is not None))
             if user_action:
                 metadata = intervention_metadata(workspace, run_dir, state)
                 if metadata["pending_count"] or metadata["inbox_error"]:
@@ -2598,6 +2641,10 @@ def main(unit=None) -> int:
                             goals.answer(candidate, question, response)
                     for question in args.delegate:
                         goals.answer(candidate, question, "accept default", delegated=True)
+                    if args.delegate_all:
+                        goals.delegate_all(candidate, args.review_token)
+                    for assumption_id in args.reject_assumption:
+                        goals.reject_assumption(candidate, assumption_id, args.review_token)
                     if args.feedback is not None:
                         goals.feedback(candidate, args.feedback)
                     if args.edit_goal:
