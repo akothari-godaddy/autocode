@@ -31,12 +31,14 @@ CHANGE = obj({"item": S, "change": {"type": "string", "enum": ["removed", "rewor
               "answer_id": S, "replacement": S})
 TRACE = obj({"requirement_id": S, "disposition": {"type": "string", "enum": ["covered", "excluded", "superseded"]},
              "evidence": S})
-# A structured assumption is {id, text, kind, category, convention_ref, rationale,
-# supports}; a legacy plain string is also accepted (goals.normalize_assumption
-# and goals.validate_assumptions handle both). The generic schema validator has
-# no union type, so the property itself stays untyped-per-item here; semantic
-# validation happens in check_requirement_handoff.
-ASSUMPTIONS = {"type": "array"}
+# New reports use the structured form; this is also the generation schema, so
+# the model needs a concrete item shape. A report produced before structured
+# assumptions (a plain string item) is still accepted by apply_planning, which
+# validates only the structured items; goals.normalize_assumption reads both.
+ASSUMPTION = obj({"id": S, "text": S, "kind": goals.QUESTION["properties"]["kind"],
+                  "category": goals.QUESTION["properties"]["category"],
+                  "convention_ref": S, "rationale": S, "supports": SS})
+ASSUMPTIONS = {"type": "array", "items": ASSUMPTION}
 IGNORED_REQUIREMENT = obj({"requirement_id": S, "reason": S,
     "basis": {"type": "string", "enum": ["user_answer", "user_feedback"]}, "event_id": S})
 SCHEMAS = {
@@ -73,6 +75,17 @@ SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
 # previous handoff had (goals.check_requirement_handoff enforces the citation).
 SCHEMAS["requirements_gather"]["properties"]["ignored_requirements"] = {
     "type": "array", "items": IGNORED_REQUIREMENT}
+# A discoverable question is answered from the workspace, never by the user.
+# machine_resolutions are accepted only during the runner's one investigation
+# pass, bound to the report that raised the question (handoff_hash). An
+# access_blocker records that the source needed is missing or unreadable; the
+# question must then remain as a kind="decision" question for the user.
+MACHINE_RESOLUTION = obj({"question_id": S, "resolution": S, "source_refs": SS, "handoff_hash": S})
+ACCESS_BLOCKER = obj({"question_id": S, "reason": S})
+INVESTIGATION_STAGES = ("requirements_gather", "astra_discovery", "glm_revise")
+for _stage in INVESTIGATION_STAGES:
+    SCHEMAS[_stage]["properties"]["machine_resolutions"] = {"type": "array", "items": MACHINE_RESOLUTION}
+    SCHEMAS[_stage]["properties"]["access_blockers"] = {"type": "array", "items": ACCESS_BLOCKER}
 
 
 def enabled(state):
@@ -293,6 +306,45 @@ There is no further debate round. The user must approve this exact plan before i
 }
 
 
+QUESTION_POLICY = """
+QUESTION CLASSIFICATION. Every question object carries kind, category and delegable.
+kind="discoverable" only when the answer is a fact in the workspace you have not read yet
+(where something is configured, which interface exists). Prefer reading it now; the runner
+never shows a discoverable question to the user. kind="decision" for a choice only the user
+can make. category names what the answer changes: cost, quota, permission,
+external_side_effect, requested_outcome, behavior, technical or other.
+delegable=true only when proposed_default is a safe choice the user may accept wholesale;
+always false for cost, quota, permission, external_side_effect and requested_outcome.
+Where the report has machine_resolutions and access_blockers, use [] unless
+investigation_request is present.
+"""
+
+ASSUMPTION_POLICY = """
+ASSUMPTIONS. Each proposed_assumptions entry is {id, text, kind, category, convention_ref,
+rationale, supports}. Give it a stable id (A1, A2, ...) and keep ids across refreshes.
+Use kind="inferable" with a convention_ref (repository path:line, or a saved event id) and a
+rationale that establish the convention. supports lists the requirement ids it underpins.
+Never mark cost, quota, permission, external_side_effect or requested_outcome inferable; ask a
+decision question instead. When previous_requirements_handoff exists and you drop one of its
+requirements, list it in ignored_requirements as {requirement_id, reason, basis, event_id}
+citing the saved user answer or feedback event that authorizes it; otherwise use [].
+"""
+
+INVESTIGATION_POLICY = """
+INVESTIGATION PASS. investigation_request lists discoverable questions from your previous
+report (prior_report), bound to handoff_hash. This is the only investigation pass in this
+clarification episode. For each question, do exactly one of:
+- read the workspace and add a machine_resolutions entry {question_id, resolution,
+  source_refs (existing repository files you read, optional :line), handoff_hash}, and remove
+  the question from your questions (only for category technical or other);
+- keep it as a kind="decision" question when it is really the user's choice;
+- if the source needed is missing or unreadable, keep it as a kind="decision" question and add
+  an access_blockers entry {question_id, reason}.
+Anything still discoverable after this pass is shown to the user as a decision. Otherwise
+return the complete report as before.
+"""
+
+
 def workspace_inventory(workspace, task, limit=40, scan_limit=5000):
     """Bounded filesystem inventory; works in repositories and ordinary directories."""
     root = Path(workspace)
@@ -370,7 +422,17 @@ def context(state, stage, state_path):
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
         goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY)
-    prompt = PROMPTS[stage] + figma_instruction + planning_policy + s.COMMON + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n" + json.dumps(packet, indent=2)
+    clarification_policy = ("" if stage == "astra_challenge" else QUESTION_POLICY) + (
+        ASSUMPTION_POLICY if stage == "requirements_gather" else "")
+    request = state.get("investigation_request")
+    if request and request.get("stage") == stage:
+        # Correctness must not depend on provider-session memory: the pass gets
+        # everything it needs explicitly.
+        packet["investigation_request"] = request
+        clarification_policy += INVESTIGATION_POLICY
+    prompt = (PROMPTS[stage] + figma_instruction + planning_policy + clarification_policy + s.COMMON
+              + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
+              + json.dumps(packet, indent=2))
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
                     "soft_budget_tokens": state["settings"].get("context_soft_tokens", 10000)}
 

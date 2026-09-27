@@ -219,12 +219,137 @@ def _bind_plan(state, value, origin):
     goals.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [])
 
 
+# Only a technical fact, or one with no policy weight, can be read from the
+# workspace. Cost, quota, permission, side-effect and requested-outcome choices
+# (and any question without a category) always stay with the user.
+RESOLVABLE_CATEGORIES = frozenset({"technical", "other"})
+
+
+def _stage_questions(stage, value):
+    return value["open_questions"] if stage == "requirements_gather" else value["contract"]["open_blocking_questions"]
+
+
+def _check_resolution_refs(state, refs):
+    """Strict: unlike _check_code_refs, an absent or empty workspace is not a pass."""
+    root = Path(state.get("workspace") or "")
+    if not state.get("workspace") or not root.is_dir():
+        raise ValueError("A machine resolution needs an inspectable workspace")
+    if not refs:
+        raise ValueError("A machine resolution must cite the workspace source it was read from")
+    for ref in refs:
+        target = (root / str(ref).partition(":")[0]).resolve()
+        if not target.is_relative_to(root.resolve()) or not target.is_file():
+            raise ValueError(f"machine_resolutions source_refs entry {ref} is not a file in the workspace")
+    _check_code_refs(state, refs, "machine_resolutions.source_refs")
+
+
+def _clarify_discoverable(state, stage, value, record):
+    """Keep discoverable questions away from the user (issue #62, rules E1-E3).
+
+    The first report in a clarification episode that asks a discoverable
+    question is not installed: the runner spends the episode's single
+    investigation pass by re-running the same stage with an explicit packet
+    (the questions, the report that raised them, and its hash). That pass must
+    resolve each question from cited workspace source, reclassify it as a
+    decision, or record an access blocker. Whatever is still discoverable after
+    the pass, or once the budget is spent, becomes a decision question the
+    runner labels as such; there is no second pass and no fabricated answer.
+
+    Returns (value, deferred); deferred means the pass was queued.
+    """
+    if stage == "astra_finalize":
+        # The final reviewer stage gets no investigation pass; it still cannot
+        # show the user a question labelled as a workspace fact.
+        value = copy.deepcopy(value)
+        _label_unresolved(state, value["contract"]["open_blocking_questions"])
+        return value, False
+    if stage not in planning_unit.INVESTIGATION_STAGES:
+        return value, False
+    request = state.get("investigation_request")
+    if request and request.get("stage") != stage:
+        request = None
+    raised_hash = support.digest(value)
+    value = copy.deepcopy(value)
+    questions = _stage_questions(stage, value)
+    by_id = {question["id"]: question for question in questions}
+    resolutions = value.get("machine_resolutions") or []
+    if resolutions and not request:
+        raise ValueError("machine_resolutions are accepted only in the investigation pass for outstanding "
+                         "discoverable questions")
+    accepted, resolved = [], set()
+    for row in resolutions:
+        question_id = row["question_id"]
+        original = next((q for q in request["questions"] if q["id"] == question_id), None)
+        if question_id in resolved:
+            raise ValueError(f"Duplicate machine_resolution for {question_id}")
+        resolved.add(question_id)
+        if original is None:
+            raise ValueError(f"machine_resolution {question_id} does not name an outstanding discoverable question")
+        if question_id in state.get("answers", {}):
+            raise ValueError(f"Question {question_id} already has a saved user answer")
+        category = original.get("category", "requested_outcome")
+        if category not in RESOLVABLE_CATEGORIES:
+            raise ValueError(f"Question {question_id} is a {category} choice; only a technical fact can be "
+                             "resolved from the workspace")
+        if row["handoff_hash"] != request["handoff_hash"]:
+            raise ValueError(f"machine_resolution {question_id} is bound to a different report")
+        if not row["resolution"].strip():
+            raise ValueError(f"machine_resolution {question_id} needs the resolved fact")
+        _check_resolution_refs(state, row["source_refs"])
+        if question_id in by_id:
+            raise ValueError(f"Question {question_id} was resolved from the workspace and must not also be asked")
+        accepted.append({**copy.deepcopy(row), "stage": stage, "episode_id": request["episode_id"], "at": support.now()})
+    for row in value.get("access_blockers") or []:
+        question = by_id.get(row["question_id"])
+        if not row["reason"].strip() or question is None or question.get("kind", "decision") != "decision":
+            raise ValueError("An access_blocker must name a question that stays open as kind=decision, with a reason")
+    if request:
+        dropped = set(request["question_ids"]) - resolved - set(by_id)
+        if dropped:
+            raise ValueError("Investigation dropped discoverable questions without a machine_resolution: "
+                             + ", ".join(sorted(dropped)))
+        state.setdefault("machine_resolutions", []).extend(accepted)
+        state.pop("investigation_request")
+    else:
+        discoverable = [question for question in questions if question.get("kind") == "discoverable"]
+        episode = goals.clarification_episode(state) if discoverable else None
+        if episode and not episode["investigation_used"]:
+            episode.update(investigation_used=True, used_at=support.now(), used_stage=stage)
+            state["investigation_request"] = {
+                "stage": stage, "episode_id": episode["id"], "handoff_hash": raised_hash,
+                "question_ids": [question["id"] for question in discoverable],
+                "questions": copy.deepcopy(discoverable), "prior_output": record.get("output"),
+                "prior_report": copy.deepcopy(value), "created_at": support.now()}
+            state.update(status="RUNNING", phase="PLANNING", next_stage=stage)
+            return value, True
+    _label_unresolved(state, questions)
+    return value, False
+
+
+def _label_unresolved(state, questions):
+    """Runner-authored, visible relabelling; never a fabricated answer."""
+    for index, question in enumerate(questions):
+        if question.get("kind") == "discoverable":
+            questions[index] = {**question, "kind": "decision", "why": (
+                "Not determinable from the workspace within this clarification episode's single "
+                "investigation pass. " + question["why"])}
+            goals.clarification_episode(state).setdefault("converted_to_decision", []).append(question["id"])
+
+
 def apply_planning(state, stage, value, record):
     # Older saved reports predate explicit, user-backed conflict resolutions.
     # An absent list supplies no authority to resolve any conflict.
     if "conflict_resolutions" in planning_unit.SCHEMAS[stage]["properties"]:
         value = {"conflict_resolutions": [], **value}
-    support.validate_schema(value, planning_unit.SCHEMAS[stage])
+    checked = value
+    if stage == "requirements_gather" and isinstance(value.get("proposed_assumptions"), list):
+        # A pre-structured report's plain-string assumptions stay readable as legacy.
+        checked = {**value, "proposed_assumptions": [row for row in value["proposed_assumptions"]
+                                                     if not isinstance(row, str)]}
+    support.validate_schema(checked, planning_unit.SCHEMAS[stage])
+    value, deferred = _clarify_discoverable(state, stage, value, record)
+    if deferred:
+        return
     if stage == "requirements_gather":
         if not value["intended_outcome"].strip() or not value["required_behaviors"] or not value["acceptance_tests"]:
             raise ValueError("Requirements handoff needs an outcome, behaviors, and acceptance tests")
@@ -257,7 +382,10 @@ def apply_planning(state, stage, value, record):
         if handoff:
             pending = {question["id"] for question in handoff["report"]["open_questions"]}
             preserved = {question["id"] for question in value["contract"]["open_blocking_questions"]}
-            missing = pending - preserved - set(state.get("answers", {}))
+            episode_id = (state.get("clarification_episode") or {}).get("id")
+            resolved = {row["question_id"] for row in state.get("machine_resolutions", [])
+                        if row.get("episode_id") == episode_id}
+            missing = pending - preserved - set(state.get("answers", {})) - resolved
             if missing:
                 raise ValueError("Planner dropped unresolved requirements questions: " + ", ".join(sorted(missing)))
         _bind_plan(state, value, "glm_draft")

@@ -111,6 +111,19 @@ The Requirements Gatherer saves a separate structured report under the run's `it
 directory. The Planner receives that artifact, originates alternatives and a task DAG,
 and can push back on the Plan Reviewer using source evidence. Unanswered requirements
 questions cannot silently disappear from the draft.
+
+Each question is classified by `kind` (`discoverable`, `inferable`, or `decision`),
+`category`, and `delegable`. A **discoverable** question, one the workspace can answer,
+is never shown to you. The first time the Requirements Gatherer or Planner asks one in a
+clarification episode, the runner holds that report back and re-runs the same stage once
+with the questions, the report that raised them, and its hash. That single pass must
+resolve each question from cited workspace files (a `machine_resolution`, accepted only
+for technical facts, never for cost, quota, permission, side-effect or outcome choices),
+keep it as a decision, or record an `access_blocker` when the source is missing.
+Anything still discoverable afterwards is shown to you as a labelled decision; there is
+no second pass. The episode, and so the pass, is renewed only by your own new input: a
+non-delegated `--answer`, `--feedback`, or `--edit-goal`. Delegating a default, rejecting
+an assumption, or the model regenerating question IDs does not renew it.
 Reviewer concerns have stable IDs; every concern requires a Planner response and a reviewer decision,
 including a concrete acceptance test. The final displayed brief includes the technical
 approach, milestones, and **first bounded implementation task**, all covered by its

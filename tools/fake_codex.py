@@ -65,10 +65,10 @@ if stage == "requirements_gather":
         "constraints": draft["constraints"],
         "acceptance_tests": ["Valid and invalid CLI input have the requested outcomes"],
         "source_refs": [f"{name}:1" for name in ("greet.py", "bye.py") if Path(name).is_file()],
-        "proposed_assumptions": ["Use a local CLI if the user chooses that interface"],
+        "proposed_assumptions": [{"id": "A1", "text": "Use a local CLI if the user chooses that interface", "kind": "inferable", "category": "behavior", "convention_ref": "task", "rationale": "The task asks for a local tool", "supports": []}],
         "open_questions": draft["open_blocking_questions"],
         "requirements": [], "ignored_statements": [], "conflicts": [], "proposed_reframes": [],
-        "ignored_requirements": [],
+        "ignored_requirements": [], "machine_resolutions": [], "access_blockers": [],
     }
 elif stage == "astra_discovery":
     draft = body(questions=not data["saved_answers"], human=mode == "standard")
@@ -92,7 +92,8 @@ elif stage == "astra_discovery":
         source = next((name for name in ("greet.py", "bye.py") if Path(name).is_file()), None)
         result.update(code_refs=[f"{source}:1"] if source else ["goal_contract.body"],
                       alternatives=["A web endpoint would need deployment"],
-                      uncertainties=[], contract_changes=[], requirement_trace=[], conflict_resolutions=[])
+                      uncertainties=[], contract_changes=[], requirement_trace=[], conflict_resolutions=[],
+                      machine_resolutions=[], access_blockers=[])
 elif stage == "astra_challenge":
     result = {"summary": "Check whitespace-only input", "concerns": [{"id": "P1", "concern": "Empty includes whitespace",
         "evidence_refs": ["goal_contract.body.important_failure_cases"], "requested_change": "Specify whitespace rejection",
@@ -104,7 +105,7 @@ elif stage == "glm_revise":
     source = next((name for name in ("greet.py", "bye.py") if Path(name).is_file()), None)
     result = {"contract": draft, "summary": "Added whitespace case",
         "code_refs": [f"{source}:1"] if source else ["goal_contract.body"],
-        "contract_changes": [], "requirement_trace": [], "conflict_resolutions": [],
+        "contract_changes": [], "requirement_trace": [], "conflict_resolutions": [], "machine_resolutions": [], "access_blockers": [],
         "responses": [{"concern_id": "P1", "response": "Whitespace is invalid", "evidence_refs": ["goal_contract.body"],
                        "change": "Added whitespace case", "acceptance_test": "Whitespace input exits 2"}]}
 elif stage == "astra_finalize":

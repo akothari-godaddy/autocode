@@ -592,6 +592,9 @@ def install_draft(state, body, *, origin, allow_legacy=False, changes=None):
     contract.update(hash=s.digest(contract), approval_status="draft", approval_event=None,
                     origin=origin, created_at=s.now(), declared_changes=copy.deepcopy(changes or []))
     state["goal_contract"] = contract
+    if origin == "user_cli_edit":
+        # An authenticated scope change is new user intent.
+        start_clarification_episode(state, "edit_goal:r" + str(revision))
     invalidate(state, "Contract revision changed; revalidate the current artifact")
     if state.get("current_task"):
         state.setdefault("task_archive", []).append(state.pop("current_task"))
@@ -782,9 +785,10 @@ def feedback(state, text):
     if state.get("user_request", {}).get("kind") == "human_review":
         raise ValueError("Record the artifact review with --approve-review, not brief feedback")
     event = {"kind": "brief_feedback", "id": "feedback-" + uuid.uuid4().hex[:12], "actor": "user_cli", "at": s.now(),
-             "text": text.strip(), "contract_token": token(state["goal_contract"])}
+             "text": text.strip(), "contract_token": token(state["goal_contract"]), "starts_episode": True}
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
+    start_clarification_episode(state, event["id"])
     state["goal_contract"].update(approval_status="draft", approval_event=None)
     invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
     first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
@@ -799,9 +803,10 @@ def apply_intervention_feedback(state, receipt, applied_receipt):
              "at": applied_receipt["applied_at"], "text": receipt["text"],
              "contract_token": receipt.get("observed_goal_token"), "receipt_id": receipt["id"],
              "retained_work": {"current_task": copy.deepcopy(state.get("current_task")),
-                               "stages": len(state.get("stages", []))}}
+                               "stages": len(state.get("stages", []))}, "starts_episode": True}
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
+    start_clarification_episode(state, event["id"])
     if state.get("status") == "TASK_COMPLETE":
         state.setdefault("completion_archive", []).append({
             "completed_at": state.pop("completed_at", None), "decision": state.pop("final_decision", None),
@@ -826,8 +831,13 @@ def answer(state, question_id, text, *, delegated=False):
     event = {"kind": "delegated" if delegated else "answer", "actor": "user_cli", "at": s.now(),
              "question_id": question_id, "question": q, "text": q["proposed_default"] if delegated else text,
              "contract_token": token(state["goal_contract"])}
+    if not delegated:
+        # New user intent; delegation only accepts an already-proposed default.
+        event["starts_episode"] = True
     state.setdefault("user_events", []).append(event)
     state.setdefault("answers", {})[question_id] = event
+    if not delegated:
+        start_clarification_episode(state, "answer:" + question_id)
     state["pending_questions"] = [row for row in state["pending_questions"] if row["id"] != question_id]
     body = state.get("goal_contract", {}).get("body", {})
     if "open_blocking_questions" in body:
@@ -842,6 +852,24 @@ def answer(state, question_id, text, *, delegated=False):
     contract = state["goal_contract"]
     contract["hash"] = s.digest({k: contract[k] for k in ("task_id", "revision", "body")})
     invalidate(state, "A new user answer requires a reviewed draft")
+
+
+def start_clarification_episode(state, started_by):
+    """Begin a new runner-owned clarification episode. Only a saved user event
+    that changes intent calls this (a non-delegated answer, brief feedback, an
+    applied intervention, or an edited goal). Model output never does, so
+    regenerated question IDs or reworded handoffs cannot replenish the one
+    investigation pass. A pending investigation from the old episode is moot."""
+    state["clarification_episode"] = {"id": "episode-" + uuid.uuid4().hex[:12], "started_by": started_by,
+                                      "started_at": s.now(), "investigation_used": False,
+                                      "used_at": None, "used_stage": None}
+    state.pop("investigation_request", None)
+    return state["clarification_episode"]
+
+
+def clarification_episode(state):
+    """The current episode, created on first use. Legacy runs have none."""
+    return state.get("clarification_episode") or start_clarification_episode(state, "initial_task")
 
 
 def delegate_all(state):
