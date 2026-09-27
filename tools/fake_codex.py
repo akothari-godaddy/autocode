@@ -68,6 +68,7 @@ if stage == "requirements_gather":
         "proposed_assumptions": ["Use a local CLI if the user chooses that interface"],
         "open_questions": draft["open_blocking_questions"],
         "requirements": [], "ignored_statements": [], "conflicts": [], "proposed_reframes": [],
+        "ignored_requirements": [],
     }
 elif stage == "astra_discovery":
     draft = body(questions=not data["saved_answers"], human=mode == "standard")
@@ -114,7 +115,8 @@ elif stage == "astra_finalize":
     blocked = mode == "planning-blocked"
     if blocked:
         draft["open_blocking_questions"] = [{"id": "P2", "question": "Should whitespace be rejected?",
-            "why": "Unresolved input semantics", "options": ["Reject", "Accept"], "proposed_default": ""}]
+            "why": "Unresolved input semantics", "options": ["Reject", "Accept"], "proposed_default": "",
+            "kind": "decision", "category": "behavior", "delegable": False}]
     result = {"contract": draft, "summary": "Ready for approval" if not blocked else "User decision required",
         "contract_changes": [], "requirement_trace": [], "conflict_resolutions": [],
         "decisions": [{"concern_id": "P1", "decision": "Reject whitespace" if not blocked else "Ask the user",

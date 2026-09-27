@@ -31,11 +31,19 @@ CHANGE = obj({"item": S, "change": {"type": "string", "enum": ["removed", "rewor
               "answer_id": S, "replacement": S})
 TRACE = obj({"requirement_id": S, "disposition": {"type": "string", "enum": ["covered", "excluded", "superseded"]},
              "evidence": S})
+# A structured assumption is {id, text, kind, category, convention_ref, rationale,
+# supports}; a legacy plain string is also accepted (goals.normalize_assumption
+# and goals.validate_assumptions handle both). The generic schema validator has
+# no union type, so the property itself stays untyped-per-item here; semantic
+# validation happens in check_requirement_handoff.
+ASSUMPTIONS = {"type": "array"}
+IGNORED_REQUIREMENT = obj({"requirement_id": S, "reason": S,
+    "basis": {"type": "string", "enum": ["user_answer", "user_feedback"]}, "event_id": S})
 SCHEMAS = {
     "requirements_gather": obj({
         "summary": S, "intended_outcome": S, "required_behaviors": SS,
         "constraints": SS, "acceptance_tests": SS, "source_refs": SS,
-        "proposed_assumptions": SS,
+        "proposed_assumptions": ASSUMPTIONS,
         "open_questions": {"type": "array", "maxItems": 3, "items": goals.QUESTION},
         "requirements": {"type": "array", "items": REQUIREMENT},
         "ignored_statements": SS,
@@ -61,6 +69,10 @@ SCHEMAS = {
 # Optional for old saved reports; new prompts require this whenever intent must change.
 SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
     "type": "array", "items": obj({"requirement_id": S, "proposal": S, "question_id": S})}
+# Optional; required only when a refreshed handoff drops a requirement the
+# previous handoff had (goals.check_requirement_handoff enforces the citation).
+SCHEMAS["requirements_gather"]["properties"]["ignored_requirements"] = {
+    "type": "array", "items": IGNORED_REQUIREMENT}
 
 
 def enabled(state):

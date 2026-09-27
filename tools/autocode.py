@@ -2038,6 +2038,12 @@ def main(unit=None) -> int:
     parser.add_argument("--feedback", metavar="TEXT", help="Send brief feedback to the Requirements Gatherer; never approves implementation")
     parser.add_argument("--delegate", action="append", default=[], metavar="QUESTION_ID",
                         help="Explicitly accept the proposed default and delegate this decision")
+    parser.add_argument("--delegate-all", action="store_true",
+                        help="Delegate every currently pending question marked delegable with a proposed default; "
+                             "never grants approval and invalidates any existing one")
+    parser.add_argument("--reject-assumption", action="append", default=[], metavar="ASSUMPTION_ID",
+                        help="Reject a structured assumption from the current requirements handoff; "
+                             "never grants approval and invalidates any existing one")
     parser.add_argument("--approve-goal", metavar="TOKEN", help="Approve exactly a previously displayed revision")
     parser.add_argument("--edit-goal", type=Path, help="Load a revised contract body JSON; invalidates approval")
     parser.add_argument("--approve-review", action="append", default=[], metavar="CRITERION_ID")
@@ -2067,7 +2073,8 @@ def main(unit=None) -> int:
         if getattr(args, flag) is not None and getattr(args, flag) < 0:
             parser.error(f"--{flag.replace('_', '-')} must be nonnegative")
     actions = [args.status, args.dry_run, args.migrate_only, args.show_goal,
-               bool(args.answer or args.delegate), bool(args.approve_goal), bool(args.edit_goal),
+               bool(args.answer or args.delegate), bool(args.delegate_all), bool(args.reject_assumption),
+               bool(args.approve_goal), bool(args.edit_goal),
                bool(args.approve_review), bool(args.reconcile_review),
                args.feedback is not None, args.accept_completion, args.abandon_stage is not None, args.request_milestone_checkpoints]
     if sum(bool(a) for a in actions) > 1:
@@ -2316,7 +2323,8 @@ def main(unit=None) -> int:
             if args.migrate_only:
                 print("Migrated to an unapproved draft; saved work retained; no agent launched")
                 return 0
-            user_action = any((args.show_goal, args.answer, args.delegate, args.approve_goal, args.edit_goal,
+            user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
+                               args.approve_goal, args.edit_goal,
                                args.approve_review, args.reconcile_review,
                                args.feedback is not None, args.accept_completion))
             if user_action:
@@ -2343,6 +2351,10 @@ def main(unit=None) -> int:
                             goals.answer(candidate, question, response)
                     for question in args.delegate:
                         goals.answer(candidate, question, "accept default", delegated=True)
+                    if args.delegate_all:
+                        goals.delegate_all(candidate)
+                    for assumption_id in args.reject_assumption:
+                        goals.reject_assumption(candidate, assumption_id)
                     if args.feedback is not None:
                         goals.feedback(candidate, args.feedback)
                     if args.edit_goal:

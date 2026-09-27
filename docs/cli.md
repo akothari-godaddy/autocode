@@ -44,6 +44,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--answer 'Q1=…'` | Answer a requirements question (repeatable). |
 | `--feedback '…'` | Send a correction; returns to discovery and requires fresh approval. |
 | `--delegate Q1` | Accept a question's proposed default. |
+| `--delegate-all` | Delegate every pending question marked `delegable` with a proposed default; blocks (no partial effect) if any pending question is not. Never approves; invalidates any existing approval. |
+| `--reject-assumption A1` | Reject a structured assumption from the current requirements handoff (repeatable). Never approves; invalidates any existing approval. |
 | `--show-goal` | Display the current contract/revision. |
 | `--approve-goal 'r3:<hash>'` | Approve the exact displayed revision. |
 | `--edit-goal body.json` | Load a full contract body as a new draft revision. |

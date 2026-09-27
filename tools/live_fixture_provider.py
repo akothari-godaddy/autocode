@@ -211,6 +211,7 @@ def main() -> int:
             "ignored_statements": [],
             "conflicts": [],
             "proposed_reframes": [],
+            "ignored_requirements": [],
         }
     elif stage == "astra_discovery":
         report = {

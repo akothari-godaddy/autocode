@@ -82,7 +82,7 @@ if data.get("report_repair"):
                  "acceptance_tests": ["Valid and invalid CLI input have the requested outcomes"],
                  "source_refs": ["task"], "proposed_assumptions": ["Use a local CLI"],
                  "open_questions": [], "requirements": [], "ignored_statements": [], "conflicts": [],
-                 "proposed_reframes": []})
+                 "proposed_reframes": [], "ignored_requirements": []})
     elif stage in ("astra_discovery", "glm_revise"):
         draft = dict((original.get("contract") or {}).get("body") or body(questions=True, human=False))
         if draft.get("open_blocking_questions"):
@@ -131,7 +131,7 @@ if stage == "requirements_gather":
         "proposed_assumptions": ["Use a local CLI if the user chooses that interface"],
         "open_questions": draft["open_blocking_questions"],
         "requirements": [], "ignored_statements": [], "conflicts": [],
-        "proposed_reframes": [],
+        "proposed_reframes": [], "ignored_requirements": [],
     }
 elif stage == "astra_discovery":
     draft = body(questions=not data["saved_answers"], human=False)
