@@ -1,5 +1,8 @@
 """Runner boundary integration, with no live models or autonomous code writes."""
 import copy
+import os
+import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +11,11 @@ from . import test_report_repair as repairs
 from .goal_fixtures import approve_fixture
 
 runner, support = base.runner, base.s
+# The exact module instance runner.autopilot itself dispatches through: importing
+# tools.units.autoresolver directly here would load a second, package-relative
+# copy whose autocode_support.Paused is a different class than the one raised
+# through runner's own bare (sys.path) import chain.
+diagnosis_unit = runner.autopilot.unit_module('astra_diagnose')
 
 
 class ResolverRuntimeTests(unittest.TestCase):
@@ -19,6 +27,15 @@ class ResolverRuntimeTests(unittest.TestCase):
 
     def boundary(self):
         return runner.resolver_runtime.boundary(runner, self.state, self.run, self.root)
+
+    def repeated_terra_failure(self):
+        """A repeated, report-repair-exhausted Builder failure, paused as such."""
+        pending = self.queue()
+        entry = self.state['failure_history'][pending['original']['failure_key']]
+        entry['count'] = 3
+        entry['last_error'] = 'Missing summary'
+        self.state.update(status='PAUSED_REPEATED_FAILURE')
+        return pending['original']
 
     def test_report_repair_gate_is_durable_idempotent_and_runner_owned(self):
         self.queue()
@@ -211,3 +228,228 @@ class ResolverRuntimeTests(unittest.TestCase):
         runner.reset_report_repair_for_resume(self.state)
         self.assertEqual(3, self.state['report_repair_lifetime_attempts'])
         self.assertEqual(events_before + 1, len(self.state['user_events']))
+
+
+class OperationalDiagnosisTests(unittest.TestCase):
+    """The astra_diagnose route: admission, model completion, and their shared budget."""
+    queue = repairs.RepairTests.queue
+    repeated_terra_failure = ResolverRuntimeTests.repeated_terra_failure
+
+    def setUp(self):
+        base.RetrofitTest.setUp(self)
+        approve_fixture(self.state, runner.goals)
+
+    def admit(self):
+        return runner.resolver_runtime.admit_operational_diagnosis(runner, self.state, self.run, self.root)
+
+    def test_admission_requires_paused_repeated_failure_status(self):
+        self.queue()
+        with self.assertRaisesRegex(ValueError, 'paused for repeated failure'):
+            self.admit()
+
+    def test_admission_requires_an_exhausted_report_repair_identity(self):
+        self.state.update(status='PAUSED_REPEATED_FAILURE')
+        with self.assertRaisesRegex(ValueError, 'retry-failed-stage'):
+            self.admit()
+
+    def test_admission_is_scoped_to_a_terra_failure(self):
+        self.queue(role='sol', stage='sol')
+        pending = self.state['pending_report_repair']
+        entry = self.state['failure_history'][pending['original']['failure_key']]
+        entry['count'] = 3
+        self.state.update(status='PAUSED_REPEATED_FAILURE')
+        with self.assertRaisesRegex(ValueError, 'scoped to a repeated Builder'):
+            self.admit()
+
+    def test_admission_requires_actual_repetition(self):
+        self.queue()
+        self.state.update(status='PAUSED_REPEATED_FAILURE')
+        with self.assertRaisesRegex(ValueError, 'No unchanged repeated failure'):
+            self.admit()
+
+    def test_admission_dispatches_astra_diagnose_and_charges_the_run_level_cap(self):
+        record = self.repeated_terra_failure()
+        self.admit()
+        self.assertEqual('astra_diagnose', self.state['next_stage'])
+        self.assertEqual('RUNNING', self.state['status'])
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        request = self.state['diagnosis_request']
+        self.assertEqual('terra', request['original_stage'])
+        self.assertEqual(record['failure_key'], request['failure_key'])
+        self.assertEqual(3, request['repeated_count'])
+        outcome = self.state['stages'][-1]
+        self.assertTrue(outcome['runner_owned'])
+        self.assertEqual('retry', outcome['decision']['action'])
+        self.assertEqual(1, outcome['receipt']['attempt'])
+        saved = support.read(self.run / 'state.json')
+        self.assertEqual('astra_diagnose', saved['next_stage'])
+        # The superseded report-repair pointer is archived, not left dangling
+        # against a next_stage its own stale-route check would now reject.
+        self.assertNotIn('pending_report_repair', self.state)
+        self.assertEqual('Superseded by an admitted operational diagnosis',
+                         self.state['report_repair_archive'][-1]['reason'])
+
+    def test_admission_exhausted_run_level_cap_escalates_without_dispatch(self):
+        self.repeated_terra_failure()
+        self.state.setdefault('resolver', {})['diagnostic_calls'] = runner.resolver_runtime.diagnostic_call_limit(self.state)
+        with self.assertRaises(support.Paused) as caught:
+            self.admit()
+        self.assertEqual('PAUSED_REPEATED_FAILURE', caught.exception.status)
+        self.assertNotIn('diagnosis_request', self.state)
+        self.assertEqual('escalate', self.state['stages'][-1]['decision']['action'])
+
+    def test_admission_is_idempotent_after_the_run_level_cap_is_charged(self):
+        self.repeated_terra_failure()
+        self.admit()
+        # A second admission attempt is refused by the status check alone,
+        # before any budget is touched a second time.
+        with self.assertRaisesRegex(ValueError, 'paused for repeated failure'):
+            self.admit()
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+
+    def test_finish_accepts_retry_and_clears_the_failure_identity(self):
+        record = self.repeated_terra_failure()
+        self.admit()
+        result = runner.resolver_runtime.finish_operational_diagnosis(
+            self.state, self.run, {'action': 'retry', 'rationale': 'Missing summary field; add it explicitly.',
+                                    'guidance': 'Include a nonempty summary before resubmitting.'})
+        self.assertTrue(result)
+        self.assertEqual('terra', self.state['next_stage'])
+        self.assertEqual('RUNNING', self.state['status'])
+        self.assertNotIn('diagnosis_request', self.state)
+        self.assertNotIn(record['failure_key'], self.state['failure_history'])
+        self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
+
+    def test_finish_rejects_escalate_and_preserves_the_failure_identity(self):
+        record = self.repeated_terra_failure()
+        self.admit()
+        with self.assertRaises(support.Paused) as caught:
+            runner.resolver_runtime.finish_operational_diagnosis(
+                self.state, self.run, {'action': 'escalate', 'rationale': 'Cause is unclear; needs a human decision.'})
+        self.assertEqual('PAUSED_REPEATED_FAILURE', caught.exception.status)
+        self.assertIn('diagnosis_request', self.state)
+        self.assertIn(record['failure_key'], self.state['failure_history'])
+
+    def test_finish_shares_the_two_attempt_budget_with_admission(self):
+        self.repeated_terra_failure()
+        self.admit()
+        with self.assertRaises(support.Paused):
+            runner.resolver_runtime.finish_operational_diagnosis(
+                self.state, self.run, {'action': 'retry', 'rationale': ''})  # malformed: empty rationale rejected below
+        # The malformed proposal still consumed the second and final evaluation.
+        self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
+
+    def test_diagnostic_call_limit_rejects_an_out_of_range_setting(self):
+        self.state['settings']['operational_diagnosis'] = {'max_calls_per_run': 9}
+        with self.assertRaises(ValueError):
+            runner.resolver_runtime.diagnostic_call_limit(self.state)
+
+    def test_cli_diagnose_failed_stage_reaches_astra_diagnose_and_retries_terra(self):
+        """The real production dispatch path (autocode.main), not a test helper."""
+        local = {'auth_mode': 'fixture'}
+        self.state['settings'].update(transport_identity=local,
+            limits={'iteration_ceiling': 18, 'max_seconds': None, 'max_reported_tokens': None,
+                    'no_progress_batches': 3, 'automatic_retries': 0})
+        self.state['workspace'] = str(self.root.resolve())
+        self.repeated_terra_failure()
+        support.atomic_json(self.run / 'state.json', self.state)
+        called = []
+
+        def fake_role(**kwargs):
+            stage = kwargs['state']['next_stage']
+            called.append(stage)
+            out = self.run / f'{stage}-cli.json'
+            ev = self.run / f'{stage}-cli.jsonl'
+            ev.write_text('{"type":"turn.completed"}\n')
+            if stage == 'astra_diagnose':
+                value = {'diagnosis': 'The summary field was omitted from the report.',
+                         'recommendation': {'action': 'retry', 'rationale': 'Include a nonempty summary field.',
+                                            'guidance': 'Add commands_run, results and a nonempty summary.'}}
+                support.atomic_json(out, value)
+                record = {'role': kwargs['role'], 'stage': stage, 'iteration': kwargs['state']['iteration'],
+                          'output': str(out), 'events': str(ev), 'changed_files': [],
+                          'source_revision': kwargs['state']['diagnosis_request']['source_revision'], 'duration_seconds': 0.01}
+                return value, record
+            raise support.Paused('PAUSED_REQUESTED', 'stop after the diagnosed retry for this test')
+
+        argv = ['autocode.py', '--workspace', str(self.root.resolve()), '--run-dir', str(self.run.resolve()),
+                '--resume-paused', '--diagnose-failed-stage']
+        # A registry home nested inside the git workspace (the base fixture's own
+        # convenience) is untracked and would make the run's own bookkeeping
+        # writes look like uncommitted source drift; keep it genuinely external
+        # here, matching how AUTOCODE_HOME works outside this test suite.
+        registry_home = tempfile.TemporaryDirectory()
+        self.addCleanup(registry_home.cleanup)
+        with patch.dict(os.environ, {'AUTOCODE_HOME': registry_home.name}), \
+             patch.object(sys, 'argv', argv), patch.object(support, 'assert_no_legacy_process'), \
+             patch.object(support, 'local_settings', return_value=local), patch.object(runner, 'run_role', side_effect=fake_role):
+            code = runner.main()
+        self.assertEqual(2, code)
+        self.assertEqual(['astra_diagnose', 'terra'], called)
+        saved = support.read(self.run / 'state.json')
+        self.assertEqual('PAUSED_REQUESTED', saved['status'])
+        self.assertEqual('terra', saved['next_stage'])
+        self.assertNotIn('diagnosis_request', saved)
+        self.assertEqual(1, saved['resolver']['diagnostic_calls'])
+        self.assertEqual([2], list(saved['resolver']['attempts'].values()))
+
+    def test_cli_rejects_combining_diagnose_and_retry_failed_stage(self):
+        argv = ['autocode.py', '--workspace', str(self.root.resolve()), '--run-dir', str(self.run.resolve()),
+                '--resume-paused', '--diagnose-failed-stage', '--retry-failed-stage']
+        with patch.object(sys, 'argv', argv):
+            with self.assertRaises(SystemExit) as caught:
+                runner.main()
+        self.assertEqual(2, caught.exception.code)
+
+
+class OperationalDiagnosisUnitTests(unittest.TestCase):
+    """tools/units/autoresolver.py's astra_diagnose prepare/validate, standalone."""
+
+    def setUp(self):
+        base.RetrofitTest.setUp(self)
+        approve_fixture(self.state, runner.goals)
+        self.state['workspace'] = str(self.root)
+        pending = repairs.RepairTests.queue(self)
+        record = pending['original']
+        self.state.update(status='PAUSED_REPEATED_FAILURE')
+        self.state['diagnosis_request'] = {
+            'contract_hash': self.state['goal_contract']['hash'],
+            'source_revision': support.snapshot(self.root)['revision'],
+            'original_stage': 'terra', 'failure_key': record.get('failure_key'), 'blocker_id': 'b1',
+            'description': 'Repeated Builder report rejection', 'repeated_count': 3,
+            'evidence': [record['output'], record['events']], 'evidence_hashes': {}}
+        self.state['next_stage'] = 'astra_diagnose'
+
+    def test_prepare_diagnosis_is_read_only_with_a_bounded_schema(self):
+        request = diagnosis_unit.prepare_diagnosis(self.state, 'astra_diagnose', self.run / 'state.json', runner.SCHEMA_DIR)
+        self.assertFalse(request.allow_write)
+        self.assertEqual({'diagnosis', 'recommendation'}, set(request.schema['required']))
+        self.assertEqual(['retry', 'escalate'], request.schema['properties']['recommendation']['properties']['action']['enum'])
+        self.assertIn('diagnosis_request', request.prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+
+    def test_prepare_diagnosis_rejects_the_wrong_stage(self):
+        with self.assertRaises(ValueError):
+            diagnosis_unit.prepare_diagnosis(self.state, 'astra_resolve', self.run / 'state.json', runner.SCHEMA_DIR)
+
+    def test_validate_diagnosis_rejects_a_missing_diagnosis(self):
+        record = {'source_revision': self.state['diagnosis_request']['source_revision'], 'changed_files': []}
+        with self.assertRaises(ValueError):
+            diagnosis_unit.validate_diagnosis(self.state, {'diagnosis': '  ', 'recommendation': {
+                'action': 'retry', 'rationale': 'x'}}, record, self.root)
+
+    def test_validate_diagnosis_rejects_an_invalid_action(self):
+        record = {'source_revision': self.state['diagnosis_request']['source_revision'], 'changed_files': []}
+        with self.assertRaises(ValueError):
+            diagnosis_unit.validate_diagnosis(self.state, {'diagnosis': 'Looked at the logs',
+                'recommendation': {'action': 'implement', 'rationale': 'x'}}, record, self.root)
+
+    def test_validate_diagnosis_rejects_source_drift(self):
+        record = {'source_revision': 'a-different-revision', 'changed_files': []}
+        with self.assertRaises(support.Paused):
+            diagnosis_unit.validate_diagnosis(self.state, {'diagnosis': 'Looked at the logs',
+                'recommendation': {'action': 'escalate', 'rationale': 'x'}}, record, self.root)
+
+    def test_validate_diagnosis_accepts_a_well_formed_recommendation(self):
+        record = {'source_revision': self.state['diagnosis_request']['source_revision'], 'changed_files': []}
+        diagnosis_unit.validate_diagnosis(self.state, {'diagnosis': 'Looked at the logs',
+            'recommendation': {'action': 'retry', 'rationale': 'Add the missing summary field'}}, record, self.root)

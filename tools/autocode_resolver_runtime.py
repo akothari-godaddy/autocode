@@ -83,6 +83,50 @@ def load_ledger(saved):
                for key, pair in saved.get('cache', {}).items()})
 
 
+def _evaluate(state, run_dir, blocker, context, evidence, boundaries, proposal):
+    """Resolve one request against the durable ledger and record its receipt.
+
+    Shared by every admission and completion path so budget, idempotency and
+    receipt recording behave identically whether the proposal is entirely
+    runner-owned (report repair, blocked validation, user boundary, diagnosis
+    admission) or was derived from a model's diagnosis (diagnosis completion).
+    """
+    contract = state['goal_contract']
+    snapshot = policy.ContractSnapshot(**{key: contract[key] for key in
+        ('task_id', 'revision', 'hash', 'body', 'approval_status', 'approval_event')})
+    saved = state.setdefault('resolver', {})
+    try:
+        ledger = load_ledger(saved)
+    except (KeyError, IndexError, TypeError, ValueError, AttributeError) as error:
+        raise support.Paused('PAUSED_RESOLVER_STATE', 'Saved resolver ledger is malformed; reconcile before retry') from error
+    started = time.monotonic()
+    decision, receipt = policy.resolve(policy.ResolverRequest(
+        blocker, snapshot, context, evidence, boundaries, ledger, proposed_resolution=proposal, clock=support.now))
+    saved.update(attempts=ledger.attempts, outcomes=ledger.outcomes,
+                 cache={key: plain(pair) for key, pair in ledger.cache.items()})
+    # Fallbacks have no policy cache key; make their runner records idempotent too.
+    outcome_key = receipt.idempotency_key or support.digest({'blocker': plain(blocker), 'context': context,
+                                                           'contract_hash': contract['hash']})
+    recorded = saved.setdefault('recorded', [])
+    if outcome_key not in recorded:
+        path = Path(run_dir) / 'resolver' / (outcome_key + '.json')
+        record = {'stage': 'resolver', 'role': 'resolver', 'engine': 'runner', 'runner_owned': True,
+                  'iteration': state['iteration'], 'finished_at': support.now(), 'exit_code': 0,
+                  'duration_seconds': time.monotonic() - started, 'runner_calls': 0,
+                  'metrics': {'provider_tokens': {'input_tokens': 0, 'output_tokens': 0}},
+                  'output': str(path), 'summary': decision.rationale,
+                  'decision': plain(decision), 'receipt': plain(receipt)}
+        support.atomic_json(path, record)
+        state.setdefault('stages', []).append(record)
+        state.setdefault('history', []).append(record)
+        recorded.append(outcome_key)
+    # A malformed proposal can yield the policy's diagnostic "retry" outcome;
+    # only a validated, runner-proposed repair may authorize dispatch.
+    accepted = (receipt.in_scope_reason == 'proposal within boundaries'
+                and decision.action == proposal.action)
+    return decision, receipt, accepted
+
+
 def boundary(runner, state, run_dir, workspace):
     """Record one deterministic decision at a stopped, approved stage boundary."""
     if (state.get('active_stage') or state.get('version', 2) < 3
@@ -135,48 +179,13 @@ def boundary(runner, state, run_dir, workspace):
     if repeated or exhausted:
         proposal = policy.Proposal('escalate', {'reason': 'Persisted failure identity or report-repair budget exhausted'},
                                    'Existing failure and repair limits take precedence')
-    contract = state['goal_contract']
-    snapshot = policy.ContractSnapshot(**{key: contract[key] for key in
-        ('task_id', 'revision', 'hash', 'body', 'approval_status', 'approval_event')})
-    saved = state.setdefault('resolver', {})
-    try:
-        ledger = load_ledger(saved)
-    except (KeyError, IndexError, TypeError, ValueError, AttributeError) as error:
-        raise support.Paused('PAUSED_RESOLVER_STATE', 'Saved resolver ledger is malformed; reconcile before retry') from error
-    # Stable identity controls the policy's budget; individual attempts control
-    # idempotency. Restarting alone changes neither.
-    blocker = policy.Blocker(support.digest(selected), kind, description, tuple(evidence))
     context = {'next_stage': state.get('next_stage'),
                'report_attempts': pending['attempts'] if pending else None,
                'evidence_attempt': failed.get('output') if failed else None,
                'failure_count': repeated['count'] if repeated else None}
-    started = time.monotonic()
-    decision, receipt = policy.resolve(policy.ResolverRequest(
-        blocker, snapshot, context, evidence,
-        policy.Boundaries(frozenset({'continue', 'retry', 'escalate'}), frozenset()),
-        ledger, proposed_resolution=proposal, clock=support.now))
-    saved.update(attempts=ledger.attempts, outcomes=ledger.outcomes,
-                 cache={key: plain(pair) for key, pair in ledger.cache.items()})
-    # Fallbacks have no policy cache key; make their runner records idempotent too.
-    outcome_key = receipt.idempotency_key or support.digest({'blocker': plain(blocker), 'context': context,
-                                                           'contract_hash': contract['hash']})
-    recorded = saved.setdefault('recorded', [])
-    if outcome_key not in recorded:
-        path = Path(run_dir) / 'resolver' / (outcome_key + '.json')
-        record = {'stage': 'resolver', 'role': 'resolver', 'engine': 'runner', 'runner_owned': True,
-                  'iteration': state['iteration'], 'finished_at': support.now(), 'exit_code': 0,
-                  'duration_seconds': time.monotonic() - started, 'runner_calls': 0,
-                  'metrics': {'provider_tokens': {'input_tokens': 0, 'output_tokens': 0}},
-                  'output': str(path), 'summary': decision.rationale,
-                  'decision': plain(decision), 'receipt': plain(receipt)}
-        support.atomic_json(path, record)
-        state.setdefault('stages', []).append(record)
-        state.setdefault('history', []).append(record)
-        recorded.append(outcome_key)
-    # A malformed proposal can yield the policy's diagnostic "retry" outcome;
-    # only a validated, runner-proposed repair may authorize dispatch.
-    accepted = (receipt.in_scope_reason == 'proposal within boundaries'
-                and decision.action == proposal.action)
+    decision, receipt, accepted = _evaluate(
+        state, run_dir, policy.Blocker(support.digest(selected), kind, description, tuple(evidence)),
+        context, evidence, policy.Boundaries(frozenset({'continue', 'retry', 'escalate'}), frozenset()), proposal)
     if decision.action == 'escalate' or not accepted:
         if request:
             # Preserve the actual pending question and exact approval boundary.
@@ -212,3 +221,123 @@ def reset_for_resume(state):
     state.setdefault('user_events', []).append({
         'kind': 'resolver_resume_epoch', 'actor': 'user_cli', 'at': support.now(),
         'cleared_attempts': prior, 'cleared_total': total, 'lifetime_attempts': saved['lifetime_attempts']})
+
+
+# Operational diagnosis: a bounded, read-only model diagnosis for a repeated
+# in-scope Builder (implementation) failure that the deterministic report-repair
+# route cannot resolve. This is deliberately narrower than the trigger matrix's
+# full "repeated failure" row: there is no automatic runner heuristic yet (the
+# exact automatic trigger is an open design question, left for a later
+# decision), so the route lands operator-triggered only, and only for the one
+# well-understood case -- a repeated Builder report rejection whose bounded
+# report-only repair is exhausted. A reviewer's own REWORK verdict keeps using
+# the existing, unrelated astra_resolve route.
+DIAGNOSIS_BOUNDARIES = policy.Boundaries(frozenset({'retry', 'escalate'}), frozenset())
+DIAGNOSTIC_CALL_DEFAULTS = {'max_calls_per_run': 2}
+
+
+def diagnostic_call_limit(state):
+    limit = state.get('settings', {}).get('operational_diagnosis', {}).get(
+        'max_calls_per_run', DIAGNOSTIC_CALL_DEFAULTS['max_calls_per_run'])
+    if type(limit) is not int or not 0 <= limit <= 8:
+        raise ValueError('operational_diagnosis.max_calls_per_run must be an integer from 0 to 8')
+    return limit
+
+
+def admit_operational_diagnosis(runner, state, run_dir, workspace):
+    """Explicitly admit one bounded, read-only diagnosis for a repeated Builder failure.
+
+    Requires an unchanged, thrice-repeated Builder (terra) report rejection
+    whose bounded report-only repair is exhausted -- the same identity
+    ``--retry-failed-stage`` inspects, but instead of blindly retrying it
+    routes through a model diagnosis whose recommendation the runner
+    independently validates, through the same bounded policy, before any
+    retry is authorized. Persists its own outcome durably (like ``boundary``),
+    since a later step in the same explicit-resume pass could still raise.
+    """
+    if state.get('status') != 'PAUSED_REPEATED_FAILURE':
+        raise ValueError('Diagnosis requires a run paused for repeated failure')
+    pending = state.get('pending_report_repair') or {}
+    record = pending.get('original')
+    if not record:
+        raise ValueError('Operational diagnosis requires an exhausted report-repair identity; use --retry-failed-stage instead')
+    if record.get('role') != 'terra' or record.get('stage') != 'terra':
+        raise ValueError('Operational diagnosis is scoped to a repeated Builder (terra) failure in this release')
+    repeated = failures.repeated(state, record)
+    if not repeated:
+        raise ValueError('No unchanged repeated failure to diagnose; fix the cause, then resume')
+    selected = {'stage': record['stage'], 'artifact_hash': record.get('source_revision'), 'failure_key': record.get('failure_key')}
+    blocker_id = support.digest(selected)
+    description = repeated.get('last_error') or 'Repeated Builder report rejection'
+    evidence = [record[key] for key in ('output', 'events') if record.get(key)]
+    diagnostic_calls = state.get('resolver', {}).get('diagnostic_calls', 0)
+    limit = diagnostic_call_limit(state)
+    if diagnostic_calls >= limit:
+        proposal = policy.Proposal('escalate', {'reason': f'Operational diagnostic budget exhausted for this run ({diagnostic_calls}/{limit})'},
+                                   'Run-level diagnostic call limit reached')
+    else:
+        proposal = policy.Proposal('retry', {'guidance': 'Route this repeated failure to a bounded read-only diagnosis before another blind retry.'},
+                                   'Repeated in-scope Builder failure eligible for bounded diagnosis')
+    context = {'next_stage': state.get('next_stage'), 'failure_count': repeated['count'],
+               'diagnostic_calls_used': diagnostic_calls, 'diagnostic_call_limit': limit}
+    blocker = policy.Blocker(blocker_id, 'implementation', description, tuple(evidence))
+    decision, receipt, accepted = _evaluate(state, run_dir, blocker, context, evidence, DIAGNOSIS_BOUNDARIES, proposal)
+    if decision.action == 'escalate' or not accepted:
+        state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=decision.rationale)
+        runner.write_json(Path(run_dir) / 'state.json', state)
+        raise support.Paused('PAUSED_REPEATED_FAILURE', decision.rationale)
+    saved = state.setdefault('resolver', {})
+    saved['diagnostic_calls'] = diagnostic_calls + 1
+    pins = {record[key]: support.file_hash(record[key]) for key in ('output', 'events')
+            if record.get(key) and Path(record[key]).is_file()}
+    state['diagnosis_request'] = {
+        'contract_hash': state['goal_contract']['hash'], 'source_revision': record.get('source_revision'),
+        'original_stage': record['stage'], 'failure_key': selected['failure_key'], 'blocker_id': blocker_id,
+        'description': description, 'repeated_count': repeated['count'], 'evidence': evidence, 'evidence_hashes': pins}
+    # The exhausted report-repair pointer is superseded by the diagnosis; leaving
+    # it would make the next dispatch's before_code_stage hook try to execute it
+    # against next_stage='astra_diagnose' and pause with PAUSED_STALE_REPORT_ROUTE.
+    state.setdefault('report_repair_archive', []).append({
+        'at': support.now(), 'reason': 'Superseded by an admitted operational diagnosis',
+        'repair': state.pop('pending_report_repair')})
+    state.update(status='RUNNING', phase='EXECUTING', next_stage='astra_diagnose')
+    state.pop('stop_reason', None)
+    runner.write_json(Path(run_dir) / 'state.json', state)
+
+
+def finish_operational_diagnosis(state, run_dir, recommendation):
+    """Validate a model's diagnosis recommendation against the same bounded
+    policy and per-incident budget used to admit the diagnosis (the second
+    of that budget's two evaluations), before authorizing any retry.
+
+    Called on the candidate state inside the commit-then-persist boundary
+    (like ``queue_resolution``/``finish_resolution``): it mutates ``state``
+    only and leaves persistence to that outer boundary, so a rejected
+    candidate never gets written.
+    """
+    request = state['diagnosis_request']
+    payload = {'reason': recommendation['rationale']}
+    if recommendation.get('guidance', '').strip():
+        payload['guidance'] = recommendation['guidance']
+    if recommendation.get('evidence_refs'):
+        payload['evidence_refs'] = recommendation['evidence_refs']
+    proposal = policy.Proposal(recommendation['action'], payload, recommendation['rationale'])
+    blocker = policy.Blocker(request['blocker_id'], 'implementation', request['description'], tuple(request['evidence']))
+    context = {'next_stage': state.get('next_stage'),
+               'diagnostic_calls_used': state.get('resolver', {}).get('diagnostic_calls'),
+               'failure_count': request.get('repeated_count')}
+    decision, receipt, accepted = _evaluate(state, run_dir, blocker, context, request['evidence'], DIAGNOSIS_BOUNDARIES, proposal)
+    if decision.action == 'retry' and accepted:
+        failure_key = request.get('failure_key')
+        original_stage = request['original_stage']
+        state.pop('diagnosis_request', None)
+        if failure_key:
+            state.get('failure_history', {}).pop(failure_key, None)
+            for row in state.get('stages', []):
+                if row.get('failure_key') == failure_key:
+                    row.pop('failure_key', None)
+        state.update(status='RUNNING', phase='EXECUTING', next_stage=original_stage)
+        state.pop('stop_reason', None)
+        return True
+    state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=decision.rationale)
+    raise support.Paused('PAUSED_REPEATED_FAILURE', decision.rationale)

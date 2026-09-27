@@ -63,7 +63,7 @@ UNITS = ("autoplanner", "autocode", "autoreview", "autoresolver")
 
 
 def unit_for(stage):
-    if stage == "astra_resolve":
+    if stage in ("astra_resolve", "astra_diagnose"):
         return "autoresolver"
     if stage in ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
         return "autoplanner"
@@ -457,6 +457,16 @@ def finish_resolution(state, value, record):
     state.setdefault('resolution_history', []).append(copy.deepcopy(plan))
 
 
+def apply_diagnosis_result(runtime, state, value, record, workspace, run_dir):
+    """Validate a model's bounded diagnosis and, only if accepted, retry its
+    original failed stage. A rejected or escalated diagnosis pauses; it never
+    grants a second chance beyond the two-evaluation budget already spent
+    across admission and this completion.
+    """
+    unit_module('astra_diagnose').validate_diagnosis(state, value, record, workspace)
+    runtime.resolver_runtime.finish_operational_diagnosis(state, run_dir, value['recommendation'])
+
+
 def apply_result(runtime, state, stage, value, record, workspace, run_dir):
     """Commit a unit result only after every transition and evidence gate succeeds."""
     candidate = copy.deepcopy(state)
@@ -473,6 +483,13 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
     if stage == "astra_resolve":
         unit_module(stage).validate(state, value, record, workspace)
         value = unit_module(stage).preserve_review_criteria(state, value)
+    if stage == "astra_diagnose":
+        # A bounded diagnosis+recommendation object, not a reviewer decision:
+        # it carries no acceptance_criteria/status and must never reach the
+        # shared astra*-report handling below.
+        apply_diagnosis_result(runtime, state, value, record, workspace, run_dir)
+        save_record(state, record)
+        return
     if stage == "astra_checkpoint":
         workflow.apply_checkpoint(runtime, state, value, record, workspace, run_dir)
         return

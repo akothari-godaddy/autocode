@@ -2225,6 +2225,10 @@ def main(unit=None) -> int:
     parser.add_argument("--resume-paused", action="store_true", help="Acknowledge a saved pause; uncertain stages still require reconciliation")
     parser.add_argument("--retry-failed-stage", action="store_true",
                         help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
+    parser.add_argument("--diagnose-failed-stage", action="store_true",
+                        help="For a repeated Builder failure whose report-repair is exhausted, admit one bounded "
+                             "read-only model diagnosis instead of a blind retry; requires --resume-paused; "
+                             "cannot combine with --retry-failed-stage")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
                         help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
@@ -2259,6 +2263,10 @@ def main(unit=None) -> int:
         parser.error("--retry-report requires --run-dir and --resume-paused")
     if args.retry_failed_stage and (not args.run_dir or not args.resume_paused):
         parser.error("--retry-failed-stage requires --run-dir and --resume-paused")
+    if args.diagnose_failed_stage and (not args.run_dir or not args.resume_paused):
+        parser.error("--diagnose-failed-stage requires --run-dir and --resume-paused")
+    if args.diagnose_failed_stage and args.retry_failed_stage:
+        parser.error("--diagnose-failed-stage and --retry-failed-stage are alternative responses to the same pause; use one")
     if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
         parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
     if unit and args.unit != unit:
@@ -2508,6 +2516,14 @@ def main(unit=None) -> int:
                                 authorize_failure_retry(state, run_dir, workspace)
                                 print("Failure retry authorized for the recorded repeated failure; "
                                       "one fresh attempt proceeds under existing limits.", flush=True)
+                            except ValueError as error:
+                                print(f"Input rejected: {error}", file=sys.stderr)
+                                return 2
+                        elif args.diagnose_failed_stage:
+                            try:
+                                resolver_runtime.admit_operational_diagnosis(sys.modules[__name__], state, run_dir, workspace)
+                                print("Diagnosis admitted for the recorded repeated Builder failure; "
+                                      "a bounded read-only model diagnosis runs before any retry.", flush=True)
                             except ValueError as error:
                                 print(f"Input rejected: {error}", file=sys.stderr)
                                 return 2
