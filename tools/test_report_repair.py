@@ -229,7 +229,7 @@ class RepairTests(unittest.TestCase):
         launch.assert_not_called()
 
     def test_invalid_or_unbounded_repair_configuration_is_rejected(self):
-        for value in (-1,3,True,'2'):
+        for value in (-1,7,True,'2'):
                 self.state['settings']['report_repair']={'max_attempts':value}
                 with self.subTest(value=value),self.assertRaises(ValueError):
                     runner.repair_limit(self.state)

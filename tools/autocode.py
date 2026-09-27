@@ -889,7 +889,9 @@ def recovery_count(state):
 def timeout_recovery_guard(state):
     limit = state.get("settings", {}).get("limits", {}).get("no_progress_batches", 3)
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
-    consecutive = limit and state.get("consecutive_timeout_recoveries", 0) >= limit
+    # A configured limit of 0 means zero tolerance, not "no limit" — `limit and ...`
+    # would treat 0 as falsy and silently skip the check.
+    consecutive = limit is not None and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
         ctx = state.get("recovery_context") or {}
         cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")
@@ -2462,10 +2464,6 @@ def main(unit=None) -> int:
                             if isinstance(row, dict):
                                 row["seconds"] = 0
                                 row["seconds_by_role"] = {}
-                    # Reset report repair attempts on explicit resume
-                    pending = state.get("pending_report_repair")
-                    if pending and isinstance(pending, dict):
-                        pending["attempts"] = 0
                     # Reset resolver attempts
                     resolver_state = state.get("resolver")
                     if resolver_state and isinstance(resolver_state, dict):
@@ -2489,6 +2487,14 @@ def main(unit=None) -> int:
                         repeated_failure_resume_guard(state, workspace)
                         prepare_planning_retry(state, run_dir)
                         prepare_exhausted_execution_report_retry(state, run_dir, workspace)
+                    # Reset report repair attempts on explicit resume, for whatever
+                    # repair record is still pending. An exhaustion-gated retry
+                    # above (which requires and archives the true attempt count)
+                    # already consumed it if one applied; resetting first would
+                    # corrupt that archived count and always fail those guards.
+                    pending = state.get("pending_report_repair")
+                    if pending and isinstance(pending, dict):
+                        pending["attempts"] = 0
                 reconcile_active(state, run_dir, workspace)
             except ReportRepairQueued:
                 pass  # Durable pending repair is dispatched below, not original work.
