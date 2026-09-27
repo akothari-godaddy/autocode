@@ -19,12 +19,12 @@ def state_for(task="Review pr-184.patch before I merge it.", workspace="/nowhere
                 "astra": {"model": "a"}, "terra": {"model": "t"}, "sol": {"model": "s"}}}}
 
 
-def report(verdict="request_changes", findings=None):
+def report(verdict="request_changes", findings=None, delivered_tests=()):
     return {"verdict": verdict, "summary": "one regression", "change_under_review": "pr-184.patch",
             "findings": findings if findings is not None else [
                 {"id": "F1", "severity": "blocking", "file": "regclient/client.py", "lines": [26, 28],
                  "summary": "resends without reconciling", "evidence": "README Retries"}],
-            "tests_run": ["python3 -m unittest"]}
+            "tests_run": ["python3 -m unittest"], "delivered_tests": list(delivered_tests)}
 
 
 class RoutingTests(unittest.TestCase):
@@ -87,6 +87,29 @@ class ApplyTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as workspace:
             with self.assertRaisesRegex(ValueError, "cannot approve"):
                 review_job.apply(state_for(workspace=workspace), report(verdict="approve"), {"changed_files": []}, workspace)
+
+    def test_delivered_targeted_tests_are_recorded_when_they_exist(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            test = Path(workspace) / "review" / "tests" / "test_at_policy.py"
+            test.parent.mkdir(parents=True)
+            test.write_text("import unittest\n")
+            (Path(workspace) / "review" / "tests" / "test_forgotten.py").write_text("import unittest\n")
+            state = state_for(workspace=workspace)
+            record = {"changed_files": ["review/tests/test_at_policy.py", "review/tests/test_forgotten.py"]}
+            review_job.apply(state, report(delivered_tests=["review/tests/test_at_policy.py"]), record, workspace)
+            written = json.loads((Path(workspace) / "review" / "findings.json").read_text())
+        # The one the stage wrote but the report forgot is recorded too.
+        self.assertEqual(["review/tests/test_at_policy.py", "review/tests/test_forgotten.py"], written["delivered_tests"])
+        self.assertIn("Targeted test delivered: review/tests/test_at_policy.py", review_job.render(state))
+
+    def test_a_report_that_claims_an_undelivered_or_misplaced_test_is_rejected(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            with self.assertRaisesRegex(ValueError, "not delivered"):
+                review_job.apply(state_for(workspace=workspace),
+                                 report(delivered_tests=["review/tests/test_missing.py"]), {"changed_files": []}, workspace)
+            with self.assertRaisesRegex(ValueError, "must live under review/tests/"):
+                review_job.apply(state_for(workspace=workspace),
+                                 report(delivered_tests=["tests/test_x.py"]), {"changed_files": []}, workspace)
 
     def test_a_clean_approval_completes_with_no_findings(self):
         with tempfile.TemporaryDirectory() as workspace:

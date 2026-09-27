@@ -116,11 +116,19 @@ def review() -> dict:
     The runner writes review/findings.json from this report; the fake writes nothing."""
     path = Path(CONFIG["reference"]) / "review" / "findings.json"
     saved = json.loads(path.read_text()) if path.is_file() else {}
+    # Targeted tests in the solution are delivered into the workspace under review/tests/,
+    # the one place a review may write (autocode_review_job.TESTS_PREFIX).
+    tests = Path(CONFIG["reference"]) / "review" / "tests"
+    delivered = []
+    if tests.is_dir():
+        shutil.copytree(tests, Path.cwd() / "review" / "tests", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+        delivered = sorted(f"review/tests/{p.name}" for p in tests.glob("test_*.py"))
     return {"verdict": saved.get("verdict", "approve"), "summary": "Scripted review from the scenario solution",
             "change_under_review": "the change named in the request",
             "findings": [{key: f.get(key, [] if key == "lines" else "") for key in
                           ("id", "severity", "file", "lines", "summary", "evidence")} for f in saved.get("findings", [])],
-            "tests_run": [str(t) for t in saved.get("tests_run", [])]}
+            "tests_run": [str(t) for t in saved.get("tests_run", [])], "delivered_tests": delivered}
 
 
 def report_for(stage: str, data: dict) -> dict:

@@ -8,6 +8,3 @@ category = "review"
 
 [fake]
 check = "python3 -c \"import json; json.load(open('review/findings.json')); print('ok')\""
-
-[run]
-known_failure = "The review workflow reports findings but does not yet deliver a targeted test under review/tests/ (issue D)"

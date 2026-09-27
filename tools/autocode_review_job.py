@@ -44,15 +44,18 @@ FINDING = {
 }
 SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["verdict", "summary", "change_under_review", "findings", "tests_run"],
+    "required": ["verdict", "summary", "change_under_review", "findings", "tests_run", "delivered_tests"],
     "properties": {
         "verdict": {"type": "string", "enum": ["approve", "request_changes"]},
         "summary": {"type": "string"},
         "change_under_review": {"type": "string"},
         "findings": {"type": "array", "items": FINDING},
         "tests_run": {"type": "array", "items": {"type": "string"}},
+        # Targeted tests written into the workspace under review/tests/, for the user to adopt.
+        "delivered_tests": {"type": "array", "items": {"type": "string"}},
     },
 }
+TESTS_PREFIX = "review/tests/"
 
 PROMPT = """You are the Reviewer: an independent engineer asked to judge an existing change before it is merged.
 You report findings. You do not fix anything and you do not edit the repository.
@@ -64,9 +67,15 @@ What to do:
    supposed to behave, the existing tests. A change can pass its own tests and still break a rule the
    repository states elsewhere.
 3. Test where it helps. Make your own scratch copy OUTSIDE the workspace (for example under a temporary
-   directory), apply the change there, run the test suite there, and write any targeted test there.
-   Never apply the change to, or write files into, the workspace itself; the runner compares the
-   workspace before and after and rejects a review that changed it.
+   directory), apply the change there and run the test suite there. Never apply the change to the
+   workspace itself; the runner compares the workspace before and after and rejects a review that
+   changed anything outside review/.
+   When the change's own tests pass without exercising what it claims (they read a value the code sets
+   directly instead of going through the real code path), write a targeted test that FAILS on the
+   changed code and would PASS once the defect is fixed. Prove both in your scratch copy, then deliver
+   the test in the workspace as review/tests/test_<name>.py: a standard unittest file that runs from
+   the repository root and imports the project's own packages. review/tests/ is the only place you may
+   write in the workspace. List every delivered file in delivered_tests (empty when you delivered none).
 4. Report findings, each with a severity:
    - blocking: must be fixed before merge. A behavior that regresses, an invariant that breaks, a
      compatibility change, a defect the change's tests do not catch.
@@ -100,6 +109,21 @@ def stray_changes(changed_files) -> list[str]:
     return sorted(path for path in (changed_files or []) if not str(path).startswith(ALLOWED_PREFIXES))
 
 
+def delivered_tests(value: dict, record: dict, workspace) -> list[str]:
+    """The targeted tests the review left under review/tests/: declared ones must exist there,
+    and any test file the stage wrote there counts even if the report forgot to list it."""
+    declared = [str(path) for path in value.get("delivered_tests") or []]
+    outside = [path for path in declared if not path.startswith(TESTS_PREFIX)]
+    if outside:
+        raise ValueError(f"Delivered tests must live under {TESTS_PREFIX}: {outside}")
+    missing = [path for path in declared if not (Path(workspace) / path).is_file()]
+    if missing:
+        raise ValueError(f"The report lists tests that were not delivered: {missing}")
+    written = [str(path) for path in (record.get("changed_files") or [])
+               if str(path).startswith(TESTS_PREFIX) and str(path).endswith(".py")]
+    return sorted(set(declared) | set(written))
+
+
 def owns(state: dict) -> bool:
     return workflows.kind(state) == "review"
 
@@ -112,12 +136,15 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
     counts = {severity: sum(1 for f in value["findings"] if f["severity"] == severity) for severity in SEVERITIES}
     if value["verdict"] == "approve" and counts["blocking"]:
         raise ValueError("A review with blocking findings cannot approve")
+    delivered = delivered_tests(value, record, workspace)
     report = {key: value[key] for key in ("verdict", "summary", "change_under_review", "findings", "tests_run")}
+    report["delivered_tests"] = delivered
     target = Path(workspace) / REPORT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=2) + "\n")
     state["review"] = {**counts, "verdict": value["verdict"], "report_path": REPORT_PATH,
-                       "output": record.get("output"), "change_under_review": value["change_under_review"]}
+                       "output": record.get("output"), "change_under_review": value["change_under_review"],
+                       "delivered_tests": delivered}
     state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,
                  completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
 
@@ -129,6 +156,8 @@ def render(state: dict) -> str:
              "Reviewed: " + str(review.get("change_under_review", "")),
              "Workspace unchanged: " + str(state.get("workspace")),
              "Findings: " + str(Path(state.get("workspace", "")) / review.get("report_path", REPORT_PATH))]
+    for path in review.get("delivered_tests") or []:
+        lines.append("Targeted test delivered: " + path)
     if review.get("output"):
         lines.append("Reviewer report: " + str(review["output"]))
     return "\n".join(lines)
