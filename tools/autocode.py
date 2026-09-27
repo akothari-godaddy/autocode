@@ -2072,6 +2072,19 @@ def rotate_if_needed(state, role, run_dir):
 
 
 def main(unit=None) -> int:
+    """Resolve this invocation's provider, then restore the shared global on the
+    way out — main() can run more than once per process in tests, and a real
+    provider resolved here (autocode_providers.resolve) must not leak into a
+    later invocation that expects a different, or no, provider mocked."""
+    global opencode
+    saved_opencode = opencode
+    try:
+        return _main_body(unit)
+    finally:
+        opencode = saved_opencode
+
+
+def _main_body(unit=None) -> int:
     global opencode
     if sys.argv[1:2] == ["tasks"]:
         try:

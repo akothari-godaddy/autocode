@@ -174,6 +174,10 @@ class CompatScenarios(CompatCase):
 
     def test_cfg10_entry_point_aliases_consistent(self):
         """CFG-10. Documented aliases: autocode units + installed scripts."""
+        if not INSTALLED.exists():
+            self.bundle.log("environment_limitation", note="installed CLI not found")
+            self.finish(status=kit.BLOCKED_ENV, summary="installed CLI absent")
+            return
         units = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True).stdout
         self.check("unit_aliases_documented", True,
                    all(u in units for u in ("autoplanner", "autocode", "autoreview", "autoresolver")))
