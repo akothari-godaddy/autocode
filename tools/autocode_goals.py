@@ -27,6 +27,23 @@ STRING = {"type": "string"}
 STRINGS = {"type": "array", "items": STRING}
 QUESTION = obj({"id": STRING, "question": STRING, "why": STRING,
                 "options": STRINGS, "proposed_default": STRING})
+# Optional classification of an unknown; absent reports (and any question the
+# runner itself generates, e.g. permission/blocker checkpoints) are read as
+# kind="decision", category="requested_outcome", delegable=False. These three
+# fields are never in QUESTION["required"], so older saved reports validate
+# unchanged. A "discoverable" question must never reach the user (see
+# AutoPlanner's requirements-clarification investigation pass); it is either
+# resolved from the workspace, reclassified to "decision", or turned into an
+# access blocker.
+ASSUMPTION_CATEGORIES = ("cost", "quota", "permission", "external_side_effect",
+                         "requested_outcome", "behavior", "technical", "other")
+# A choice in one of these categories changes cost, quota, permissions, external
+# side effects, or the user's literal requested outcome. It may never be silently
+# inferred from convention, and it may never be bulk-delegated.
+NON_INFERABLE_CATEGORIES = frozenset({"cost", "quota", "permission", "external_side_effect", "requested_outcome"})
+QUESTION["properties"]["kind"] = {"type": "string", "enum": ["discoverable", "inferable", "decision"]}
+QUESTION["properties"]["category"] = {"type": "string", "enum": list(ASSUMPTION_CATEGORIES)}
+QUESTION["properties"]["delegable"] = {"type": "boolean"}
 DECISION = obj({"text": STRING, "basis": {"type": "string", "enum": [
     "original_request", "user_answer", "user_feedback", "agent_proposed", "delegated"]}, "answer_id": STRING})
 CRITERION = obj({"id": STRING, "criterion": STRING, "verification_method": STRING,
@@ -144,6 +161,7 @@ def validate_body(state, body, *, ready=False, allow_legacy=False):
         probe = {"goal_contract": {"body": body, "revision": 0, "hash": "draft"}}
         assign_task(probe, initial_decision(body), {"revision": "draft"})
     questions = body["open_blocking_questions"]
+    check_delegable(questions)
     criteria = body["acceptance_criteria"]
     milestones = body.get("milestones", [])
     for rows in (questions, criteria, milestones):
@@ -319,6 +337,64 @@ def requirement_coverage_text(text):
     return re.sub(r"(?m)^[ \t]*(?:[-*+]|\d+[.)])[ \t]+", "", str(text)).strip()
 
 
+_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+
+
+def check_delegable(questions):
+    """The protected-category rule is enforced on model output, not just in the
+    prompt: a cost, quota, permission, side-effect or requested-outcome choice,
+    or an unclassified one, is never offered as delegable."""
+    for question in questions:
+        category = question.get("category", "requested_outcome")
+        if question.get("delegable") and category in NON_INFERABLE_CATEGORIES:
+            raise ValueError(f"Question {question['id']} ({category}) cannot be delegable; "
+                             "it is the user's own decision")
+
+
+def normalize_assumption(row):
+    """A legacy proposed_assumptions entry (plain string) becomes an unstructured,
+    id-less record: displayed and counted, but never evidenced and never a
+    target for --reject-assumption."""
+    if isinstance(row, str):
+        return {"id": None, "text": row, "kind": "inferable", "category": "requested_outcome",
+                "convention_ref": "", "rationale": "", "supports": [], "legacy": True}
+    if not isinstance(row, dict):
+        raise ValueError("proposed_assumptions entries must be a string or an object")
+    return {"id": row.get("id"), "text": str(row.get("text", "")), "kind": row.get("kind", "inferable"),
+            "category": row.get("category", "requested_outcome"), "convention_ref": str(row.get("convention_ref", "")),
+            "rationale": str(row.get("rationale", "")), "supports": list(row.get("supports") or []), "legacy": False}
+
+
+def validate_assumptions(rows, known_requirement_ids):
+    if not isinstance(rows, list):
+        raise ValueError("proposed_assumptions must be an array")
+    normalized = [normalize_assumption(row) for row in rows]
+    seen_ids = set()
+    for row in normalized:
+        if row["legacy"]:
+            continue
+        if not row["text"].strip():
+            raise ValueError("Each structured assumption needs text")
+        if not row["id"] or not _ID_RE.fullmatch(row["id"]):
+            raise ValueError("Each structured assumption needs a stable id")
+        if row["id"] in seen_ids:
+            raise ValueError(f"Duplicate assumption id {row['id']}")
+        seen_ids.add(row["id"])
+        if row["category"] not in ASSUMPTION_CATEGORIES:
+            raise ValueError(f"Assumption {row['id']} has an invalid category")
+        if not set(row["supports"]) <= known_requirement_ids:
+            raise ValueError(f"Assumption {row['id']} supports an unknown requirement id")
+        if row["kind"] == "inferable":
+            if row["category"] in NON_INFERABLE_CATEGORIES:
+                raise ValueError(f"Assumption {row['id']} in category {row['category']} cannot be inferable; "
+                                 "it must be an open decision question")
+            if not row["convention_ref"].strip():
+                raise ValueError(f"Assumption {row['id']} needs a convention_ref as evidence for the inference")
+            if not row["rationale"].strip():
+                raise ValueError(f"Assumption {row['id']} needs a rationale for the inference")
+    return normalized
+
+
 def check_requirement_handoff(state, report):
     sources = source_texts(state)
     requirements = report.get("requirements", [])
@@ -326,6 +402,7 @@ def check_requirement_handoff(state, report):
         raise ValueError("requirements must be an array")
     seen = set()
     quotes = []
+    quote_by_id = {}
     for row in requirements:
         if not isinstance(row, dict) or not str(row.get("id", "")).strip() or not str(row.get("text", "")).strip():
             raise ValueError("Each requirement needs an id, text and source_quote")
@@ -336,6 +413,7 @@ def check_requirement_handoff(state, report):
         if not quote or not any(quote in text for text in sources):
             raise ValueError(f"Requirement {row['id']} source_quote is not in the task or a saved user event")
         quotes.append(quote)
+        quote_by_id[row["id"]] = quote
     ignored = report.get("ignored_statements", [])
     if not isinstance(ignored, list):
         raise ValueError("ignored_statements must be an array")
@@ -355,6 +433,42 @@ def check_requirement_handoff(state, report):
             raise ValueError("A proposed reframe must name an existing requirement and a replacement proposal")
         if reframe["question_id"] not in questions and reframe["question_id"] not in state.get("answers", {}):
             raise ValueError("A proposed reframe needs an explicit user acceptance question")
+    validate_assumptions(report.get("proposed_assumptions", []), seen)
+    check_delegable(report.get("open_questions", []))
+    # A refreshed handoff (one that follows an earlier requirements_gather report)
+    # must retain every previous requirement verbatim, or move it to
+    # ignored_requirements with a reason citing a saved user event. A vanished
+    # requirement with no citation, or a citation the runner cannot resolve, is
+    # rejected: only a saved user answer or feedback event authorizes dropping a
+    # requirement, never the agent's own say-so. At the point this function runs
+    # (from apply_planning, before the new report is installed) state's saved
+    # requirements_handoff is still the previous one.
+    previous_handoff = (state.get("requirements_handoff") or {}).get("report") or {}
+    previous_requirements = previous_handoff.get("requirements") or []
+    if previous_requirements:
+        ignored_requirements = report.get("ignored_requirements", [])
+        if not isinstance(ignored_requirements, list):
+            raise ValueError("ignored_requirements must be an array")
+        ignored_by_id = {}
+        for omission in ignored_requirements:
+            rid = omission.get("requirement_id")
+            if rid in ignored_by_id:
+                raise ValueError(f"Duplicate ignored_requirements entry for {rid}")
+            ignored_by_id[rid] = omission
+        for previous_row in previous_requirements:
+            rid = previous_row["id"]
+            previous_quote = str(previous_row.get("source_quote", "")).strip()
+            if previous_quote and quote_by_id.get(rid) == previous_quote:
+                continue
+            omission = ignored_by_id.get(rid)
+            if not omission:
+                raise ValueError(f"Refreshed handoff dropped requirement {rid} without a user-backed omission "
+                                 "in ignored_requirements")
+            if not str(omission.get("reason", "")).strip():
+                raise ValueError(f"Omission of requirement {rid} needs a reason")
+            if not _saved_user_basis(state, omission.get("basis"), omission.get("event_id")):
+                raise ValueError(f"Omission of requirement {rid} needs a saved user answer or feedback event, "
+                                 "not an agent-authored reason")
 
 
 def check_requirement_trace(state, report, contract):
@@ -400,8 +514,14 @@ def check_requirement_trace(state, report, contract):
         disposition = entry["disposition"]
         if disposition == "covered" and evidence not in behaviors and evidence not in criteria and not cites_defined_criterion(evidence):
             raise ValueError(f"Requirement {row['id']} is not covered by a behavior or criterion")
-        if disposition == "excluded" and evidence not in exclusions:
-            raise ValueError(f"Requirement {row['id']} is not present in scope_exclusions")
+        if disposition == "excluded":
+            if evidence not in exclusions:
+                raise ValueError(f"Requirement {row['id']} is not present in scope_exclusions")
+            # A scope_exclusions match alone is not sufficient: the Planner could
+            # otherwise exclude a user requirement by adding its own exclusion.
+            # excluded now needs the same saved-user-event citation superseded does.
+            if not _cites_saved_user_event(state, evidence):
+                raise ValueError(f"Requirement {row['id']} cannot be excluded without a saved user event")
         if disposition == "superseded" and not _cites_saved_user_event(state, evidence):
             raise ValueError(f"Requirement {row['id']} cannot be superseded without a saved user event")
     conflicts = handoff.get("conflicts") or []
@@ -471,6 +591,7 @@ def invalidate(state, reason):
         state.setdefault("human_review_archive", []).append(state.pop("human_reviews"))
     state["human_reviews"] = {}
     state.pop("displayed_goal", None)
+    state.pop("displayed_handoff", None)
     state.pop("displayed_review", None)
 
 
@@ -485,6 +606,9 @@ def install_draft(state, body, *, origin, allow_legacy=False, changes=None):
     contract.update(hash=s.digest(contract), approval_status="draft", approval_event=None,
                     origin=origin, created_at=s.now(), declared_changes=copy.deepcopy(changes or []))
     state["goal_contract"] = contract
+    if origin == "user_cli_edit":
+        # An authenticated scope change is new user intent.
+        start_clarification_episode(state, "edit_goal:r" + str(revision))
     invalidate(state, "Contract revision changed; revalidate the current artifact")
     if state.get("current_task"):
         state.setdefault("task_archive", []).append(state.pop("current_task"))
@@ -532,6 +656,77 @@ def migrate(state):
     state.update(version=3, phase="DISCOVERING", status="RUNNING", pending_questions=[], next_stage=first_stage)
 
 
+def plan_preview(state):
+    """Rule E9 (issue #62): what the run knows, what it would assume, and what only
+    the user can decide, at a planning clarification stop. Counts only; no score.
+    Bound to the displayed contract revision and the requirements handoff hash.
+    Runner-generated permission, blocker and review stops carry a user_request
+    and get no preview."""
+    contract = state.get("goal_contract")
+    questions = state.get("pending_questions") or []
+    if (not contract or state.get("status") != "WAITING_FOR_USER" or not questions
+            or state.get("user_request")):
+        return []
+    handoff_entry = state.get("requirements_handoff") or {}
+    handoff = handoff_entry.get("report") or {}
+    rejected = {ob.get("assumption_id") for ob in state.get("deferred_obligations", [])}
+    lines = ["", f"PLAN PREVIEW for {token(contract)} (requirements handoff {handoff_ref(state)})",
+             "Answering nothing leaves execution blocked. Nothing here approves the plan."]
+
+    lines += ["", "Known from you:"]
+    lines += [f"  [{row['id']}] {row['text']} (you said: \"{row['source_quote']}\")"
+              for row in handoff.get("requirements", [])] or ["  (no quoted requirements recorded)"]
+
+    lines += ["", "Known from the codebase:"]
+    refs = [ref for ref in handoff.get("source_refs", []) if ref != "task"]
+    if refs:
+        lines.append("  Files read: " + ", ".join(refs))
+    lines += [f"  [{row['question_id']}] {row['resolution']} (source: {', '.join(row['source_refs'])})"
+              for row in state.get("machine_resolutions", [])]
+    if lines[-1] == "Known from the codebase:":
+        lines.append("  (nothing cited from the workspace)")
+
+    structured, legacy = [], []
+    for row in (normalize_assumption(raw) for raw in handoff.get("proposed_assumptions", [])):
+        if row["legacy"]:
+            legacy.append(row)
+        elif row["id"] not in rejected:
+            structured.append(row)
+    planner = []
+    for row in contract["body"].get("accepted_assumptions", []):
+        if row.get("basis") == "agent_proposed" and row["text"] not in planner:
+            planner.append(row["text"])
+    lines += ["", "Assumptions I would make:"]
+    lines += [f"  [{row['id']}] {row['text']} ({row['category']}; evidence: {row['convention_ref'] or 'none'})"
+              for row in structured]
+    lines += [f"  Unstructured, from an older run: {row['text']}" for row in legacy]
+    lines += [f"  Planner: {text}" for text in planner]
+    if not (structured or legacy or planner):
+        lines.append("  (none)")
+
+    lines += ["", "Decisions only you can make:"]
+    for question in questions:
+        lines += [f"  [{question['id']}] {question['question']}", f"    Why: {question['why']}"]
+        lines += ["    Option: " + option for option in question.get("options", [])]
+        if question.get("proposed_default"):
+            lines.append("    Proposed default: " + question["proposed_default"]
+                         + ("" if question.get("delegable") else " (not delegable)"))
+
+    obligations = open_obligations(state)
+    criteria = contract["body"].get("acceptance_criteria", [])
+    lines += ["", "Readiness:",
+              f"  Blocking decisions: {len(questions)}",
+              f"  Assumptions relied on: {len(structured) + len(legacy) + len(planner)}",
+              f"  Acceptance tests in requirements: {len(handoff.get('acceptance_tests', []))}",
+              f"  Acceptance criteria in the contract: {len(criteria)}"
+              f" ({sum(bool(row.get('human_review')) for row in criteria)} need your review)",
+              f"  Open obligations: {sum(ob['kind'] == 'human_decision' for ob in obligations)} for your decision, "
+              f"{sum(ob['kind'] == 'remediation' for ob in obligations)} awaiting remediation"]
+    lines += ["", "Next: --answer QUESTION_ID=TEXT, --edit-goal body.json, or with "
+              f"--review-token '{token(contract)}': --delegate-all or --reject-assumption ASSUMPTION_ID"]
+    return lines
+
+
 def render(state):
     contract = state.get("goal_contract")
     if not contract:
@@ -541,6 +736,7 @@ def render(state):
              f"Approval token: {token(contract)}"]
     if state.get("discovery_summary"):
         lines += ["", "Planning: " + state["discovery_summary"]]
+    lines += plan_preview(state)
     display_order = ("intended_user", "intended_outcome", "end_to_end_flow", "deliverables", "scope_exclusions",
                      "constraints", "permission_boundaries", "accepted_assumptions", "delegated_decisions",
                      "required_behaviors", "important_failure_cases", "acceptance_criteria", "technical_approach",
@@ -615,9 +811,26 @@ def render(state):
     return "\n".join(lines)
 
 
+def handoff_ref(state):
+    """Short, stable reference to the current requirements handoff report."""
+    report = (state.get("requirements_handoff") or {}).get("report")
+    return s.digest(report)[:12] if report else "none"
+
+
+def check_displayed(state, selected):
+    """An action the user takes on a preview must name the revision they saw.
+    Rejects a stale token, and a requirements handoff refreshed since display."""
+    contract = state.get("goal_contract")
+    if (not contract or not selected or selected != token(contract) or state.get("displayed_goal") != selected
+            or state.get("displayed_handoff") != handoff_ref(state)):
+        raise ValueError("Act only on the current displayed revision; show the goal again and pass its token "
+                         "with --review-token")
+
+
 def present(state):
     if state.get("goal_contract"):
         state["displayed_goal"] = token(state["goal_contract"])
+        state["displayed_handoff"] = handoff_ref(state)
         state["displayed_review"] = review_token(state)
     return render(state)
 
@@ -634,6 +847,9 @@ def approve(state, selected):
     validate_body(state, contract["body"], ready=True, allow_legacy=True)
     if contract["body"]["open_blocking_questions"] or state.get("pending_questions"):
         raise ValueError("Blocking questions still need answers")
+    if open_obligations(state):
+        raise ValueError("Rejected assumptions still have unresolved obligations: "
+                         + ", ".join(ob["id"] for ob in open_obligations(state)))
     joint = state.get("settings", {}).get("joint_planning")
     if joint and (state.get("planning", {}).get("final_token") != selected or "initial_task" not in contract["body"]):
         raise ValueError("Joint planning requires the Plan Reviewer's final plan before approval")
@@ -675,9 +891,10 @@ def feedback(state, text):
     if state.get("user_request", {}).get("kind") == "human_review":
         raise ValueError("Record the artifact review with --approve-review, not brief feedback")
     event = {"kind": "brief_feedback", "id": "feedback-" + uuid.uuid4().hex[:12], "actor": "user_cli", "at": s.now(),
-             "text": text.strip(), "contract_token": token(state["goal_contract"])}
+             "text": text.strip(), "contract_token": token(state["goal_contract"]), "starts_episode": True}
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
+    start_clarification_episode(state, event["id"])
     state["goal_contract"].update(approval_status="draft", approval_event=None)
     invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
     first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
@@ -692,9 +909,10 @@ def apply_intervention_feedback(state, receipt, applied_receipt):
              "at": applied_receipt["applied_at"], "text": receipt["text"],
              "contract_token": receipt.get("observed_goal_token"), "receipt_id": receipt["id"],
              "retained_work": {"current_task": copy.deepcopy(state.get("current_task")),
-                               "stages": len(state.get("stages", []))}}
+                               "stages": len(state.get("stages", []))}, "starts_episode": True}
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
+    start_clarification_episode(state, event["id"])
     if state.get("status") == "TASK_COMPLETE":
         state.setdefault("completion_archive", []).append({
             "completed_at": state.pop("completed_at", None), "decision": state.pop("final_decision", None),
@@ -716,11 +934,21 @@ def answer(state, question_id, text, *, delegated=False):
     q = matches[0]
     if delegated and not q["proposed_default"].strip():
         raise ValueError("This question has no proposed default to delegate")
+    if delegated and any(ob["id"] == question_id for ob in open_obligations(state)):
+        raise ValueError(f"{question_id} asks about a rejected assumption and cannot be delegated; answer it yourself")
     event = {"kind": "delegated" if delegated else "answer", "actor": "user_cli", "at": s.now(),
              "question_id": question_id, "question": q, "text": q["proposed_default"] if delegated else text,
              "contract_token": token(state["goal_contract"])}
+    if not delegated:
+        # New user intent; delegation only accepts an already-proposed default.
+        event["starts_episode"] = True
     state.setdefault("user_events", []).append(event)
     state.setdefault("answers", {})[question_id] = event
+    if not delegated:
+        start_clarification_episode(state, "answer:" + question_id)
+        # An obligation returned to the user is asked under its own id; only the
+        # user's own answer discharges it, never a delegated default.
+        resolve_obligation(state, question_id, "answer:" + question_id)
     state["pending_questions"] = [row for row in state["pending_questions"] if row["id"] != question_id]
     body = state.get("goal_contract", {}).get("body", {})
     if "open_blocking_questions" in body:
@@ -735,6 +963,109 @@ def answer(state, question_id, text, *, delegated=False):
     contract = state["goal_contract"]
     contract["hash"] = s.digest({k: contract[k] for k in ("task_id", "revision", "body")})
     invalidate(state, "A new user answer requires a reviewed draft")
+
+
+def start_clarification_episode(state, started_by):
+    """Begin a new runner-owned clarification episode. Only a saved user event
+    that changes intent calls this (a non-delegated answer, brief feedback, an
+    applied intervention, or an edited goal). Model output never does, so
+    regenerated question IDs or reworded handoffs cannot replenish the one
+    investigation pass. A pending investigation from the old episode is moot."""
+    state["clarification_episode"] = {"id": "episode-" + uuid.uuid4().hex[:12], "started_by": started_by,
+                                      "started_at": s.now(), "investigation_used": False,
+                                      "used_at": None, "used_stage": None}
+    state.pop("investigation_request", None)
+    # A remediation proposed under the old intent must be proposed again, and
+    # reviewed again, under the new one; its old hash can no longer discharge it.
+    for ob in open_obligations(state):
+        if ob.get("remediation"):
+            ob.setdefault("superseded_remediations", []).append(
+                {"record": ob["remediation"], "hash": ob.get("remediation_hash"), "by": started_by})
+            ob.update(remediation=None, remediation_hash=None, status="open")
+    return state["clarification_episode"]
+
+
+def clarification_episode(state):
+    """The current episode, created on first use. Legacy runs have none."""
+    return state.get("clarification_episode") or start_clarification_episode(state, "initial_task")
+
+
+def open_obligations(state, kind=None):
+    """Unresolved deferred obligations; legacy runs have none."""
+    return [ob for ob in state.get("deferred_obligations", [])
+            if ob.get("status") != "resolved" and (kind is None or ob.get("kind") == kind)]
+
+
+def resolve_obligation(state, obligation_id, resolved_by):
+    for ob in open_obligations(state):
+        if ob["id"] == obligation_id:
+            ob.update(status="resolved", resolved_by=resolved_by, resolved_at=s.now())
+            return ob
+    return None
+
+
+def delegate_all(state, selected):
+    """Bulk-delegate every currently pending question to its proposed default.
+    Conservative by construction: a question with no default, or not explicitly
+    marked delegable=True, blocks the whole call rather than being silently
+    skipped or silently delegated. Never grants approval; inherits answer()'s
+    approval invalidation for each question it delegates."""
+    check_displayed(state, selected)
+    pending = state.get("pending_questions", [])
+    if not pending:
+        raise ValueError("No pending questions to delegate")
+    obligations = {ob["id"] for ob in open_obligations(state)}
+    blocked = [q["id"] for q in pending if not q.get("proposed_default", "").strip() or not q.get("delegable", False)
+               or q.get("category", "requested_outcome") in NON_INFERABLE_CATEGORIES or q["id"] in obligations]
+    if blocked:
+        raise ValueError("These questions cannot be bulk-delegated (no proposed default, not marked delegable, "
+                         "a protected or unclassified category, or a rejected assumption): "
+                         + ", ".join(blocked))
+    for q in list(pending):
+        answer(state, q["id"], "accept default", delegated=True)
+
+
+def reject_assumption(state, assumption_id, selected):
+    """Record that the user rejects a specific structured assumption from the
+    current requirements handoff. This never removes or rewords any entry in
+    requirements[]: check_requirement_handoff and check_requirement_trace are
+    responsible for making sure a requirement the rejected assumption supported
+    stays covered, or is dropped only through its own saved user-backed omission.
+    Never grants approval; invalidates any existing approval like answer() does."""
+    if state["status"] not in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER", "PAUSED_PLANNING_BUDGET"):
+        raise ValueError("Rejecting an assumption needs an open conversation checkpoint")
+    check_displayed(state, selected)
+    handoff = (state.get("requirements_handoff") or {}).get("report") or {}
+    rows = {row["id"]: row for row in
+            (normalize_assumption(raw) for raw in handoff.get("proposed_assumptions", []))
+            if not row["legacy"] and row["id"]}
+    row = rows.get(assumption_id)
+    if not row:
+        raise ValueError("Unknown or legacy assumption id; only a structured assumption from the "
+                         "current requirements handoff can be rejected")
+    if any(ob.get("assumption_id") == assumption_id and ob.get("status") != "resolved"
+           for ob in state.get("deferred_obligations", [])):
+        raise ValueError(f"Assumption {assumption_id} already has an open rejection")
+    category = row["category"] if row["category"] in ASSUMPTION_CATEGORIES else "requested_outcome"
+    kind = "human_decision" if category in NON_INFERABLE_CATEGORIES else "remediation"
+    contract = state.get("goal_contract") or {}
+    event = {"kind": "reject_assumption", "id": "reject-" + uuid.uuid4().hex[:12], "actor": "user_cli",
+             "at": s.now(), "assumption_id": assumption_id, "category": category, "text": row["text"],
+             "contract_token": token(contract) if contract else None}
+    state.setdefault("user_events", []).append(event)
+    obligation = {"id": "obligation-" + uuid.uuid4().hex[:12], "kind": kind, "assumption_id": assumption_id,
+                  "category": category, "text": row["text"], "supports": list(row["supports"]),
+                  "contract_revision": contract.get("revision"), "created_at": event["at"], "status": "open",
+                  "remediation": None, "remediation_hash": None, "resolved_by": None,
+                  "reject_event_id": event["id"]}
+    state.setdefault("deferred_obligations", []).append(obligation)
+    if contract:
+        contract.update(approval_status="draft", approval_event=None)
+    invalidate(state, "An assumption rejection requires a refreshed draft and explicit approval")
+    first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
+                   else "astra_discovery")
+    state.update(status="RUNNING", phase="DISCOVERING", next_stage=first_stage, pending_questions=[])
+    return obligation
 
 
 def resolve_permission(state, question_id, text):

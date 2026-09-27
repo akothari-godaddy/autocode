@@ -16,3 +16,6 @@ __pycache__/
 
 # October desktop — local canvas state
 .october/
+
+# Default artifact directory written by tools/autopilot_testkit.py during test runs
+.tmp-autopilot-testkit/
