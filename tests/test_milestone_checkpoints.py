@@ -1,24 +1,11 @@
 """Evidence gates and recovery with isolated Git workspaces; no model calls."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-try:
-    from . import test_goals
-except ImportError:
-    import test_goals
+from . import test_goals
 import autocode as runner
 import autocode_goals as goals
 import autocode_support as s
@@ -40,7 +27,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
         goals.install_draft(self.state, draft, origin='test')
         goals.present(self.state)
         goals.approve(self.state, self.state['displayed_goal'])
-        self.state['settings']['milestone_checkpoints'] = {**m.DEFAULTS, 'max_replans': 1, 'stalled_reviews': 3}
+        self.state['settings']['milestone_checkpoints'] = copy.deepcopy(m.DEFAULTS)
         self.assign()
 
     def decision(self, milestone='M1', status='CONTINUE'):
@@ -260,7 +247,6 @@ class MilestoneCheckpointTests(unittest.TestCase):
 
     def test_budget_charges_rejected_attempts_once_and_allows_validation(self):
         self.start()
-        self.state['settings']['milestone_checkpoints']['max_seconds'] = 5400
         record = {'role': 'terra', 'task_id': self.state['current_task']['id'], 'duration_seconds': 5401}
         runner.account_stage(self.state, record); runner.account_stage(self.state, record)
         self.assertEqual(5401, m.progress(self.state)['seconds'])
@@ -381,7 +367,6 @@ class MilestoneCheckpointTests(unittest.TestCase):
 
     def test_exhausted_budget_does_not_consume_a_replan_that_cannot_run(self):
         self.start()
-        self.state['settings']['milestone_checkpoints']['max_seconds'] = 5400
         for _ in range(3): self.validate({'C1': 'FAIL', 'C2': 'FAIL'})
         m.progress(self.state)['seconds'] = 5400
         self.assign(status='REWORK', next_objective='Smaller independent reproduction')

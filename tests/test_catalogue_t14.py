@@ -5,16 +5,6 @@ mutated code ever touches the working tree.  Each mutation's detector is the
 catalogue module guarding that invariant; killed = detectors fail on the
 mutated copy and pass on the pristine copy.
 """
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import os
@@ -27,47 +17,43 @@ import tempfile
 import unittest
 from pathlib import Path
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
-import test_catalogue_t08 as t08
+from . import test_catalogue_t08 as t08
 from goal_fixtures import envelope
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS = REPO_ROOT / "tools"
 
 MUTATIONS = [
     ("M01", "tools/autocode_goals.py",
      'or selected != token(contract) or state.get("displayed_goal") != selected):',
      '):',
-     ["test_catalogue_t01"]),
+     ["tests.test_catalogue_t01"]),
     ("M02", "tools/autocode_goals.py",
      'and not contract["body"]["open_blocking_questions"]',
      'and True',
-     ["test_catalogue_t01"]),
+     ["tests.test_catalogue_t01"]),
     ("M03", "tools/autopilot.py",
      'correction_open = bool(state.get("resolution_request")) and state.get("next_stage") == "astra_resolve"',
      'correction_open = False',
-     ["test_catalogue_t04"]),
+     ["tests.test_catalogue_t04"]),
     ("M04", "tools/autocode_support.py",
      'if sol.get("source_revision") != current["revision"] or not sol.get("checks"):',
      'if not sol.get("checks"):',
-     ["test_catalogue_t06"]),
+     ["tests.test_catalogue_t06"]),
     ("M05", "tools/autocode_findings.py",
      '            row["not_rechecked_in"] = report',
      '            rows.remove(row)',
-     ["test_catalogue_t05"]),
+     ["tests.test_catalogue_t05"]),
     ("M06", "tools/autocode_findings.py",
      '            entry["id"] = allocate_id(state)',
      '            entry["id"] = "F-" + s.digest(entry["finding"])[:10]',
-     ["test_catalogue_t05"]),
+     ["tests.test_catalogue_t05"]),
     ("M07", "tools/autocode_findings.py",
      '    _record(state, "astra", decision.get("findings", []), record, initial_scope)\n'
      '    if decision.get("status") == "BLOCKED":\n'
@@ -75,29 +61,29 @@ MUTATIONS = [
      '    if decision.get("status") == "BLOCKED":\n'
      '        return\n'
      '    _record(state, "astra", decision.get("findings", []), record, initial_scope)',
-     ["test_catalogue_t05"]),
+     ["tests.test_catalogue_t05"]),
     ("M08", "tools/autocode_support.py",
      '    for event_body in _command_bodies(event_command):',
      '    import shlex as _s\n'
      '    return sorted(_s.split(event_command)) == sorted(_s.split(check_command))\n'
      '    for event_body in _command_bodies(event_command):',
-     ["test_catalogue_t06"]),
+     ["tests.test_catalogue_t06"]),
     ("M09", "tools/autopilot.py",
      'if value["verdict"] == "PASS" and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):',
      'if False:',
-     ["test_catalogue_t06"]),
+     ["tests.test_catalogue_t06"]),
     ("M10", "tools/autocode.py",
      '    state.pop("active_stage", None)\n    state["consecutive_timeout_recoveries"] = 0',
      '    state["consecutive_timeout_recoveries"] = 0',
-     ["test_catalogue_t05"]),
+     ["tests.test_catalogue_t05"]),
     ("M11", "tools/autocode.py",
      'def assert_stage_stopped(record):',
      'def assert_stage_stopped(record):\n    return',
-     ["test_catalogue_t09"]),
+     ["tests.test_catalogue_t09"]),
     ("M12", "tools/autopilot.py",
      'state.update(status="TASK_COMPLETE", completed_at=now(), final_decision=value, next_stage=None)',
      'state.update(status="TASK_COMPLETE", completed_at=now(), final_decision=value, next_stage="terra")',
-     ["test_catalogue_t08", "test_catalogue_t04"]),
+     ["tests.test_catalogue_t08", "tests.test_catalogue_t04"]),
 ]
 
 
@@ -130,7 +116,7 @@ import sys, unittest, json
 sys.path.insert(0, ".")
 from pathlib import Path
 import tempfile
-import test_catalogue_t06 as t06
+from . import test_catalogue_t06 as t06
 
 class M12Detector(t06.SolControllerCase):
     def test_completion_clears_next_stage(self):
@@ -147,12 +133,22 @@ class M12Detector(t06.SolControllerCase):
 }
 
 
-def run_detectors(tools_dir, detectors, timeout=600):
+def run_detectors(root_dir, detectors, timeout=600):
+    """Run each detector against a disposable copy at root_dir, which holds
+    sibling tools/ and tests/ directories (see mutated_copy). A detector
+    named "mutation_detector_*" is a bare, self-contained script written
+    straight into the copied tools/ dir by the SUPPLEMENTS mechanism, and is
+    invoked with that as cwd, exactly as it expects (it does its own
+    sys.path.insert(0, ".") relative to tools/); every other detector is a
+    tests.* dotted name and is invoked with root_dir as cwd so the tests
+    package - and the sibling tools/ it puts on sys.path - resolves the same
+    way it does in the real checkout."""
     environment = {k: v for k, v in os.environ.items() if k != "AUTOCODE_TEST_CLI"}
     outcomes = {}
     for detector in detectors:
+        cwd = root_dir / "tools" if detector.startswith("mutation_detector_") else root_dir
         completed = subprocess.run(
-            [sys.executable, "-m", "unittest", detector], cwd=tools_dir, env=environment,
+            [sys.executable, "-m", "unittest", detector], cwd=cwd, env=environment,
             capture_output=True, text=True, timeout=timeout)
         outcomes[detector] = completed.returncode != 0  # True = detector failed (mutation seen)
     return outcomes
@@ -162,6 +158,8 @@ def mutated_copy(mutation):
     mid, relative, old, new, detectors = mutation
     tmp = Path(tempfile.mkdtemp(prefix=f"mutation-{mid}-"))
     shutil.copytree(TOOLS, tmp / "tools",
+                    ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
+    shutil.copytree(REPO_ROOT / "tests", tmp / "tests",
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache"))
     target = tmp / relative
     text = target.read_text()
@@ -305,7 +303,7 @@ class SystematicCase(t08.CrashCase):
                     if supplement:
                         (tmp / "tools" / f"mutation_detector_{mid.lower()}.py").write_text(supplement)
                         detectors = detectors + [f"mutation_detector_{mid.lower()}"]
-                    outcomes = run_detectors(tmp / "tools", detectors)
+                    outcomes = run_detectors(tmp, detectors)
                     killed = any(outcomes.values())
                     results[mid] = "KILLED" if killed else "SURVIVED"
                     self.bundle.log("mutation", id=mid, target=relative,
@@ -323,12 +321,12 @@ class SystematicCase(t08.CrashCase):
             cover = Path(tmp)
             runner = cover / "runner.py"
             runner.write_text(
-                f"import sys, unittest\nsys.path.insert(0, r'{TOOLS}')\n"
+                f"import sys, unittest\nsys.path.insert(0, r'{REPO_ROOT}')\n"
                 "suite = unittest.defaultTestLoader.loadTestsFromNames("
-                "['test_catalogue_t05', 'test_catalogue_t06'])\n"
+                "['tests.test_catalogue_t05', 'tests.test_catalogue_t06'])\n"
                 "unittest.TextTestRunner(verbosity=0).run(suite)\n")
             subprocess.run([sys.executable, "-m", "trace", "--count", "--coverdir", str(cover),
-                            str(runner)], cwd=TOOLS, capture_output=True, text=True, timeout=900)
+                            str(runner)], cwd=REPO_ROOT, capture_output=True, text=True, timeout=900)
             report = {}
             for module in ("autocode_findings", "autocode_support", "autocode_goals", "autopilot"):
                 path = next(Path(tmp).glob(f"{module}.cover"), None)
@@ -365,18 +363,20 @@ class SystematicCase(t08.CrashCase):
         try:
             shutil.copytree(TOOLS, tmp / "tools",
                             ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+            shutil.copytree(REPO_ROOT / "tests", tmp / "tests",
+                            ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             pre_fix = subprocess.run(["git", "-C", REPO_ROOT, "show",
                                       "49b3a7b:tools/autocode_support.py"],
                                      capture_output=True, text=True)
             self.check("prefix_source_retrieved", True, pre_fix.returncode == 0)
             (tmp / "tools" / "autocode_support.py").write_text(pre_fix.stdout)
-            failing = run_detectors(tmp / "tools",
-                                    ["test_catalogue_t06.UnitEvidenceCase."
+            failing = run_detectors(tmp,
+                                    ["tests.test_catalogue_t06.UnitEvidenceCase."
                                      "test_evd03_wrapper_with_trailing_executable_text_rejected"])
             self.check("prefix_code_fails_the_regression", True, any(failing.values()))
             shutil.copy2(TOOLS / "autocode_support.py", tmp / "tools" / "autocode_support.py")
-            passing = run_detectors(tmp / "tools",
-                                    ["test_catalogue_t06.UnitEvidenceCase."
+            passing = run_detectors(tmp,
+                                    ["tests.test_catalogue_t06.UnitEvidenceCase."
                                      "test_evd03_wrapper_with_trailing_executable_text_rejected"])
             self.check("fixed_code_passes_the_regression", False, any(passing.values()))
         finally:

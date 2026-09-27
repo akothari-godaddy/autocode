@@ -6,16 +6,6 @@ come from the independent CommandOracle plus real subprocess ground truth,
 never from the production matcher.  EVD-03 reproduces a wrapper-unwrapping
 defect on the unfixed tree and guards its narrowly scoped fix.
 """
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import os
@@ -27,24 +17,25 @@ import tempfile
 import unittest
 from unittest import mock
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
-import test_autocode as base
+from . import test_autocode as base
 from goal_fixtures import approve_fixture, envelope
+from . import LOGIN_SHELL
 
-ZSH = "/bin/zsh"
-
-
+# Every literal "/bin/zsh" string elsewhere in this file is wrapper-format
+# DATA fed into support.same_command() / CommandOracle.equivalent(), which
+# parse it with Python's shlex and never spawn a shell; it must stay zsh
+# specifically because that is exactly the wrapper format production code
+# recognizes (Codex records commands wrapped by macOS's login shell). Only
+# run_shell() actually executes a shell binary, so only it needs a shell
+# that is really installed on this machine.
 def run_shell(command):
-    return subprocess.run(command, shell=True, executable=ZSH, capture_output=True, text=True)
+    return subprocess.run(command, shell=True, executable=LOGIN_SHELL, capture_output=True, text=True)
 
 
 class UnitEvidenceCase(kit.CatalogueCase):

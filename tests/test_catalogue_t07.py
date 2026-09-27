@@ -5,16 +5,6 @@ checkpoints are not a product promise and are reported as a scoped gap, not
 implemented.  The remaining nine cases re-execute existing regressions or add
 the explicit gaps under the evidence-bundle harness.
 """
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 from pathlib import Path
@@ -22,11 +12,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_escalation as escalation
@@ -34,7 +20,7 @@ import autocode_failures as failures
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
-import test_catalogue_t06 as t06
+from . import test_catalogue_t06 as t06
 from goal_fixtures import body, envelope
 
 
@@ -271,7 +257,7 @@ class RepairScenarios(RepairCase):
 
     def test_fix10_progress_governs_time_not_wall_clock(self):
         """FIX-10. Existing: test_goals.test_limits_pause_and_cannot_complete."""
-        import test_catalogue_t01 as t01
+        from . import test_catalogue_t01 as t01
         case_state = {"version": 2, "workspace": str(self.root), "task": "Slow fixture",
                       "status": "RUNNING", "iteration": 1, "sessions": {}, "stages": [], "history": [],
                       "acceptance_criteria": [], "settings": dict(self.state["settings"])}

@@ -29,7 +29,7 @@ test command succeeded. Live audit limitations are recorded alongside results.
 ### Unit suite
 
 ```sh
-python3 -m unittest tools/test_escalation.py tools/test_autocode.py tools/test_goals.py tools/test_subprocess.py tools/test_opencode.py tools/test_process.py
+python3 -m unittest tests/test_escalation.py tests/test_autocode.py tests/test_goals.py tests/test_subprocess.py tests/test_opencode.py tests/test_process.py
 ```
 
 The unit suite uses isolated Git fixtures. The subprocess test drives the actual CLI,
@@ -70,7 +70,7 @@ See [Dashboard](dashboard.md#dashboard-verification) for the dashboard test comm
 
 An oracle-reported error or deferred check is not proof of a product defect and
 cannot establish successful delivery. The fixture-profile tests in
-`tools/test_live_trial.py` exercise these verdicts without hosted-model requests.
+`tests/test_live_trial.py` exercise these verdicts without hosted-model requests.
 These scoring checks do not remove the other live-driver limitations listed in
 the progressive testing plan.
 

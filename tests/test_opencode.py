@@ -1,14 +1,4 @@
 """OpenCode transport tests with native JSON events and no network/model calls."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import os
@@ -21,17 +11,11 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
 import autocode_opencode as oc
 import autocode_support as support
-import test_subprocess as subprocess_tests
+from . import test_subprocess as subprocess_tests
 
 
 def event(kind, **part):
@@ -288,7 +272,7 @@ class OpenCodeFlow(unittest.TestCase):
 
     def setUp(self):
         subprocess_tests.SubprocessFlow.setUp(self)
-        source = _TOOLS
+        source = Path(__file__).resolve().parents[1] / "tools"
         target = self.root / "fixture-bin/opencode"
         shutil.copy2(source / "fake_opencode.py", target)
         target.chmod(0o755)
