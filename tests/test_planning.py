@@ -160,6 +160,24 @@ class PlanningTests(unittest.TestCase):
         goals.install_draft(state, body(), origin="glm_draft")
         return state
 
+    def test_planning_handoff_keeps_all_review_ids_beyond_six(self):
+        state = self.state()
+        state['workspace'] = '/fixture'
+        state['settings']['roles'] = {'glm': {}}
+        ids = [f'C-{number}' for number in range(1, 10)]
+        report = {'summary': 'Nine independent findings',
+                  'concerns': [{'id': item, 'concern': item} for item in ids],
+                  'responses': [{'concern_id': item, 'response': item} for item in ids],
+                  'decisions': [{'concern_id': item, 'decision': item} for item in ids]}
+        state['planning']['reports'] = {'astra_challenge': {'report': report}}
+        prompt, _ = planning.context(state, 'glm_revise', Path('/fixture/state.json'))
+        packet = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+        retained = packet['planning']['reports']['astra_challenge']['report']
+        self.assertEqual(ids, [row['id'] for row in retained['concerns']])
+        self.assertEqual(ids, [row['concern_id'] for row in retained['responses']])
+        self.assertEqual(ids, [row['concern_id'] for row in retained['decisions']])
+        self.assertEqual(ids, [row['id'] for row in report['concerns']])
+
     def test_draft_cannot_be_approved_before_both_partners_finish(self):
         state = self.state()
         self.assertEqual("astra_challenge", state["next_stage"])

@@ -404,7 +404,8 @@ def context(state, stage, state_path):
     exchange = copy.deepcopy(state.get("planning", {}))
     for entry in exchange.get("reports", {}).values():
         # Current contract is included once. Older full drafts stay retrievable
-        # via the artifact path; concerns/responses retain the explicit delta.
+        # via the artifact path; every concern, response and decision remains in
+        # the handoff because later review stages must account for every ID.
         entry["report"].pop("contract", None)
         # Trim verbose fields from older reports to keep the prompt bounded.
         report = entry.get("report") or {}
@@ -413,10 +414,6 @@ def context(state, stage, state_path):
                 report[key] = report[key][:5]
             elif isinstance(report.get(key), str) and len(report[key]) > 500:
                 report[key] = report[key][:500] + "…"
-        for row_key in ("concerns", "responses", "decisions"):
-            rows = report.get(row_key)
-            if isinstance(rows, list) and len(rows) > 6:
-                report[row_key] = rows[:6]
     packet = {"task": state["task"], "workspace": state["workspace"], "state_file": str(state_path),
               "joint_planning": True, "execution_engine": engine_for(state["settings"], route_for(state, stage)),
               "stage": stage,
