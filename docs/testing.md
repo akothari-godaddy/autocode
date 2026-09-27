@@ -74,6 +74,51 @@ cannot establish successful delivery. The fixture-profile tests in
 These scoring checks do not remove the other live-driver limitations listed in
 the progressive testing plan.
 
+The driver also registers the [task-type scenarios](scenarios.md) (bug fix,
+feature, architecture, multi-service program, design-reference UI). Their oracles
+have offline positive and targeted negative controls in `tools/test_scenario_oracles.py`; `--score-only PATH` scores a
+workspace delivered by any route, and `--mode program` drives a scenario through
+[`autocode program`](program.md). Every task-type baseline is `NOT_RUN` until a live
+result is recorded.
+
+In program mode, `--i-authorize-live-model-spend` authorizes model calls only.
+`--authorize-deployment` is a separate opt-in for deployment workstreams and is never
+added automatically. `PROGRAM-01` needs no deployment authorization: generating its
+descriptors is ordinary code work, and no deployment is performed.
+
+`--timeout` is a single wall-clock budget shared by all CLI invocations in the
+runner-driving phase, including program child gates. Independent oracle scoring and
+bounded process cleanup are separate. On deadline the harness stops the CLI and its
+provider descendants, then records `ERROR` and scores whatever was delivered; it
+does not rewrite a still-`RUNNING` checkpoint into a successful or paused run.
+Unhandled runner pauses remain honest blockers instead of being blindly resumed.
+
+The first GLM 5.3 / MiMo v2.6 Pro task-type live trials produced no completed delivery;
+see [the evidence record](../VALIDATION.md). Passing offline controls must not be
+presented as live model success.
+
+### Diagnosis trials
+
+`tools/live_diagnosis_trial.py` records a controlled trial of the operator-triggered
+diagnostic route. Its CLI phases share one deadline and invocation budget. Candidate
+stdout and candidate tests are not grading authority: a bounded isolated adapter
+returns function results over a separate channel, and the parent checks the numeric
+contract and protected-test bytes. Import failures, skipped tests, early exit, missing
+results, forged stdout, wrong signatures, timeouts, and changed protected tests fail.
+The subprocess boundary and process-group cleanup are not a hostile-code sandbox.
+
+The report separates the seeded implementation defect from the actual report-rejection
+diagnosis target. A mechanically raised repetition count is labeled fault injection,
+not proof of organic repeated-failure detection. Policy acceptance and an observed
+original-stage retry are recorded separately from the model's recommendation.
+
+`code_verdict` can be PASS or FAIL, but a code PASS is never an automatic diagnosis PASS.
+The overall result is `RECORDED` (exit 3) when diagnosis is not exercised or causal
+assessment still needs human review, `FAIL` (exit 1) for failed independent checks, and
+`ERROR` (exit 1) for a driving/budget failure. `--i-authorize-live-model-spend` remains
+required for non-fixture profiles. Passing fixture regressions does not close the
+real-model diagnosis-validation requirement.
+
 ## Legacy migration — opt-in only
 
 Existing v3 approved contracts retain their exact content, hash and approval. New

@@ -121,6 +121,25 @@ class CommandProviderTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "JSON object"):
             provider.final_report(events)
 
+    def test_malformed_report_file_is_preserved_for_repair(self):
+        write_config(self.home, "report", 'name = "report"\ncommand = ["tool"]\n' + ROLES)
+        provider = command.load("report")
+        events = self.home / "events.jsonl"
+        events.with_suffix(".json").write_text('{"unfinished":')
+        response = self.home / "response.txt"
+        with self.assertRaisesRegex(RuntimeError, "did not write a JSON report"):
+            provider.final_report(events, response_path=response)
+        self.assertEqual('{"unfinished":', response.read_text())
+
+    def test_event_provider_forwards_repair_options(self):
+        write_config(self.home, "events", 'name = "events"\ncommand = ["tool"]\n'
+                     'output = "opencode_events"\nresume = ["--session", "{session}"]\n' + ROLES)
+        provider = command.load("events")
+        events, response = self.home / "events.jsonl", self.home / "response.txt"
+        with mock.patch.object(command._opencode_events, "final_report", return_value={"ok": True}) as parse:
+            self.assertEqual({"ok": True}, provider.final_report(events, recover_wrapped=True, response_path=response))
+        parse.assert_called_once_with(events, recover_wrapped=True, response_path=response)
+
     def test_drift_when_config_or_tool_version_changes(self):
         binary = self.home / "bin"
         binary.mkdir()

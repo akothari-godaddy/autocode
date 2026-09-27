@@ -434,7 +434,9 @@ class RetrofitTest(unittest.TestCase):
         with patch.object(runner.processes, "live_processes", return_value=[]):
             runner.abandon_stage(self.state, self.run, self.root, "005/terra-01")
         self.assertEqual("PAUSED_STAGE_ABANDONED", self.state["status"])
-        self.assertEqual("astra_review", self.state["next_stage"])
+        # Abandoning a terra (Builder) attempt re-dispatches terra to inspect
+        # the partial work, not astra_review; see commit 46a8187.
+        self.assertEqual("terra", self.state["next_stage"])
         self.assertNotIn("active_stage", self.state)
         self.assertNotIn("terra", self.state["sessions"])
         self.assertNotIn("validation", self.state)

@@ -39,8 +39,10 @@ The detailed guides describe supported paths, defaults, and limitations. They ar
 | Figma workflow | A Codex/plugin-backed design → review → implementation-handoff path exists. It requires the relevant Figma tools to be available to the CLI; it does not assume a Figma Make API. | [Figma](docs/figma.md) |
 | Configurable runtimes and models | OpenCode is the default engine; Codex and configured command-tool adapters are available, including a bundled KiloCode configuration. Roles and supported reasoning settings are configurable. | [Providers](docs/providers.md), [Models](docs/models.md) |
 | Multiple task lanes | Tasks in a lane run sequentially; separate lanes can run concurrently in separate worktrees. Lane branches are **not** automatically merged into one product. | [Task lanes](docs/task-lanes.md) |
+| Program workstreams | A large requirement becomes a manifest of workstreams with explicit dependencies and literal ownership, derived from an approved plan. Each workstream is an ordinary reviewed run in its own worktree; completed workstreams are merged `--no-ff` onto one integration branch in dependency order, conflicts pause, and deployment workstreams wait for explicit authorization. The integration branch is **not** merged into your default branch. | [Programs](docs/program.md) |
+| Task-type scenario catalogue | Frozen scenarios for a bug fix, a feature in an existing project, an architecture task, a multi-service program, and a design-reference UI, each with an independent executable oracle proven against reference and broken deliveries. A driver seeds, runs, serves human gates, and scores; `--score-only` scores any delivered workspace. No live baselines are recorded yet. | [Scenarios](docs/scenarios.md) |
 
-**Important boundaries:** Parallel milestone integration is not automatic merging into `master`. Task lanes are not yet hierarchical product planning. Existing conversations and checkpoints are the foundation for the broader one-conversation workspace—not a claim that all planned engineering workflows already exist.
+**Important boundaries:** Parallel milestone integration is not automatic merging into `master`. Programs add one level (workstreams with an integration branch), not the full Project → Workstream → Milestone → Task hierarchy, and their merged branch still needs your review. The scenario oracles prove what a delivery must do; they do not yet record that any model delivered it. Existing conversations and checkpoints are the foundation for the broader one-conversation workspace—not a claim that all planned engineering workflows already exist.
 
 ## How the current workflow fits together
 
@@ -89,7 +91,7 @@ existing runs. For a GoCode-native run, GoCode must be in managed mode with its
 credential bundle available; the runner launches `gocode exec codex exec` and
 does not launch OpenCode.
 macOS/Linux are supported; Windows needs WSL because the inherited process and lock
-mechanisms use POSIX APIs. There are no Python runtime dependencies. Installation does
+mechanisms use POSIX APIs. The only Python runtime dependency is `psutil`, used for process supervision. Installation does
 not change Codex or OpenCode settings. `--engine codex` still starts a Codex-only run.
 
 The current development priority is **reliable completion of agreed work**. Focus on
@@ -183,11 +185,35 @@ The rules we preserve are:
 
 The following is the intended direction. It is **not** a list of features already shipped, and it does not authorize unattended implementation of the whole roadmap.
 
+The order below was reviewed against [`63ee862`](https://github.com/charlieanna/autocode/tree/63ee862c378f1d2988e31c49d64486b529ae16dc) on September 26, 2026. Each item is an open proposal tracked in [#14](https://github.com/charlieanna/autocode/issues/14); review questions live on the linked issues.
+
+### Order of work
+
+| When | Work | Proposal |
+| --- | --- | --- |
+| Now | Reliability fixes and the AutoReview review coverage plan | [#17](https://github.com/charlieanna/autocode/issues/17) |
+| In parallel | One conversation as a read-only projection of saved records; one role vocabulary | [#18](https://github.com/charlieanna/autocode/issues/18), [#19](https://github.com/charlieanna/autocode/issues/19) |
+| Next | Intent-based workflows, starting with **fix** and **review** only | [#20](https://github.com/charlieanna/autocode/issues/20) |
+| Then | A live draft plan while requirements are clarified | [#21](https://github.com/charlieanna/autocode/issues/21) |
+| When a real project needs it | Workstreams on top of task lanes; interface contracts; skeleton-first integration | [#22](https://github.com/charlieanna/autocode/issues/22), [#23](https://github.com/charlieanna/autocode/issues/23) |
+| Throughout | Measured small-task cost; a live-trial exit gate for each step | [#15](https://github.com/charlieanna/autocode/issues/15), [#16](https://github.com/charlieanna/autocode/issues/16) |
+
+Why this order:
+
+- Reliability work is still finding real defects on small tasks. See [`docs/bugs/`](docs/bugs/): four reports from September 25–26, two still open.
+- Live evidence is thin. The C#→Go trial passed on a single re-run, the bug-fix trial has not been re-run, and the UI trial has never run because its design fixture is missing. See [live re-trials](audits/autopilot-test-catalogue/LIVE_RERUN.md).
+- Small jobs are not yet small. A greeting CLI took 832 seconds through AutoCode against 38 seconds for a direct agent ([comparison](audits/task-vs-autopilot-2026-09-24.md)), and live trials took 11–24 stages. Hierarchy adds stages; it does not remove them.
+- A polished conversation on top of a pipeline that still gets stuck makes the product look more finished than it is. UX work proceeds, but only as a view of existing records.
+
+**Every step needs a measurable exit gate.** For example: a user can follow the to-do trial (LIVE-02) end to end in the dashboard without opening `state.json`, and a fix run of the bug-fix trial (LIVE-03) meets agreed time and stage targets. Fake-provider results and live-model results are reported separately ([#16](https://github.com/charlieanna/autocode/issues/16)).
+
+**Not planned yet:** arbitrary recursive agents, automatic model selection across large catalogues, separate services per role, a plugin marketplace, a workflow DSL, user-selectable modes, multi-user collaboration, distributed execution, a second findings system, or a second state database.
+
 ### 1. Strengthen AutoReview first — immediate non-UX priority
 
 **Current:** Validator + Completion Owner, candidate-bound checks, a findings ledger, and controller-owned gates.
 
-**Next:** Make the review obligation explicit before carrying out the checks:
+**Next:** Make the review obligation explicit before carrying out the checks ([#17](https://github.com/charlieanna/autocode/issues/17)):
 
 ```text
 Approved contract + exact candidate + open findings
@@ -210,19 +236,25 @@ Approved contract + exact candidate + open findings
 
 The planned review model should identify which criteria were checked, how, against what source and environment, with what evidence, and what remains unverified. A result may contain **both** confirmed defects and missing verification; neither should hide the other.
 
+**Tester** and **Reviewer** are responsibilities, not new agents or services. The existing workflow modes already move independent validation between the Validator and the Plan Reviewer, so each responsibility is assigned by stage.
+
 Start by strengthening existing command evidence and review contracts. Add domain-specific verification only where a real task requires it: browser interactions, design comparison, migration parity, or behavioral simulations. Testing generates observations; review interprets them; the controller enforces advancement. A schema-complete review plan is not proof that its tests are sufficient.
 
 Evolve the existing units and compatibility paths. Do not create a second findings database or silently remove required reviews from saved runs.
 
 ### 2. Make one conversation work across the engineering lifecycle — UX track
 
-**Current:** Planning conversations, task views, checkpoint history, and feedback/control surfaces exist.
+**Current:** Planning conversations, task views, checkpoint history, and feedback/control surfaces exist. The runner saves progress messages in `state.json`, and the dashboard merges them with answers, plan revisions, and feedback receipts in the browser.
 
-**Target:** One continuous conversation for a piece of engineering work, with project-wide visibility and relevant artifacts alongside it. While the human clarifies the request, a Planner maintains a versioned draft; a Plan Reviewer checks it before approval. Questions, status requests, proposed scope changes, and control actions have distinct effects.
+**Target:** One continuous conversation for a piece of engineering work, with project-wide visibility and relevant artifacts alongside it. Questions, status requests, proposed scope changes, and control actions have distinct effects.
+
+- **One tested projection** ([#18](https://github.com/charlieanna/autocode/issues/18)). The conversation is built from saved records by one server-side function: stages, answers, plan revisions, approvals, findings, and checkpoints. Events have stable IDs derived from those records. AutoPilot never reads the projection, so it cannot become a second workflow record.
+- **One role vocabulary** ([#19](https://github.com/charlieanna/autocode/issues/19)). Display names come from one mapping and label the responsibility exercised at that stage. Stage IDs and saved state keys do not change.
+- **A live draft plan** ([#21](https://github.com/charlieanna/autocode/issues/21)). While the human clarifies the request, a Planner maintains a versioned draft; a Plan Reviewer checks it before approval. This starts only after answers reliably trigger re-evaluation ([Bug 002](docs/bugs/002-answers-not-reevaluated.md)). A draft is never approvable, and refreshes are bounded.
 
 The user should be able to ask “Why is this still open?” and see the current blocking findings and missing evidence—not read every agent transcript. A live preview makes UI work tangible. Task, plan, finding, and evidence details remain available without losing the conversation.
 
-Show concise explanations of actions, decisions, and observations—not private model reasoning or invented progress percentages. UX work can proceed separately from backend review improvements.
+Show concise explanations of actions, decisions, and observations—not private model reasoning or invented progress percentages. State panels show counts backed by records, such as tasks done, criteria verified, open findings, and pending decisions. UX work can proceed separately from backend review improvements.
 
 ### 3. Support the engineering outcome, not one compulsory coding pipeline
 
@@ -239,13 +271,20 @@ Show concise explanations of actions, decisions, and observations—not private 
 | “Discuss these tradeoffs.” | Options, assumptions, consequences, and a decision record—not unsolicited implementation. |
 | “Review or build this UI.” | A design assessment or implementation, with rendered and interaction evidence. |
 
-These are target workflows, not claims that today's CLI automatically classifies and implements every intent. Reuse the same units and approval rules instead of building a different engine for every request.
+These are target workflows, not claims that today's CLI automatically classifies and implements every intent. Reuse the same units and approval rules instead of building a different engine for every request. The [task-type scenarios](docs/scenarios.md) freeze one request of each kind with an independent oracle, so a claim that a workflow works can be tested rather than asserted.
+
+Start with **fix** and **review** ([#20](https://github.com/charlieanna/autocode/issues/20)):
+
+- **Fix** is where small-task cost targets should be met ([#15](https://github.com/charlieanna/autocode/issues/15)).
+- **Review** must be read-only, enforced by AutoPilot rather than by leaving the Builder out of the sequence.
+- **Intent reconciles existing routing.** The workflow mode, the task-lane `ui`/`code` mode, and the Figma path already choose pipelines; intent must reconcile with them rather than become a fourth routing setting.
+- **The proposed intent is shown at the existing approval boundary.** Mistaking a discussion for a build writes code nobody asked for; the reverse is only a missed opportunity.
 
 ### 4. Grow from bounded tasks to large projects
 
-**Current:** Milestones, dependency-aware Builder batches, and manually defined task lanes.
+**Current:** Milestones, dependency-aware Builder batches, manually defined task lanes, and [programs](docs/program.md). Lanes schedule complete runs in separate worktrees without a parent contract or automatic merging. Programs derive workstreams from an approved plan, run each through its own review gates, and merge completed workstreams in dependency order onto an integration branch for final integration work. Deployment workstreams need explicit authorization.
 
-**Planned:** A bounded hierarchy:
+**Planned:** A bounded hierarchy, started only when a real project needs it and the earlier exit gates are met:
 
 ```text
 Project -> Workstream -> Milestone -> Task
@@ -253,9 +292,17 @@ Project -> Workstream -> Milestone -> Task
 
 A large adaptive-learning platform might need domain modeling, backend APIs, frontend, learning policies, content, evaluation, and deployment work. It should not become one enormous prompt or an unreviewable list of hundreds of tasks.
 
-The parent plan should establish product requirements and shared interfaces. Each workstream should inherit those constraints, develop its own reviewed plan, and produce an identifiable result. Cross-workstream contract changes must be explicit; child agents must not redefine the product independently.
+Build workstreams on task lanes rather than inside one run ([#22](https://github.com/charlieanna/autocode/issues/22)):
 
-Integrate early through small end-to-end slices—for example, one learner studies one concept, submits an attempt, and receives a next activity—rather than waiting for every subsystem to be “finished.” Component checks and simulations do not by themselves establish real learning effectiveness. Final product verification must return to the original user journey.
+- **Each workstream is an ordinary run** with its own state, approval, review, and completion gate.
+- **Each workstream contract carries the parent contract's hash.**
+- **The parent project is a thin manifest** that establishes product requirements and shared interfaces.
+- **Children cannot drop inherited requirements.** A child plan that omits an inherited requirement is rejected.
+- **Only product decisions go to the user.** Technical questions stay inside the workstream.
+
+Cross-workstream interfaces are versioned contracts ([#23](https://github.com/charlieanna/autocode/issues/23)). A workstream that finds an interface problem raises a change request to the parent instead of redefining it locally. An accepted change invalidates approval for every consumer, the same rule as a revised brief.
+
+Integrate early through a skeleton-first slice—for example, one learner studies one concept, submits an attempt, and receives a next activity—rather than waiting for every subsystem to be “finished.” Other workstreams extend that slice, and the integrated candidate is re-verified as each one lands. Component checks and simulations do not by themselves establish real learning effectiveness. Final product verification must return to the original user journey.
 
 Keep small jobs small. A typo fix does not need a program hierarchy. Deployment, credentials, and external mutations remain separately authorized.
 
@@ -329,7 +376,11 @@ python3 -m unittest tools/test_escalation.py tools/test_autocode.py \
   tools/test_process.py
 ```
 
-This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), and [audit artifacts](audits/).
+This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), and [audit artifacts](audits/). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
+
+```sh
+python3 -m unittest tools/test_scenario_oracles.py tools/test_program.py tools/test_live_trial.py
+```
 
 **Fixture tests establish behavior under the exercised conditions, not model quality or universal correctness.** Test counts and historical results must be tied to their recorded source/environment. Do not present them as a fresh run of current master. The reliability plan also calls for bounded real-model delivery trials: a small application, a feature in an existing project, and a bug fix.
 
@@ -347,6 +398,9 @@ There is no promise of bug-free output, arbitrary exactly-once external effects,
 tools/autopilot.py       overall workflow controller
 tools/units/            planning, build, review, and repair units
 tools/autocode_*.py     contracts, findings, evidence, execution, and recovery
+tools/autocode_program.py  program workstreams: manifest, derive, waves, integration branch
+tools/task_scenarios.py    task-type scenarios and their independent oracles
+tools/live_trial.py     scenario driver: seed, run, serve gates, score
 tools/providers/        runtime adapters and bundled command-tool configs
 tools/dashboard/        local browser interface
 macos-app/              native host for the dashboard
@@ -363,8 +417,8 @@ VALIDATION.md           recorded results and limitations
 | Models and runtime integration | [Models](docs/models.md) · [Providers](docs/providers.md) |
 | Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) |
 | Conversation and monitoring | [Dashboard](docs/dashboard.md) · [Registry API](docs/registry-api.md) · [macOS app](docs/macos-app.md) |
-| Visual work and multi-task runs | [Figma](docs/figma.md) · [Task lanes](docs/task-lanes.md) |
-| Verification and project priorities | [Testing](docs/testing.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
+| Visual work and multi-task runs | [Figma](docs/figma.md) · [Task lanes](docs/task-lanes.md) · [Programs](docs/program.md) |
+| Verification and project priorities | [Testing](docs/testing.md) · [Scenarios](docs/scenarios.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
 
 ## Keep this README honest
 
@@ -378,6 +432,10 @@ When deciding what to build next, ask:
 
 If not, it is probably not the next priority.
 
+## Contributing and security
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a checkout, run the suite gate, and propose a change (including the policy on AI-assisted contributions), [SECURITY.md](SECURITY.md) for how to report a vulnerability privately and what counts as one here, and the [Code of Conduct](CODE_OF_CONDUCT.md). Bug reports and feature requests use the issue templates.
+
 ## License
 
-No root-level license file is present in the status snapshot above, and the package metadata does not specify a license. The maintainer still needs to document the project's licensing; this README does not choose a license.
+AutoCode is licensed under the [Apache License, Version 2.0](LICENSE). The copyright holder is named in [NOTICE](NOTICE). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).

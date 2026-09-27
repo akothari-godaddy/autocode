@@ -79,6 +79,37 @@ class OpenCodeTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "not a JSON report"):
                 oc.final_report(path)
 
+    def test_rejected_response_capture_excludes_tool_output_and_earlier_messages(self):
+        with tempfile.TemporaryDirectory() as temp:
+            events = Path(temp) / "events.jsonl"
+            response = Path(temp) / "response.txt"
+            rows = [event("text", id="old", messageID="old", text='{"fake":"earlier"}'),
+                    event("tool_use", tool="read", state={"status": "completed", "output": "large tool output" * 10000}),
+                    event("text", text='{"summary": "unfinished"'), terminal()]
+            events.write_text("\n".join(json.dumps(row) for row in rows))
+            with self.assertRaisesRegex(RuntimeError, "not a JSON report"):
+                oc.final_report(events, response_path=response)
+            self.assertEqual('{"summary": "unfinished"', response.read_text())
+
+    def test_response_capture_requires_successful_terminal_message(self):
+        with tempfile.TemporaryDirectory() as temp:
+            events = Path(temp) / "events.jsonl"
+            response = Path(temp) / "response.txt"
+            events.write_text(json.dumps(event("text", text='{"ok":true}')))
+            with self.assertRaisesRegex(RuntimeError, "no successful terminal"):
+                oc.final_report(events, response_path=response)
+            self.assertFalse(response.exists())
+
+    def test_response_capture_preserves_split_text_parsing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            events = Path(temp) / "events.jsonl"
+            response = Path(temp) / "response.txt"
+            rows = [event("text", id="comment", text="Report follows"),
+                    event("text", id="final", text='{"ok":true}'), terminal()]
+            events.write_text("\n".join(json.dumps(row) for row in rows))
+            self.assertEqual({"ok": True}, oc.final_report(events, response_path=response))
+            self.assertEqual('Report follows\n{"ok":true}', response.read_text())
+
     def test_schema_prompt_keeps_agent_within_the_target_workspace(self):
         prompt = oc.prompt_for_schema("Task\nCURRENT HANDOFF DATA\n{}", {"type": "object"}, Path("/tmp/events.jsonl"))
         self.assertIn("strict filesystem boundary", prompt)

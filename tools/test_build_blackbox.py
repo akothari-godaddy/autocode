@@ -312,8 +312,9 @@ class BuildBlackbox(unittest.TestCase):
             self.build(); self.candidate()
             if i<2:
                 self.invoke('autoreview',['--run-dir',str(self.run),'--no-chat'])
-        check=subprocess.run([sys.executable,'-c',spec['checks']['M4']],cwd=self.project,capture_output=True,text=True)
+        check=subprocess.run([sys.executable,'-c',spec['checks']['M4']],cwd=self.project,capture_output=True,text=True,timeout=10)
         self.assertNotEqual(0,check.returncode)
+        self.assertIn('HTTP Error 404',check.stderr)
         (self.root/'independent-integration-failure.txt').write_text(check.stdout+check.stderr)
         self.invoke('autoreview',['--run-dir',str(self.run),'--no-chat'])
         self.assertEqual('FAIL',self.state()['validation']['verdict'])
@@ -322,6 +323,37 @@ class BuildBlackbox(unittest.TestCase):
     @unittest.skipUnless(shutil.which('go'),'Go toolchain required')
     def test_product_d_go_registry_synthetic_oracle_not_executed_csharp(self):
         self.finish_product(products.registry(plan))
+
+
+class HttpFixtureTests(unittest.TestCase):
+    def test_loopback_checks_avoid_dns_and_proxy_discovery(self):
+        for fixture, incompatible in ((products.client_server, False),
+                                      (products.client_server, True),
+                                      (products.duplicate_api, False)):
+            with self.subTest(fixture=fixture.__name__, incompatible=incompatible), \
+                    tempfile.TemporaryDirectory() as temp:
+                spec = fixture(plan)
+                if incompatible:
+                    spec['payloads']['M3']['client.py'] = spec['payloads']['M3']['client.py'].replace(
+                        'base+USER_PATH+uid', "base+'/user?id='+uid")
+                for files in spec['payloads'].values():
+                    for name, content in files.items():
+                        (Path(temp) / name).write_text(content)
+                for mid, check in spec['checks'].items():
+                    command = (
+                        'import socket, urllib.request\n'
+                        'from unittest.mock import patch\n'
+                        'with patch.object(socket, "getfqdn", side_effect=AssertionError("reverse DNS")), '
+                        'patch.object(urllib.request, "getproxies", side_effect=AssertionError("system proxies")):\n'
+                        f'    exec({check!r})\n'
+                    )
+                    result = subprocess.run([sys.executable, '-c', command], cwd=temp,
+                                            capture_output=True, text=True, timeout=10)
+                    if incompatible and mid == 'M4':
+                        self.assertNotEqual(0, result.returncode)
+                        self.assertIn('HTTP Error 404', result.stderr)
+                    else:
+                        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 if __name__=='__main__':

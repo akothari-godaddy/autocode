@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import unittest
@@ -23,7 +24,7 @@ import test_catalogue_t01 as t01
 from goal_fixtures import approve_fixture, body
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-INSTALLED = Path.home() / ".local" / "bin" / "autocode"
+INSTALLED = Path(sysconfig.get_path("scripts")) / "autocode"
 
 
 def rerun(test_name, timeout=180):
@@ -150,10 +151,8 @@ class CompatScenarios(CompatCase):
 
     def test_cfg09_installed_cli_runs_outside_the_repository(self):
         """CFG-09. New: the real installed entry point, offline, outside the repo."""
-        if not INSTALLED.exists():
-            self.bundle.log("environment_limitation", note="installed CLI not found")
-            self.finish(status=kit.BLOCKED_ENV, summary="installed CLI absent")
-            return
+        self.assertTrue(INSTALLED.is_file(),
+                        f"Install the package with {sys.executable} -m pip install -e .; missing {INSTALLED}")
         with tempfile.TemporaryDirectory() as outside:
             helped = subprocess.run([str(INSTALLED), "--help"], cwd=outside,
                                     capture_output=True, text=True, timeout=60)
@@ -174,7 +173,11 @@ class CompatScenarios(CompatCase):
 
     def test_cfg10_entry_point_aliases_consistent(self):
         """CFG-10. Documented aliases: autocode units + installed scripts."""
-        units = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True).stdout
+        self.assertTrue(INSTALLED.is_file(),
+                        f"Install the package with {sys.executable} -m pip install -e .; missing {INSTALLED}")
+        helped = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True, timeout=60)
+        self.check("installed_help_exit", 0, helped.returncode)
+        units = helped.stdout
         self.check("unit_aliases_documented", True,
                    all(u in units for u in ("autoplanner", "autocode", "autoreview", "autoresolver")))
         source_aliases = sorted((REPO_ROOT / "tools" / "units").glob("*.py"))

@@ -137,13 +137,38 @@ def check_evidence_options(record):
             'capture_context': record.get('capture_context')}
 
 
+def normalize_plan_challenge_blocking(value, record):
+    """Conservatively retain plan findings when only their blocking flag is omitted.
+
+    Missing flags cannot clear a finding. The raw provider report is preserved by
+    load_stage_report, and the complete normalized report still faces its schema.
+    """
+    if record.get('stage') not in ('astra_challenge', 'astra_challenge_report_repair') or not isinstance(value, dict):
+        return value
+    concerns = value.get('concerns')
+    if not isinstance(concerns, list) or not any(
+            isinstance(row, dict) and 'blocking' not in row for row in concerns):
+        return value
+    if any(not isinstance(row, dict) for row in concerns):
+        return value
+    return {**value, 'concerns': [
+        {**row, 'blocking': True} if 'blocking' not in row else row
+        for row in concerns]}
+
+
 def load_stage_report(record, workspace=None, evidence_record=None):
     if record.get("engine") == "opencode":
         # Raw provider events are authoritative, including during recovery.
-        value = opencode.final_report(record["events"], recover_wrapped=bool(record.get("report_only")))
+        record['response_text'] = str(Path(record['output']).with_suffix('.response.txt'))
+        value = opencode.final_report(record["events"], recover_wrapped=bool(record.get("report_only")),
+                                      response_path=record['response_text'])
+        # A rejected report is still an artifact. Persist it before schema or
+        # evidence validation so archival cannot leave repair pointing at nothing.
+        write_json(Path(record['output']), value)
     else:
         value = final_json(Path(record["output"]))
     reported = copy.deepcopy(value)
+    value = normalize_plan_challenge_blocking(value, record)
     evidence_record = evidence_record or record
     validation = value.get('validation', value)
     checks = validation.get('checks') if isinstance(validation, dict) else None
@@ -171,7 +196,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
         record['derived_check_metadata'] = [
             {'check_index': index, 'field': 'exit_code', 'value': check['exit_code'],
              'evidence_ref': check['evidence_ref'], 'events': evidence_record['events']}
-            for index, check in enumerate(checks)
+            for index, check in enumerate(checks or [])
             if 'exit_code' not in (reported.get('validation', reported)['checks'][index])]
     if record.get('engine') == 'opencode' or value != reported:
         write_json(Path(record['output']), value)
@@ -225,6 +250,42 @@ def reset_report_repair_for_resume(state):
     state.setdefault('user_events', []).append({
         'kind': 'report_repair_resume_epoch', 'actor': 'user_cli', 'at': now(),
         'cleared_attempts': prior, 'lifetime_attempts': state['report_repair_lifetime_attempts']})
+
+
+REPAIR_REPORT_BYTES = 128 * 1024
+REPAIR_HANDOFF_BYTES = 256 * 1024
+
+
+def repair_report_source(record):
+    """Return a complete, bounded report, never a slice of the transport log."""
+    output = Path(record['output'])
+    response = Path(record.get('response_text') or output.with_suffix('.response.txt'))
+    if not output.is_file() and record.get('engine') == 'opencode':
+        # Persisted pre-fix checkpoints may have no report file. Their pinned
+        # events can be extracted locally without asking a model to search JSONL.
+        try:
+            value = opencode.final_report(record['events'], recover_wrapped=bool(record.get('report_only')),
+                                          response_path=response)
+        except RuntimeError:
+            if not response.is_file():
+                raise support.Paused('PAUSED_REPORT_REPAIR_INPUT', 'No completed response is available for report repair')
+        else:
+            write_json(output, value)
+        record['response_text'] = str(response)
+    path = output if output.is_file() else response
+    if not path.is_file() or path.stat().st_size > REPAIR_REPORT_BYTES:
+        raise support.Paused('PAUSED_REPORT_REPAIR_INPUT',
+                             f'Repair report is missing or exceeds {REPAIR_REPORT_BYTES} bytes: {path}; '
+                             'inspect the saved artifact instead of truncating or reconstructing it')
+    text = path.read_text()
+    if not text.strip():
+        raise support.Paused('PAUSED_REPORT_REPAIR_INPUT', f'Repair report is empty: {path}')
+    try:
+        content, format_ = json.loads(text), 'json'
+    except ValueError:
+        content, format_ = text, 'text'
+    return {'path': str(path), 'sha256': support.file_hash(path), 'format': format_,
+            'bytes': len(text.encode('utf-8')), 'truncated': False, 'content': content}
 
 
 def recover_legacy_report_repair(state, run_dir, workspace):
@@ -287,6 +348,11 @@ def reject_completed_stage(state, run_dir, record, error):
                        'pins': {record[key]: support.file_hash(record[key])
                                 for key in ('events', 'before_ref', 'after_ref', 'schema') if record.get(key)}}
             state['pending_report_repair'] = pending
+        else:
+            pending['latest_rejected'] = copy.deepcopy(record)
+        for key in ('output', 'response_text', 'events', 'schema'):
+            if record.get(key) and Path(record[key]).is_file():
+                pending['pins'].setdefault(record[key], support.file_hash(record[key]))
         pending['error'] = str(error)
         if pending['attempts'] < repair_limit(state):
             state.update(status='RUNNING', phase='REPORT_REPAIR')
@@ -391,6 +457,9 @@ def run_role(
         command += ["-", "--json", "--output-schema", str(schema), "-o", str(output)]
         if model:
             command.extend(["--model", model])
+    if report_only and len(prompt.encode('utf-8')) > REPAIR_HANDOFF_BYTES:
+        raise support.Paused('PAUSED_REPORT_REPAIR_INPUT',
+                             f'Provider-decorated repair prompt exceeds {REPAIR_HANDOFF_BYTES} bytes; no request was launched')
     prompt_file.write_text(prompt)
 
     record = {"role": role, "stage": stage, "iteration": iteration, "started_at": now(), "command": command,
@@ -558,10 +627,7 @@ def assert_repair_preserves_builder_history(original, value):
     """
     if original.get('stage') != 'terra':
         return
-    try:
-        previous = read_json(Path(original['output']))
-    except (ValueError, OSError):
-        previous = {}
+    previous = repair_report_source(original)['content']
     if not isinstance(previous, dict):
         previous = {}
     for field in ('commands_run', 'results', 'changed_files', 'remaining_risks',
@@ -627,19 +693,49 @@ def execute_report_repair(state, run_dir, workspace):
                              'Saved report repair belongs to a different stage; reconcile before retrying')
     if pending['attempts'] >= repair_limit(state):
         raise support.Paused('PAUSED_REPORT_REPAIR_LIMIT', 'Bounded report-only repair attempts exhausted')
+    if pending['attempts'] and not pending.get('latest_rejected'):
+        # Old checkpoints kept the latest error but only the first report pointer.
+        # Reassociate from the owning stage's ordered history, never by filename.
+        stages = state.get('stages', [])
+        indices = [i for i, row in enumerate(stages) if row.get('events') == original.get('events')]
+        if len(indices) != 1:
+            raise support.Paused('PAUSED_STALE_VALIDATION', 'Cannot identify the original stage for report-repair recovery')
+        later = [row for row in stages[indices[0] + 1:] if row.get('report_only')]
+        if later:
+            latest = later[-1]
+            if (not latest.get('rejected') or latest.get('iteration') != original.get('iteration')
+                    or latest.get('original_stage', latest['stage'].removesuffix('_report_repair')) != original['stage']
+                    or latest.get('source_revision') != original.get('source_revision')
+                    or latest.get('contract_hash') != original.get('contract_hash')
+                    or latest.get('rejection_reason') != pending.get('error') or not stage_completed(state, latest)):
+                raise support.Paused('PAUSED_STALE_VALIDATION', 'Latest repair error cannot be paired with its rejected report')
+            pending['latest_rejected'] = copy.deepcopy(latest)
+            for key in ('output', 'response_text', 'events', 'schema'):
+                if latest.get(key) and Path(latest[key]).is_file():
+                    pending['pins'].setdefault(latest[key], support.file_hash(latest[key]))
+        elif pending.get('error') != original.get('rejection_reason'):
+            raise support.Paused('PAUSED_STALE_VALIDATION', 'Repair error does not match the saved original report')
     if (support.snapshot(workspace)['revision'] != original['source_revision']
             or (state.get('goal_contract') or {}).get('hash') != pending['contract_hash']
             or any(not Path(p).is_file() or support.file_hash(p) != h for p, h in pending['pins'].items())):
         raise support.Paused('PAUSED_STALE_VALIDATION', 'Saved report-repair inputs changed; do not retry')
     resolver_runtime.boundary(sys.modules[__name__], state, run_dir, workspace)
-    pending['attempts'] += 1
-    state.update(phase='REPORT_REPAIR')
-    write_json(run_dir / 'state.json', state)
+    original_source = repair_report_source(original)
+    rejected_source = (repair_report_source(pending['latest_rejected'])
+                       if pending.get('latest_rejected') else original_source)
+    for source in (original_source, rejected_source):
+        pending['pins'].setdefault(source['path'], source['sha256'])
     prompt = ('Return exactly one JSON object matching the saved stage schema, with no prose, '
               'fence, or duplicate report before or after it. Repair only the final structured '
               'report from this completed stage. Do not redo '
               'implementation, rerun tests, modify files, restart discovery or change the approved goal. '
-              'Read the original report, prompt and evidence at the supplied paths. Correct format '
+              'The complete rejected_report and exact validation error are in CURRENT HANDOFF DATA. '
+              'Repair that supplied draft directly; do not search raw JSONL or old prompts for its text. '
+              'Its path is an archived, hash-pinned copy, not a request to reconstruct a missing file. '
+              'Use archived_paths to update citations to artifacts that moved during archival; '
+              'never invent a replacement for missing evidence. '
+              'If original_report is also supplied, it is the immutable execution-history baseline; '
+              'rejected_report is the latest failed repair and error applies to that draft. Correct format '
               'and evidence citations; preserve findings, failures and uncertainty. '
               'Missing evidence must remain NOT_VERIFIED, never invented PASS. '
               'For Builder reports, copy existing valid commands_run, results, changed_files, '
@@ -675,7 +771,14 @@ def execute_report_repair(state, run_dir, workspace):
               + 'CURRENT HANDOFF DATA\n' + json.dumps({'report_repair': True,
                             'execution_engine': planning.engine_for(state['settings'], original.get('route_role', original['role'])),
                             'error': pending.get('error', original.get('rejection_reason',
-                                'Legacy report validation failed without a recorded error')), 'original': original,
+                                 'Legacy report validation failed without a recorded error')),
+                             'rejected_report': rejected_source,
+                             'original_report': original_source if pending.get('latest_rejected') else None,
+                             'original': {key: original[key] for key in ('role', 'stage', 'output', 'events', 'schema',
+                                          'source_revision', 'contract_hash', 'contract_revision', 'task_id')
+                                          if key in original},
+                             'archived_paths': {**original.get('archived_paths', {}),
+                                                **pending.get('latest_rejected', {}).get('archived_paths', {})},
                             'open_findings': findings_ledger.handoff(state),
                             'acceptance_criteria': support.criteria_definition(state.get('acceptance_criteria', [])),
                             'protected_contract': (goals.protected_contract_snapshot(state)
@@ -696,7 +799,14 @@ def execute_report_repair(state, run_dir, workspace):
                             'finding_identity_policy': 'Only reuse open IDs belonging to this reviewer; '
                                 'use an empty id for new findings. Copy exact commands and exits from '
                                 'original_executed_checks when citing those events. Never change an exit code.',
-                            'state_file': str(run_dir / 'state.json')}, indent=2))
+                             'state_file': str(run_dir / 'state.json')}, indent=2))
+    if len(prompt.encode('utf-8')) > REPAIR_HANDOFF_BYTES:
+        raise support.Paused('PAUSED_REPORT_REPAIR_INPUT',
+                             f'Complete report-repair handoff exceeds {REPAIR_HANDOFF_BYTES} bytes; '
+                             'inspect the saved artifacts instead of launching an unbounded repair')
+    pending['attempts'] += 1
+    state.update(phase='REPORT_REPAIR')
+    write_json(run_dir / 'state.json', state)
     role = original['role']
     route_role = planning.route_for(state, original['stage'], role)
     try:
@@ -704,7 +814,7 @@ def execute_report_repair(state, run_dir, workspace):
             run_dir=run_dir, state=state, schema=Path(original['schema']),
             model=state['settings']['roles'][route_role]['model'], allow_write=False, dry_run=False, report_only=True)
     except support.Paused as error:
-        if error.status == "PAUSED_INTERVENTION_PENDING" and not state.get("active_stage"):
+        if error.status in ("PAUSED_INTERVENTION_PENDING", "PAUSED_REPORT_REPAIR_INPUT") and not state.get("active_stage"):
             pending["attempts"] -= 1
             write_json(run_dir / 'state.json', state)
         raise
@@ -736,16 +846,19 @@ def archive_rejected_stage(state, run_dir, record, reason):
     archived = base.parent / f"archived-{base.name}-{uuid.uuid4().hex[:6]}"
     archived.mkdir(parents=True, exist_ok=True)
     originals = []
-    for suffix in (".json", ".jsonl", ".reported.json", ".prompt.md", ".before.json", ".after.json", ".diff", ".tools.json", ".opencode.json"):
+    archived_paths = {}
+    for suffix in (".json", ".jsonl", ".reported.json", ".response.txt", ".prompt.md", ".before.json", ".after.json", ".diff", ".tools.json", ".opencode.json"):
         artifact = base.with_name(base.name + suffix)
         if artifact.exists():
             # Keep originals until the caller durably saves the archive pointers.
             # A crash or disk error must leave the previous checkpoint readable.
             shutil.copy2(artifact, archived / artifact.name)
             originals.append(artifact)
-    for key in ("output", "events", "reported_output", "prompt", "before_ref", "after_ref", "diff_ref", "tool_evidence", "permission_config"):
+            archived_paths[str(artifact)] = str(archived / artifact.name)
+    for key in ("output", "events", "reported_output", "response_text", "prompt", "before_ref", "after_ref", "diff_ref", "tool_evidence", "permission_config"):
         if record.get(key) and Path(record[key]).parent == base.parent:
             record[key] = str(archived / Path(record[key]).name)
+    record['archived_paths'] = archived_paths
     record["rejected"] = True
     record["rejection_reason"] = str(reason)
     state.setdefault("stages", []).append(record)
@@ -914,7 +1027,9 @@ def recovery_count(state):
 def timeout_recovery_guard(state):
     limit = state.get("settings", {}).get("limits", {}).get("no_progress_batches", 3)
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
-    consecutive = limit and state.get("consecutive_timeout_recoveries", 0) >= limit
+    # A configured limit of 0 means zero tolerance, not "no limit" — `limit and ...`
+    # would treat 0 as falsy and silently skip the check.
+    consecutive = limit is not None and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
         ctx = state.get("recovery_context") or {}
         cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")
@@ -2127,6 +2242,12 @@ def main(unit=None) -> int:
         except ImportError:
             import autocode_ui
         return autocode_ui.cli(sys.argv[2:])
+    if sys.argv[1:2] == ["program"]:
+        try:
+            from . import autocode_program
+        except ImportError:
+            import autocode_program
+        return autocode_program.cli(sys.argv[2:])
     if sys.argv[1:2] == ["compare-baseline"]:
         try:
             from . import autocode_baseline
@@ -2247,6 +2368,12 @@ def main(unit=None) -> int:
     parser.add_argument("--feedback", metavar="TEXT", help="Send brief feedback to the Requirements Gatherer; never approves implementation")
     parser.add_argument("--delegate", action="append", default=[], metavar="QUESTION_ID",
                         help="Explicitly accept the proposed default and delegate this decision")
+    parser.add_argument("--delegate-all", action="store_true",
+                        help="Delegate every currently pending question marked delegable with a proposed default; "
+                             "never grants approval and invalidates any existing one")
+    parser.add_argument("--reject-assumption", action="append", default=[], metavar="ASSUMPTION_ID",
+                        help="Reject a structured assumption from the current requirements handoff; "
+                             "never grants approval and invalidates any existing one")
     parser.add_argument("--approve-goal", metavar="TOKEN", help="Approve exactly a previously displayed revision")
     parser.add_argument("--edit-goal", type=Path, help="Load a revised contract body JSON; invalidates approval")
     parser.add_argument("--approve-review", action="append", default=[], metavar="CRITERION_ID")
@@ -2254,7 +2381,8 @@ def main(unit=None) -> int:
                         help="Bind an authenticated legacy acceptance to current validated evidence without a new approval")
     parser.add_argument("--accept-completion", action="store_true",
                         help="Operator-accept completion after the runner itself verifies every gate; use when the model's completion report cannot be produced")
-    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token")
+    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token; "
+                        "also required by --delegate-all and --reject-assumption")
     args = parser.parse_args()
     if args.max_parallel_builders is not None and args.max_parallel_builders < 1:
         parser.error('--max-parallel-builders must be positive')
@@ -2284,7 +2412,8 @@ def main(unit=None) -> int:
         if getattr(args, flag) is not None and getattr(args, flag) < 0:
             parser.error(f"--{flag.replace('_', '-')} must be nonnegative")
     actions = [args.status, args.dry_run, args.migrate_only, args.show_goal,
-               bool(args.answer or args.delegate), bool(args.approve_goal), bool(args.edit_goal),
+               bool(args.answer or args.delegate), bool(args.delegate_all), bool(args.reject_assumption),
+               bool(args.approve_goal), bool(args.edit_goal),
                bool(args.approve_review), bool(args.reconcile_review),
                args.feedback is not None, args.accept_completion, args.abandon_stage is not None,
                args.request_milestone_checkpoints, args.planning_review_call_limit is not None]
@@ -2292,8 +2421,12 @@ def main(unit=None) -> int:
         parser.error("Choose one action per invocation; answering and approving are separate events")
     if args.retry_builder and any(actions):
         parser.error("--retry-builder is a resume action; do not combine it with another action")
-    if args.review_token and not (args.approve_review or args.reconcile_review):
-        parser.error("--review-token requires --approve-review or --reconcile-review")
+    if (args.delegate_all or args.reject_assumption) and not args.review_token:
+        parser.error("--delegate-all and --reject-assumption require --review-token with the displayed goal token")
+    if args.review_token and not (args.approve_review or args.reconcile_review
+                                  or args.delegate_all or args.reject_assumption):
+        parser.error("--review-token requires --approve-review, --reconcile-review, --delegate-all "
+                     "or --reject-assumption")
     if args.reconcile_review and not args.review_token:
         parser.error("--reconcile-review requires --review-token")
     if not args.run_dir and any(actions[2:]):
@@ -2502,12 +2635,9 @@ def main(unit=None) -> int:
                             if isinstance(row, dict):
                                 row["seconds"] = 0
                                 row["seconds_by_role"] = {}
-                    # Reset the report-repair and resolver current-cycle attempt
-                    # budgets on explicit resume. Both resets are recorded, not
-                    # silent, and accumulate into a lifetime total neither
-                    # function resets (see reset_report_repair_for_resume and
-                    # resolver_runtime.reset_for_resume).
-                    reset_report_repair_for_resume(state)
+                    # Renew the resolver evaluation epoch without resetting the
+                    # lifetime diagnostic allowance. Report repair is renewed
+                    # only after exhaustion-gated retry decisions below.
                     resolver_runtime.reset_for_resume(state)
                     if args.retry_report:
                         try:
@@ -2536,6 +2666,12 @@ def main(unit=None) -> int:
                         repeated_failure_resume_guard(state, workspace)
                         prepare_planning_retry(state, run_dir)
                         prepare_exhausted_execution_report_retry(state, run_dir, workspace)
+                    # Reset report repair attempts on explicit resume, for whatever
+                    # repair record is still pending. An exhaustion-gated retry
+                    # above (which requires and archives the true attempt count)
+                    # already consumed it if one applied; resetting first would
+                    # corrupt that archived count and always fail those guards.
+                    reset_report_repair_for_resume(state)
                 reconcile_active(state, run_dir, workspace)
             except ReportRepairQueued:
                 pass  # Durable pending repair is dispatched below, not original work.
@@ -2573,10 +2709,11 @@ def main(unit=None) -> int:
             if args.migrate_only:
                 print("Migrated to an unapproved draft; saved work retained; no agent launched")
                 return 0
-            user_action = any((args.show_goal, args.answer, args.delegate, args.approve_goal, args.edit_goal,
-                                args.approve_review, args.reconcile_review,
-                                args.feedback is not None, args.accept_completion,
-                                args.planning_review_call_limit is not None))
+            user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
+                               args.approve_goal, args.edit_goal,
+                               args.approve_review, args.reconcile_review,
+                               args.feedback is not None, args.accept_completion,
+                               args.planning_review_call_limit is not None))
             if user_action:
                 metadata = intervention_metadata(workspace, run_dir, state)
                 if metadata["pending_count"] or metadata["inbox_error"]:
@@ -2603,6 +2740,10 @@ def main(unit=None) -> int:
                             goals.answer(candidate, question, response)
                     for question in args.delegate:
                         goals.answer(candidate, question, "accept default", delegated=True)
+                    if args.delegate_all:
+                        goals.delegate_all(candidate, args.review_token)
+                    for assumption_id in args.reject_assumption:
+                        goals.reject_assumption(candidate, assumption_id, args.review_token)
                     if args.feedback is not None:
                         goals.feedback(candidate, args.feedback)
                     if args.edit_goal:
