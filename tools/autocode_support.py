@@ -731,7 +731,14 @@ Choose exactly one status:
 CONTINUE: the current task passes (or this is the first task), but approved work remains.
 REWORK: a verified defect or unmet requirement needs a focused correction using findings.
 BLOCKED: permission, consequential ambiguity, a missing dependency or repeated lack of
-progress requires the user; explain exactly what is needed in user_request.
+progress requires the user; explain exactly what is needed in user_request. Set
+user_request.kind="permission" when the ask changes no goal, scope, acceptance
+criterion or approved product behavior -- for example, more execution time, tool
+budget or spending headroom to finish already-approved verification, or another
+scoped operational allowance. Use kind="blocker" only when the answer may itself
+change what is approved (the contract, a criterion, or scope): the runner reads
+"blocker" as requiring a fresh draft and re-approval, so never choose it merely
+because the report status is BLOCKED.
 COMPLETE: every approved criterion has evidence, the Validator validated the current final
 implementation and the full end-to-end flow was checked. Include the criterion-to-evidence
 summary in acceptance_criteria/evidence and disclose agreed_limitations.
