@@ -144,10 +144,13 @@ def investigate() -> dict:
             "observed": text("observed", "observed_by_reporter") or CONFIG["title"],
             "reproduction": text("reproduction", "reproduction_attempted") or "Scripted reproduction",
             "root_cause": text("root_cause") or ("Scripted root cause" if reproduced else ""),
-            "affected_paths": (saved.get("affected_paths") or [p for p in PATHS if p.endswith(".py")]) if reproduced else [],
+            "affected_paths": (saved.get("affected_paths") or [p for p in PATHS if p.endswith(".py") and "test" not in p])
+                              if reproduced else [],
+            "test_paths": ([p for p in PATHS if "test" in p] or ["tests/"]) if reproduced else [],
             "invariant": text("invariant") or ("Scripted invariant" if reproduced else ""),
             "conclusion": text("conclusion", "finding", "fix") or "Scripted conclusion",
-            "fix_size": "small" if reproduced else "none", "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
+            "fix_size": (saved.get("fix_size") or "small") if reproduced else "none",
+            "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
             "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"]}
 
 
@@ -200,9 +203,13 @@ def report_for(stage: str, data: dict) -> dict:
                 "end_to_end_result": {"status": status, "summary": f"{CHECK} exited {code}",
                                       "evidence_refs": ["event:check"]}}
     if stage in ("astra_review", "astra_plan", "astra_resolve"):
+        # Echo the approved contract's criteria: the runner rejects a report that restates them
+        # differently. A contract the fake did not plan (a bug-fix correction) has its own C1.
+        approved = ((data.get("goal_contract") or {}).get("body") or {}).get("acceptance_criteria") \
+            or [{"id": "C1", "criterion": "The scenario check command passes"}]
         return {**common, "status": "COMPLETE",
-                "acceptance_criteria": [{"id": "C1", "criterion": "The scenario check command passes",
-                                         "status": "verified", "evidence": "event:check"}],
+                "acceptance_criteria": [{"id": row["id"], "criterion": row["criterion"],
+                                         "status": "verified", "evidence": "event:check"} for row in approved],
                 "evidence": ["event:check"], "next_objective": "", "blocker": "", "plan": [],
                 "affected_paths": [], "findings": [], "finding_dispositions": [], "agreed_limitations": [],
                 "next_task": {"kind": "none", "milestone_id": "", "requirements": [],

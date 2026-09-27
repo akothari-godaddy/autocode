@@ -23,6 +23,17 @@ REVIEW_STAGE = "review_change"
 INVESTIGATE_STAGE = "investigate_bug"
 FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE}
 
+# Who may approve a goal contract. Normally only the user (actor "user_cli"). A
+# contract a workflow built under a policy the user agreed to carries one of these
+# origins and is approved by actor "workflow_policy", recorded with the policy text
+# (autocode_bug_job.SMALL_FIX_POLICY). goals.approved and the resolver both ask here.
+POLICY_ORIGINS = ("bugfix_small_correction",)
+
+
+def approval_actor_ok(origin, approval) -> bool:
+    actor = (approval or {}).get("actor")
+    return actor == "user_cli" or (actor == "workflow_policy" and origin in POLICY_ORIGINS)
+
 DESCRIPTIONS = {
     "build": "Make or change something: a feature, a new tool, a behavior change. The user wants working code "
              "at the end. Steps: understand the requirements, plan, review the plan, build, test, review.",

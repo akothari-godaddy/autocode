@@ -19,7 +19,11 @@ After approval, Autocode handles the handoffs:
 You → Autopilot: recognize the kind of job (build, bugfix, review, design, discuss); saved as `workflow`
    review → Reviewer only: findings written to review/findings.json, repository untouched, run complete
    bugfix → Investigator first: diagnosis written to docs/bugs/<name>.json, repository untouched;
-            not reproduced → run complete; reproduced → the build pipeline below
+            not reproduced → run complete;
+            reproduced, small → one Builder task built from the diagnosis (invariant = the acceptance
+              criterion, a regression test that fails before the fix), approved under a recorded policy
+              instead of by you (approval actor "workflow_policy"), then Validator and Completion Owner;
+            reproduced, large → the build pipeline below
    everything else, for now → the build pipeline below
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG

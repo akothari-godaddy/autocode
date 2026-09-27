@@ -30,8 +30,36 @@ def prepare_investigation(state):
 
 
 def apply_job(state, value, record, workspace):
-    """Autopilot hands the Investigator's validated report here."""
+    """Autopilot hands the Investigator's validated report here. A small reproduced bug
+    becomes one Builder task at once; anything else continues where bug_job.apply sent it."""
     bug_job.apply(state, value, record, workspace)
+    if bug_job.small_correction(state):
+        start_small_correction(state, workspace)
+
+
+def start_small_correction(state, workspace):
+    """Install the diagnosis as a one-task contract, approve it under the recorded policy
+    (never as the user), and assign the Builder task exactly as a user approval would."""
+    try:
+        from .. import autocode_dispatch as dispatch
+    except ImportError:
+        import autocode_dispatch as dispatch
+    body = bug_job.correction_contract(state)
+    goals.install_draft(state, body, origin=bug_job.ORIGIN)
+    goals.validate_body(state, body, ready=True)
+    contract = state["goal_contract"]
+    event = {"kind": "goal_approval", "actor": "workflow_policy", "policy": bug_job.SMALL_FIX_POLICY,
+             "at": support.now(), "token": goals.token(contract)}
+    state.setdefault("user_events", []).append(event)
+    contract.update(approval_status="approved", approval_event=event)
+    state.update(phase="READY_TO_EXECUTE", status="RUNNING", pending_questions=[])
+    decision = goals.initial_decision(body)
+    goals.assign_task(state, decision, support.snapshot(Path(workspace)))
+    state.update(next_action=decision["next_objective"], affected_paths=decision["affected_paths"],
+                 next_stage=dispatch.build_stage(state))
+    goals.record_decision(state, decision)
+    if not goals.approved(state):
+        raise ValueError("The small-correction contract did not pass the approval check")
 
 def guard(state, workspace):
     goals.execution_guard(state)

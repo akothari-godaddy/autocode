@@ -8,6 +8,3 @@ category = "bugfix"
 
 [fake]
 check = "python3 -m unittest discover -s tests -t ."
-
-[run]
-known_failure = "The Investigator diagnoses first, but a reproduced bug still goes through requirements gathering and full planning (issue #42)"

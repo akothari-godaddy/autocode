@@ -89,7 +89,7 @@ def boundary(runner, state, run_dir, workspace):
                                    'Existing failure and repair limits take precedence')
     contract = state['goal_contract']
     snapshot = policy.ContractSnapshot(**{key: contract[key] for key in
-        ('task_id', 'revision', 'hash', 'body', 'approval_status', 'approval_event')})
+        ('task_id', 'revision', 'hash', 'body', 'approval_status', 'approval_event')}, origin=contract.get('origin') or '')
     saved = state.setdefault('resolver', {})
     try:
         ledger = load_ledger(saved)

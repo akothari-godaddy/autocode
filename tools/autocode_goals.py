@@ -132,7 +132,7 @@ def approved(state):
     contract = state.get("goal_contract", {})
     approval = contract.get("approval_event") or {}
     return bool(contract and sealed(contract) and contract.get("approval_status") == "approved"
-                and approval.get("token") == token(contract) and approval.get("actor") == "user_cli"
+                and approval.get("token") == token(contract) and workflows.approval_actor_ok(contract.get("origin"), approval)
                 and approval in state.get("user_events", [])
                 and not contract["body"]["open_blocking_questions"])
 
