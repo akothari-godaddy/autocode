@@ -138,6 +138,7 @@ Security problems: **do not** open a public issue; see [SECURITY.md](SECURITY.md
 
 ## Licence
 
-By contributing you agree that your contribution is licensed under the
-project's licence (see `LICENSE`). If that file does not exist yet, the project
-is not ready to accept outside contributions; please wait for it.
+AutoCode is licensed under the Apache License, Version 2.0 (see `LICENSE`).
+By contributing you agree that your contribution is licensed under the same
+terms, as described in section 5 of that licence. There is no separate
+contributor agreement to sign.

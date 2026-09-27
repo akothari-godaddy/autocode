@@ -429,4 +429,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how to set up a checkout, run the sui
 
 ## License
 
-No root-level license file is present in the status snapshot above, and the package metadata does not specify a license. The maintainer still needs to document the project's licensing; this README does not choose a license.
+AutoCode is licensed under the [Apache License, Version 2.0](LICENSE). The copyright holder is named in [NOTICE](NOTICE). Contributions are accepted under the same license; see [CONTRIBUTING.md](CONTRIBUTING.md).
