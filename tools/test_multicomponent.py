@@ -59,6 +59,25 @@ class BatchingTests(unittest.TestCase):
             with self.assertRaisesRegex(mc.ArchitectureError, "unknown"):
                 mc.Architecture.load(directory)
 
+    def test_a_path_traversal_component_id_is_refused_at_load(self):
+        # components.json is a model's own output, not trusted input: the id becomes a
+        # worktree directory and a branch name, so a slash or ".." must never reach git.
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            for bad_id in ("../../etc", "a/b", "..", "/etc/passwd"):
+                with self.subTest(bad_id=bad_id):
+                    (directory / "components.json").write_text(json.dumps([component(bad_id)]))
+                    with self.assertRaisesRegex(mc.ArchitectureError, "plain name"):
+                        mc.Architecture.load(directory)
+
+    def test_a_path_traversal_contract_name_is_refused_at_load(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = Path(tmp)
+            (directory / "components.json").write_text(json.dumps(
+                [component("a", publishes=["../../etc/passwd"])]))
+            with self.assertRaisesRegex(mc.ArchitectureError, "plain name"):
+                mc.Architecture.load(directory)
+
 
 class BriefTests(unittest.TestCase):
     def test_brief_embeds_the_contract_schema_and_ownership_rule(self):

@@ -32,6 +32,7 @@ runner's internals or reads state.json.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import tempfile
 import uuid
@@ -44,6 +45,19 @@ from .autocode_taskrun import TaskRun, TaskRunError
 GIT_IDENTITY = ("-c", "user.name=AutoCode", "-c", "user.email=autocode@localhost")
 EXCLUDE = (":(exclude).autocode", ":(exclude).autocode-ui", ":(exclude,glob)**/__pycache__/**",
           ":(exclude,glob)**/*.pyc")
+# Component ids and contract names become path segments (a worktree directory, a
+# branch name, a contract filename); an architecture file is data a model wrote,
+# not trusted input, so reject anything that could escape its intended directory
+# (a slash, a leading dot, ".."). Same pattern already used for task-lane ids in
+# autocode_tasks.py.
+SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+
+
+def _check_safe_name(kind: str, name: str) -> str:
+    if not isinstance(name, str) or not SAFE_NAME.fullmatch(name) or ".." in name:
+        raise ArchitectureError(f"{kind} {name!r} must be a plain name (letters, digits, '.', '_', '-', "
+                                f"no '..', max 64 chars) — it becomes a directory, branch and file name")
+    return name
 
 
 class ArchitectureError(ValueError):
@@ -93,11 +107,13 @@ class Architecture:
         for row in raw:
             if not isinstance(row, dict) or not row.get("id"):
                 raise ArchitectureError("each component needs an id")
-            components[row["id"]] = Component(
-                id=row["id"], description=row.get("description", ""),
+            component_id = _check_safe_name("component id", row["id"])
+            publishes = tuple(_check_safe_name("contract name", name) for name in row.get("publishes_contracts", []))
+            consumes = tuple(_check_safe_name("contract name", name) for name in row.get("consumes_contracts", []))
+            components[component_id] = Component(
+                id=component_id, description=row.get("description", ""),
                 requirements=tuple(row.get("requirements", [])), depends_on=tuple(row.get("depends_on", [])),
-                publishes_contracts=tuple(row.get("publishes_contracts", [])),
-                consumes_contracts=tuple(row.get("consumes_contracts", [])))
+                publishes_contracts=publishes, consumes_contracts=consumes)
         for component in components.values():
             unknown = [dep for dep in component.depends_on if dep not in components]
             if unknown:
