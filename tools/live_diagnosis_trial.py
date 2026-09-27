@@ -173,11 +173,17 @@ def prove_seed_and_reference(bundle: Bundle) -> None:
 # --- driving the real CLI to a genuine first Builder verdict --------------
 
 def drive_to_first_verdict(project: Path, root: Path, profile: dict,
-                           budget_stages: int, timeout: int, bundle: Bundle) -> dict:
+                           budget_stages: int, deadline: float, bundle: Bundle) -> dict:
     """Serve ordinary gates for real until the run reaches a terminal state,
     a genuine PAUSED_REPEATED_FAILURE, or a genuine rejected Builder report
     becomes visible. Unlike live_trial.drive, this stops at the first sign
     of the condition this trial needs, rather than trying to finish the run.
+
+    ``deadline`` is one absolute ``time.monotonic()`` value shared across
+    every phase of the whole trial (driving, diagnosis and retry), not a
+    per-phase timeout renewed at each call: a per-call budget that keeps
+    resetting can, in total, run far longer than the value the operator
+    actually asked for.
     """
     env = dict(os.environ, AUTOCODE_HOME=str(root / "registry"),
                PYTHONDONTWRITEBYTECODE="1")
@@ -186,15 +192,15 @@ def drive_to_first_verdict(project: Path, root: Path, profile: dict,
         env.pop("AUTOCODE_PROVIDER", None)
 
     steps: list[dict] = []
-    started = time.monotonic()
 
     def step(kind: str, cmd: list[str], *, allow_codes=(0, 2)) -> subprocess.CompletedProcess:
-        if time.monotonic() - started > timeout:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
             raise TrialError(f"wall-clock budget exceeded after {len(steps)} CLI steps")
         if len(steps) >= budget_stages:
             raise TrialError(f"stage budget exceeded after {len(steps)} CLI steps")
         bundle.log("cli_step", kind=kind, cmd=cmd)
-        proc = base.invoke(cmd, env, root, timeout)
+        proc = base.invoke(cmd, env, root, remaining)
         record = {"kind": kind, "cmd": cmd, "returncode": proc.returncode,
                   "stdout_tail": proc.stdout[-800:], "stderr_tail": proc.stderr[-800:]}
         steps.append(record)
@@ -286,9 +292,13 @@ def escalate_to_repeat_threshold(run_dir: Path, bundle: Bundle) -> None:
 
 
 def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
-                       budget_stages: int, timeout: int, bundle: Bundle) -> dict:
+                       budget_stages: int, deadline: float, bundle: Bundle) -> dict:
     """The two genuine live-model steps: admit + run astra_diagnose, then,
     on an accepted retry, let the real Builder and Reviewer finish for real.
+
+    ``deadline`` is the SAME absolute deadline drive_to_first_verdict was
+    given, not a fresh budget: this phase spends whatever wall-clock time
+    that phase left, not another full timeout on top of it.
     """
     env = dict(os.environ, AUTOCODE_HOME=str(root / "registry"),
                PYTHONDONTWRITEBYTECODE="1")
@@ -297,9 +307,12 @@ def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
         env.pop("AUTOCODE_PROVIDER", None)
 
     def invoke_cli(extra: list[str], allow_codes=(0, 2)) -> subprocess.CompletedProcess:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TrialError("wall-clock budget exceeded before the diagnose step")
         cmd = base.autocode_command(project, profile, None, run_dir, extra)
         bundle.log("cli_step", kind="diagnose", cmd=cmd)
-        proc = base.invoke(cmd, env, root, timeout)
+        proc = base.invoke(cmd, env, root, remaining)
         bundle.log("cli_result", kind="diagnose", returncode=proc.returncode,
                    stdout_tail=proc.stdout[-800:], stderr_tail=proc.stderr[-800:])
         if proc.returncode not in allow_codes:
@@ -335,8 +348,11 @@ def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
     # claim (see judge_final_verdict). _serve_gate expects a step(kind, cmd,
     # allow_codes=...) callback, so wrap invoke_cli's extra-args interface.
     def step(kind: str, cmd: list[str], *, allow_codes=(0, 2)) -> subprocess.CompletedProcess:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TrialError(f"wall-clock budget exceeded during the {kind} retry phase")
         bundle.log("cli_step", kind=kind, cmd=cmd)
-        proc = base.invoke(cmd, env, root, timeout)
+        proc = base.invoke(cmd, env, root, remaining)
         bundle.log("cli_result", kind=kind, returncode=proc.returncode,
                    stdout_tail=proc.stdout[-800:], stderr_tail=proc.stderr[-800:])
         if proc.returncode not in allow_codes:
@@ -344,6 +360,8 @@ def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
         return proc
 
     for _ in range(budget_stages):
+        if deadline - time.monotonic() <= 0:
+            raise TrialError("wall-clock budget exceeded during the retry drive loop")
         state = base.load_state(run_dir)
         status = state.get("status", "")
         if status in ("TASK_COMPLETE", "COMPLETE") or (status.startswith("PAUSED_") and not base._resumable(state)):
@@ -359,13 +377,27 @@ def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
     return result
 
 
-def judge_final_verdict(project: Path, run_dir: Path) -> dict:
-    """Independent scoring: re-run the seed's own test against the delivered
-    workspace. The runner's own status is recorded for comparison, but the
-    verdict here never comes from it.
+def judge_final_verdict(project: Path, run_dir: Path, frozen_test_path: Path) -> dict:
+    """Independent scoring against an immutable copy of the seed's own test,
+    never the delivered workspace's copy: the Builder was told not to edit
+    test_convert.py, but nothing stops it from doing so (or from replacing
+    it with a no-op), and the runner's own completion claim must not be the
+    source of truth either. The verdict here is computed by copying the
+    frozen test (captured before any Builder attempt) alongside whatever
+    convert.py the run actually delivered, in a directory the candidate
+    never touched, and running it there.
     """
-    proc = subprocess.run([sys.executable, "test_convert.py"],
-                          capture_output=True, text=True, cwd=project)
+    with tempfile.TemporaryDirectory(prefix="diagnosis-trial-verdict-") as tmp:
+        scoring_dir = Path(tmp)
+        delivered = project / "convert.py"
+        if not delivered.is_file():
+            state = base.load_state(run_dir)
+            return {"independent_test_exit": None, "independent_test_tail": "",
+                    "runner_status": state.get("status"), "note": "convert.py is missing from the delivered workspace"}
+        shutil.copy2(delivered, scoring_dir / "convert.py")
+        shutil.copy2(frozen_test_path, scoring_dir / "test_convert.py")
+        proc = subprocess.run([sys.executable, "test_convert.py"],
+                              capture_output=True, text=True, cwd=scoring_dir)
     state = base.load_state(run_dir)
     return {"independent_test_exit": proc.returncode, "independent_test_tail": proc.stdout[-800:],
             "runner_status": state.get("status")}
@@ -418,17 +450,32 @@ def main(argv: list[str] | None = None) -> int:
                         "-c", "user.email=live@example.test", "commit", "-qm", "seed defective candidate"],
                        check=True)
         bundle.log("seeded", files=["convert.py", "test_convert.py"])
+        # Frozen before any Builder attempt, kept outside the workspace: the
+        # candidate can edit or delete its own copy of test_convert.py, but
+        # every independent verdict in this trial scores against this one.
+        frozen_test_path = bundle.dir / "frozen_test_convert.py"
+        frozen_test_path.write_text(SEED_TEST)
 
-        first = drive_to_first_verdict(project, root, profile, args.budget_stages, args.timeout, bundle)
+        # One deadline shared across driving, diagnosis and retry: --timeout
+        # is the whole trial's wall-clock budget, not a per-phase allowance.
+        deadline = time.monotonic() + args.timeout
+        first = drive_to_first_verdict(project, root, profile, args.budget_stages, deadline, bundle)
         bundle.state("first_verdict", {k: first["state"].get(k) for k in ("status", "phase", "next_stage")})
 
         payload = {"profile": args.profile, "profile_detail": profile, "ground_truth": GROUND_TRUTH,
                   "source": source_revision(), "outcome": first["outcome"]}
+        # RESULT distinguishes a verified code-level verdict (pass/fail) from
+        # every other outcome (not exercised, refused, blocked, or correctly
+        # escalated with no retry to check). Only the first two are PASS/FAIL;
+        # everything else needs a human to read the diagnosis, not a green or
+        # red machine result standing in for one.
+        result = "NEEDS_HUMAN_REVIEW"
 
         if first["outcome"] == "complete":
-            verdict = judge_final_verdict(project, first["run_dir"])
+            verdict = judge_final_verdict(project, first["run_dir"], frozen_test_path)
             payload.update(astra_diagnose="NOT_EXERCISED", reason="first attempt already valid",
                            final_verdict=verdict)
+            result = "PASS" if verdict["independent_test_exit"] == 0 else "FAIL"
         elif first["outcome"] not in ("rejected",):
             payload.update(astra_diagnose="NOT_EXERCISED",
                            reason=f"drive stopped at {first['outcome']!r} before any Builder rejection")
@@ -439,21 +486,31 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 payload["repeat_count_mechanically_escalated"] = False
             diagnosis = diagnose_and_retry(project, root, profile, first["run_dir"],
-                                          args.budget_stages, args.timeout, bundle)
+                                          args.budget_stages, deadline, bundle)
             payload["astra_diagnose"] = "EXERCISED" if diagnosis["admitted"] else "ADMISSION_REFUSED"
             payload["diagnosis"] = diagnosis.get("diagnosis")
             payload["recommendation"] = diagnosis.get("recommendation")
             if diagnosis.get("recommendation", {}).get("action") == "retry":
-                payload["final_verdict"] = judge_final_verdict(project, first["run_dir"])
+                verdict = judge_final_verdict(project, first["run_dir"], frozen_test_path)
+                payload["final_verdict"] = verdict
+                result = "PASS" if verdict["independent_test_exit"] == 0 else "FAIL"
 
+        payload["result"] = result
         report_path = bundle.dir / "diagnosis-comparison.json"
         report_path.write_text(json.dumps(payload, indent=2, default=str))
-        bundle.finish(base.scenarios.PASS,
-                      f"astra_diagnose={payload.get('astra_diagnose', 'NOT_EXERCISED')}")
+        status = {"PASS": base.scenarios.PASS, "FAIL": base.scenarios.FAIL}.get(result, "RECORDED")
+        summary = f"astra_diagnose={payload.get('astra_diagnose', 'NOT_EXERCISED')} result={result}"
+        try:
+            bundle.finish(status, summary)
+        except AssertionError:
+            # Bundle persists FAIL before raising; re-raise only for a real FAIL.
+            if result != "FAIL":
+                raise
+        print(f"result: {result}")
         print(f"astra_diagnose: {payload.get('astra_diagnose', 'NOT_EXERCISED')}")
         print(f"evidence: {bundle.dir}")
         print(f"read {report_path} next to the ground truth above for human scoring")
-        return 0
+        return {"PASS": 0, "FAIL": 1}.get(result, 3)
     except TrialError as error:
         bundle.finish(base.scenarios.ERROR, str(error))
         print(f"ERROR: {error}", file=sys.stderr)

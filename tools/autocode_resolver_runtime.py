@@ -229,9 +229,17 @@ def reset_for_resume(state):
 # full "repeated failure" row: there is no automatic runner heuristic yet (the
 # exact automatic trigger is an open design question, left for a later
 # decision), so the route lands operator-triggered only, and only for the one
-# well-understood case -- a repeated Builder report rejection whose bounded
-# report-only repair is exhausted. A reviewer's own REWORK verdict keeps using
-# the existing, unrelated astra_resolve route.
+# well-understood case -- a repeated (3x) Builder report rejection with a
+# report-repair-eligible identity. This is deliberately NOT "report-repair is
+# exhausted": whether repair is exhausted is only checked by reject_completed_
+# stage at the moment PAUSED_REPEATED_FAILURE first fires, and that check
+# reads pending_report_repair['attempts'], which --resume-paused's own
+# reset_report_repair_for_resume zeroes on every explicit resume, before this
+# route's own admission check runs. There is currently no marker of exhaustion
+# that survives that reset, so admission enforces repetition count only; do
+# not describe or rely on it as an exhaustion check until one exists. A
+# reviewer's own REWORK verdict keeps using the existing, unrelated
+# astra_resolve route.
 DIAGNOSIS_BOUNDARIES = policy.Boundaries(frozenset({'retry', 'escalate'}), frozenset())
 DIAGNOSTIC_CALL_DEFAULTS = {'max_calls_per_run': 2}
 
@@ -244,23 +252,62 @@ def diagnostic_call_limit(state):
     return limit
 
 
+def charge_diagnostic_dispatch(runner, state, run_dir):
+    """Durably charge the run-level diagnostic cap when astra_diagnose is
+    about to actually launch a provider request -- not at admission, which
+    does not guarantee a launch, and not once per provider-level retry of
+    the same admitted attempt (a timeout retry of astra_diagnose relaunches
+    the identical logical call; see timeout_recovery_route, which returns
+    it to itself). The reservation is keyed by the diagnosis request's
+    stable blocker id, so it survives a crash between charge and launch,
+    a provider timeout retry, and an explicit resume: whichever of those
+    happens, the same admitted attempt is charged exactly once, and this
+    is a no-op once it already has been.
+    """
+    request = state.get('diagnosis_request')
+    if not request or state.get('next_stage') != 'astra_diagnose':
+        return
+    saved = state.setdefault('resolver', {})
+    charged = saved.setdefault('diagnostic_dispatch_charged', [])
+    blocker_id = request['blocker_id']
+    if blocker_id in charged:
+        return
+    limit = diagnostic_call_limit(state)
+    diagnostic_calls = saved.get('diagnostic_calls', 0)
+    if diagnostic_calls >= limit:
+        reason = f'Operational diagnostic budget exhausted for this run ({diagnostic_calls}/{limit})'
+        state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=reason)
+        runner.write_json(Path(run_dir) / 'state.json', state)
+        raise support.Paused('PAUSED_REPEATED_FAILURE', reason)
+    saved['diagnostic_calls'] = diagnostic_calls + 1
+    charged.append(blocker_id)
+    runner.write_json(Path(run_dir) / 'state.json', state)
+
+
 def admit_operational_diagnosis(runner, state, run_dir, workspace):
     """Explicitly admit one bounded, read-only diagnosis for a repeated Builder failure.
 
     Requires an unchanged, thrice-repeated Builder (terra) report rejection
-    whose bounded report-only repair is exhausted -- the same identity
+    with a report-repair-eligible identity -- the same identity
     ``--retry-failed-stage`` inspects, but instead of blindly retrying it
     routes through a model diagnosis whose recommendation the runner
     independently validates, through the same bounded policy, before any
     retry is authorized. Persists its own outcome durably (like ``boundary``),
     since a later step in the same explicit-resume pass could still raise.
+
+    This does NOT itself verify that report-repair's own attempt budget is
+    exhausted (see the module-level note above): the repeated-failure count
+    is the enforced gate. In the common path PAUSED_REPEATED_FAILURE already
+    implies repair was exhausted (reject_completed_stage checked it before
+    pausing), but that fact is not durable across an explicit resume, so it
+    is not re-checked here.
     """
     if state.get('status') != 'PAUSED_REPEATED_FAILURE':
         raise ValueError('Diagnosis requires a run paused for repeated failure')
     pending = state.get('pending_report_repair') or {}
     record = pending.get('original')
     if not record:
-        raise ValueError('Operational diagnosis requires an exhausted report-repair identity; use --retry-failed-stage instead')
+        raise ValueError('Operational diagnosis requires a report-repair-eligible identity; use --retry-failed-stage instead')
     if record.get('role') != 'terra' or record.get('stage') != 'terra':
         raise ValueError('Operational diagnosis is scoped to a repeated Builder (terra) failure in this release')
     repeated = failures.repeated(state, record)
@@ -286,8 +333,9 @@ def admit_operational_diagnosis(runner, state, run_dir, workspace):
         state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=decision.rationale)
         runner.write_json(Path(run_dir) / 'state.json', state)
         raise support.Paused('PAUSED_REPEATED_FAILURE', decision.rationale)
-    saved = state.setdefault('resolver', {})
-    saved['diagnostic_calls'] = diagnostic_calls + 1
+    # The run-level cap is charged at actual dispatch (charge_diagnostic_dispatch),
+    # not here: admission alone does not guarantee astra_diagnose ever launches,
+    # and charging here would falsely count an invocation that never happened.
     pins = {record[key]: support.file_hash(record[key]) for key in ('output', 'events')
             if record.get(key) and Path(record[key]).is_file()}
     state['diagnosis_request'] = {
@@ -312,8 +360,19 @@ def finish_operational_diagnosis(state, run_dir, recommendation):
 
     Called on the candidate state inside the commit-then-persist boundary
     (like ``queue_resolution``/``finish_resolution``): it mutates ``state``
-    only and leaves persistence to that outer boundary, so a rejected
-    candidate never gets written.
+    only and leaves persistence to that outer boundary. On escalate or a
+    rejected recommendation it must NOT raise: this function's own call to
+    ``_evaluate`` already mutated the candidate (the spent attempt, the
+    receipt, the stage record), and the caller's deep-copy-then-commit
+    pattern (``autopilot.apply_result``) discards every candidate mutation
+    the moment anything raises out of it. Raising here would silently lose
+    the very evaluation this function exists to make durable, and a later
+    resume would redispatch astra_diagnose against a ledger that still
+    showed only the first (admission) attempt spent -- an uncounted repeat
+    of the second evaluation on every such resume. Setting the paused
+    status on the candidate and returning is what the drive loop already
+    treats as a stop (``active(state)`` is false once status leaves
+    RUNNING), so no exception is needed to end the run here.
     """
     request = state['diagnosis_request']
     payload = {'reason': recommendation['rationale']}
@@ -340,4 +399,4 @@ def finish_operational_diagnosis(state, run_dir, recommendation):
         state.pop('stop_reason', None)
         return True
     state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=decision.rationale)
-    raise support.Paused('PAUSED_REPEATED_FAILURE', decision.rationale)
+    return False

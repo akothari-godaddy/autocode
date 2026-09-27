@@ -2739,6 +2739,8 @@ def main(unit=None) -> int:
                 # retry lane blocks the serial writer launch here as well.
                 if stage == "terra":
                     autopilot.builder_policy.guard(current)
+                if stage == "astra_diagnose":
+                    resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], current, run_dir)
                 milestones.dispatch_guard(current, stage)
                 workflow.dispatch_guard(current,stage,workspace)
                 if stage == "orchestrator":

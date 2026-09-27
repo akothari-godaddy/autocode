@@ -267,12 +267,15 @@ class OperationalDiagnosisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No unchanged repeated failure'):
             self.admit()
 
-    def test_admission_dispatches_astra_diagnose_and_charges_the_run_level_cap(self):
+    def test_admission_dispatches_astra_diagnose_without_yet_charging_the_run_level_cap(self):
+        # Admission alone does not guarantee astra_diagnose ever launches, so
+        # it must not charge the run-level cap; charge_diagnostic_dispatch does
+        # that at actual dispatch (see the ChargeDiagnosticDispatch tests).
         record = self.repeated_terra_failure()
         self.admit()
         self.assertEqual('astra_diagnose', self.state['next_stage'])
         self.assertEqual('RUNNING', self.state['status'])
-        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        self.assertNotIn('diagnostic_calls', self.state['resolver'])
         request = self.state['diagnosis_request']
         self.assertEqual('terra', request['original_stage'])
         self.assertEqual(record['failure_key'], request['failure_key'])
@@ -298,14 +301,12 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.assertNotIn('diagnosis_request', self.state)
         self.assertEqual('escalate', self.state['stages'][-1]['decision']['action'])
 
-    def test_admission_is_idempotent_after_the_run_level_cap_is_charged(self):
+    def test_admission_is_not_reentrant_once_status_leaves_the_pause(self):
         self.repeated_terra_failure()
         self.admit()
-        # A second admission attempt is refused by the status check alone,
-        # before any budget is touched a second time.
+        # A second admission attempt is refused by the status check alone.
         with self.assertRaisesRegex(ValueError, 'paused for repeated failure'):
             self.admit()
-        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
 
     def test_finish_accepts_retry_and_clears_the_failure_identity(self):
         record = self.repeated_terra_failure()
@@ -321,28 +322,106 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
 
     def test_finish_rejects_escalate_and_preserves_the_failure_identity(self):
+        # Must not raise: this function's own _evaluate call already mutated
+        # the (candidate) state, and autopilot.apply_result's deep-copy-then-
+        # commit pattern discards every candidate mutation the moment
+        # anything raises out of it, silently losing the spent evaluation.
         record = self.repeated_terra_failure()
         self.admit()
-        with self.assertRaises(support.Paused) as caught:
-            runner.resolver_runtime.finish_operational_diagnosis(
-                self.state, self.run, {'action': 'escalate', 'rationale': 'Cause is unclear; needs a human decision.'})
-        self.assertEqual('PAUSED_REPEATED_FAILURE', caught.exception.status)
+        result = runner.resolver_runtime.finish_operational_diagnosis(
+            self.state, self.run, {'action': 'escalate', 'rationale': 'Cause is unclear; needs a human decision.'})
+        self.assertFalse(result)
+        self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
         self.assertIn('diagnosis_request', self.state)
         self.assertIn(record['failure_key'], self.state['failure_history'])
+        self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
 
     def test_finish_shares_the_two_attempt_budget_with_admission(self):
         self.repeated_terra_failure()
         self.admit()
-        with self.assertRaises(support.Paused):
-            runner.resolver_runtime.finish_operational_diagnosis(
-                self.state, self.run, {'action': 'retry', 'rationale': ''})  # malformed: empty rationale rejected below
+        result = runner.resolver_runtime.finish_operational_diagnosis(
+            self.state, self.run, {'action': 'retry', 'rationale': ''})  # malformed: empty rationale rejected below
+        self.assertFalse(result)
+        self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
         # The malformed proposal still consumed the second and final evaluation.
         self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
+
+    def test_finish_on_the_real_apply_result_path_commits_an_escalate_durably(self):
+        """The production exception path, not a direct mutable-state call:
+        proves the escalate outcome survives autopilot.apply_result's
+        deep-copy-then-commit boundary rather than being discarded."""
+        record = self.repeated_terra_failure()
+        self.admit()
+        diag_record = {'role': 'astra', 'stage': 'astra_diagnose', 'iteration': self.state['iteration'],
+                       'output': str(self.run / 'astra_diagnose.json'), 'source_revision':
+                       self.state['diagnosis_request']['source_revision'], 'changed_files': [], 'duration_seconds': 0.1}
+        value = {'diagnosis': 'Unclear cause after inspection.',
+                 'recommendation': {'action': 'escalate', 'rationale': 'Cause is unclear; needs a human decision.'}}
+        runner.autopilot.apply_result(runner, self.state, 'astra_diagnose', value, diag_record, self.root, self.run)
+        self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+        self.assertIn('diagnosis_request', self.state)
+        self.assertIn(record['failure_key'], self.state['failure_history'])
+        # The second evaluation is durably spent: a plain resume must not
+        # let a later real dispatch spend a third, uncounted evaluation.
+        self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
+        # The model's own completion record was saved too, not just the ledger.
+        self.assertEqual('astra_diagnose', self.state['stages'][-1]['stage'])
 
     def test_diagnostic_call_limit_rejects_an_out_of_range_setting(self):
         self.state['settings']['operational_diagnosis'] = {'max_calls_per_run': 9}
         with self.assertRaises(ValueError):
             runner.resolver_runtime.diagnostic_call_limit(self.state)
+
+    def charge(self):
+        return runner.resolver_runtime.charge_diagnostic_dispatch(runner, self.state, self.run)
+
+    def test_charge_dispatch_is_a_no_op_without_an_admitted_diagnosis_request(self):
+        before = copy.deepcopy(self.state)
+        self.charge()
+        self.assertEqual(before, self.state)
+
+    def test_charge_dispatch_charges_exactly_once_at_launch(self):
+        self.repeated_terra_failure()
+        self.admit()
+        self.assertNotIn('diagnostic_calls', self.state['resolver'])
+        self.charge()
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        saved = support.read(self.run / 'state.json')
+        self.assertEqual(1, saved['resolver']['diagnostic_calls'])
+
+    def test_charge_dispatch_does_not_double_charge_a_provider_timeout_retry(self):
+        # timeout_recovery_route returns astra_diagnose to itself on a timeout
+        # (same role, same stage): the next dispatch charges the SAME admitted
+        # attempt, which charge_diagnostic_dispatch must recognize as already
+        # charged rather than spending the run-level cap a second time.
+        self.repeated_terra_failure()
+        self.admit()
+        self.charge()
+        self.charge()
+        self.charge()
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        self.assertEqual(1, len(self.state['resolver']['diagnostic_dispatch_charged']))
+
+    def test_charge_dispatch_pauses_at_the_cap_before_any_launch(self):
+        self.repeated_terra_failure()
+        self.admit()
+        self.state['resolver']['diagnostic_calls'] = runner.resolver_runtime.diagnostic_call_limit(self.state)
+        with self.assertRaises(support.Paused) as caught:
+            self.charge()
+        self.assertEqual('PAUSED_REPEATED_FAILURE', caught.exception.status)
+        # The exhausted charge is not itself recorded as spent again.
+        self.assertEqual(runner.resolver_runtime.diagnostic_call_limit(self.state),
+                         self.state['resolver']['diagnostic_calls'])
+
+    def test_charge_dispatch_survives_a_reload_between_admission_and_launch(self):
+        self.repeated_terra_failure()
+        self.admit()
+        self.state = support.read(self.run / 'state.json')
+        self.charge()
+        self.state = support.read(self.run / 'state.json')
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        self.charge()
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
 
     def test_cli_diagnose_failed_stage_reaches_astra_diagnose_and_retries_terra(self):
         """The real production dispatch path (autocode.main), not a test helper."""

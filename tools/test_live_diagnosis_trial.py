@@ -109,6 +109,80 @@ class MechanicalEscalationTests(unittest.TestCase):
         self.assertEqual(3, saved["failure_history"]["k2"]["count"])
 
 
+class JudgeFinalVerdictTests(unittest.TestCase):
+    """Negative controls for the false-PASS defect: the verdict must score
+    against a frozen test file, never the delivered (editable) workspace copy."""
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        root = Path(self.temp.name)
+        self.project = root / "project"
+        self.project.mkdir()
+        self.run_dir = root / "run"
+        self.run_dir.mkdir()
+        (self.run_dir / "state.json").write_text(json.dumps({"status": "TASK_COMPLETE"}))
+        self.frozen = root / "frozen_test_convert.py"
+        self.frozen.write_text(trial.SEED_TEST)
+
+    def test_a_neutered_delivered_test_does_not_mask_the_real_bug(self):
+        (self.project / "convert.py").write_text(trial.SEED_MODULE)  # bug still present
+        (self.project / "test_convert.py").write_text("pass\n")  # neutered by the candidate
+        verdict = trial.judge_final_verdict(self.project, self.run_dir, self.frozen)
+        self.assertNotEqual(0, verdict["independent_test_exit"])
+
+    def test_a_genuine_fix_passes_the_frozen_test(self):
+        (self.project / "convert.py").write_text(trial.REFERENCE_MODULE)
+        (self.project / "test_convert.py").write_text(trial.SEED_TEST)
+        verdict = trial.judge_final_verdict(self.project, self.run_dir, self.frozen)
+        self.assertEqual(0, verdict["independent_test_exit"])
+
+    def test_a_missing_convert_module_is_reported_not_silently_passed(self):
+        (self.project / "test_convert.py").write_text(trial.SEED_TEST)
+        verdict = trial.judge_final_verdict(self.project, self.run_dir, self.frozen)
+        self.assertIsNone(verdict["independent_test_exit"])
+        self.assertIn("missing", verdict["note"])
+
+
+class SharedDeadlineTests(unittest.TestCase):
+    """Negative control for the renewed-timeout defect: one deadline shared
+    across every phase, not a fresh budget passed to each subprocess call."""
+
+    def test_drive_step_passes_remaining_time_not_the_full_budget(self):
+        recorded = {}
+
+        def fake_invoke(cmd, env, cwd, timeout):
+            recorded["timeout"] = timeout
+            return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            (project / ".autocode").mkdir()
+            (project / ".autocode" / "runs").mkdir()
+            run_dir = project / ".autocode" / "runs" / "fixture"
+            run_dir.mkdir()
+            (run_dir / "state.json").write_text(json.dumps({"status": "TASK_COMPLETE"}))
+            bundle = Bundle("DIAGNOSIS-TRIAL-DEADLINE-SELFTEST")
+            profile = {"provider": "fixture"}
+            # 1200s budget, but only ~1 second of it remains: the per-call
+            # timeout passed to subprocess must reflect that, not renew to 1200.
+            deadline = trial.time.monotonic() + 1.0
+            with patch.object(trial.base, "invoke", fake_invoke), \
+                 patch.object(trial.base, "_discover_run_dir", return_value=run_dir):
+                trial.drive_to_first_verdict(project, root, profile, 40, deadline, bundle)
+        self.assertLess(recorded["timeout"], 1.5)
+
+    def test_step_refuses_to_launch_once_the_shared_deadline_has_passed(self):
+        bundle = Bundle("DIAGNOSIS-TRIAL-DEADLINE-SELFTEST-2")
+        with tempfile.TemporaryDirectory() as tmp:
+            project = Path(tmp)
+            with self.assertRaisesRegex(trial.TrialError, "wall-clock budget exceeded"):
+                trial.drive_to_first_verdict(project, project, {"provider": "fixture"}, 40,
+                                             trial.time.monotonic() - 1.0, bundle)
+
+
 class ParseArgsTests(unittest.TestCase):
     def test_default_profile_is_the_free_fixture(self):
         args = trial.parse_args([])
