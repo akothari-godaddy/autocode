@@ -161,6 +161,7 @@ def validate_body(state, body, *, ready=False, allow_legacy=False):
         probe = {"goal_contract": {"body": body, "revision": 0, "hash": "draft"}}
         assign_task(probe, initial_decision(body), {"revision": "draft"})
     questions = body["open_blocking_questions"]
+    check_delegable(questions)
     criteria = body["acceptance_criteria"]
     milestones = body.get("milestones", [])
     for rows in (questions, criteria, milestones):
@@ -339,6 +340,17 @@ def requirement_coverage_text(text):
 _ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 
+def check_delegable(questions):
+    """The protected-category rule is enforced on model output, not just in the
+    prompt: a cost, quota, permission, side-effect or requested-outcome choice,
+    or an unclassified one, is never offered as delegable."""
+    for question in questions:
+        category = question.get("category", "requested_outcome")
+        if question.get("delegable") and category in NON_INFERABLE_CATEGORIES:
+            raise ValueError(f"Question {question['id']} ({category}) cannot be delegable; "
+                             "it is the user's own decision")
+
+
 def normalize_assumption(row):
     """A legacy proposed_assumptions entry (plain string) becomes an unstructured,
     id-less record: displayed and counted, but never evidenced and never a
@@ -422,6 +434,7 @@ def check_requirement_handoff(state, report):
         if reframe["question_id"] not in questions and reframe["question_id"] not in state.get("answers", {}):
             raise ValueError("A proposed reframe needs an explicit user acceptance question")
     validate_assumptions(report.get("proposed_assumptions", []), seen)
+    check_delegable(report.get("open_questions", []))
     # A refreshed handoff (one that follows an earlier requirements_gather report)
     # must retain every previous requirement verbatim, or move it to
     # ignored_requirements with a reason citing a saved user event. A vanished
@@ -578,6 +591,7 @@ def invalidate(state, reason):
         state.setdefault("human_review_archive", []).append(state.pop("human_reviews"))
     state["human_reviews"] = {}
     state.pop("displayed_goal", None)
+    state.pop("displayed_handoff", None)
     state.pop("displayed_review", None)
 
 
@@ -655,9 +669,8 @@ def plan_preview(state):
         return []
     handoff_entry = state.get("requirements_handoff") or {}
     handoff = handoff_entry.get("report") or {}
-    handoff_ref = s.digest(handoff)[:12] if handoff else "none"
     rejected = {ob.get("assumption_id") for ob in state.get("deferred_obligations", [])}
-    lines = ["", f"PLAN PREVIEW for {token(contract)} (requirements handoff {handoff_ref})",
+    lines = ["", f"PLAN PREVIEW for {token(contract)} (requirements handoff {handoff_ref(state)})",
              "Answering nothing leaves execution blocked. Nothing here approves the plan."]
 
     lines += ["", "Known from you:"]
@@ -709,8 +722,8 @@ def plan_preview(state):
               f" ({sum(bool(row.get('human_review')) for row in criteria)} need your review)",
               f"  Open obligations: {sum(ob['kind'] == 'human_decision' for ob in obligations)} for your decision, "
               f"{sum(ob['kind'] == 'remediation' for ob in obligations)} awaiting remediation"]
-    lines += ["", "Next: --answer QUESTION_ID=TEXT, --delegate-all, --reject-assumption ASSUMPTION_ID, "
-              "or --edit-goal body.json"]
+    lines += ["", "Next: --answer QUESTION_ID=TEXT, --edit-goal body.json, or with "
+              f"--review-token '{token(contract)}': --delegate-all or --reject-assumption ASSUMPTION_ID"]
     return lines
 
 
@@ -798,9 +811,26 @@ def render(state):
     return "\n".join(lines)
 
 
+def handoff_ref(state):
+    """Short, stable reference to the current requirements handoff report."""
+    report = (state.get("requirements_handoff") or {}).get("report")
+    return s.digest(report)[:12] if report else "none"
+
+
+def check_displayed(state, selected):
+    """An action the user takes on a preview must name the revision they saw.
+    Rejects a stale token, and a requirements handoff refreshed since display."""
+    contract = state.get("goal_contract")
+    if (not contract or not selected or selected != token(contract) or state.get("displayed_goal") != selected
+            or state.get("displayed_handoff") != handoff_ref(state)):
+        raise ValueError("Act only on the current displayed revision; show the goal again and pass its token "
+                         "with --review-token")
+
+
 def present(state):
     if state.get("goal_contract"):
         state["displayed_goal"] = token(state["goal_contract"])
+        state["displayed_handoff"] = handoff_ref(state)
         state["displayed_review"] = review_token(state)
     return render(state)
 
@@ -865,7 +895,6 @@ def feedback(state, text):
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
     start_clarification_episode(state, event["id"])
-    resolve_cited_obligations(state, event)
     state["goal_contract"].update(approval_status="draft", approval_event=None)
     invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
     first_stage = ("requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
@@ -884,7 +913,6 @@ def apply_intervention_feedback(state, receipt, applied_receipt):
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
     start_clarification_episode(state, event["id"])
-    resolve_cited_obligations(state, event)
     if state.get("status") == "TASK_COMPLETE":
         state.setdefault("completion_archive", []).append({
             "completed_at": state.pop("completed_at", None), "decision": state.pop("final_decision", None),
@@ -906,6 +934,8 @@ def answer(state, question_id, text, *, delegated=False):
     q = matches[0]
     if delegated and not q["proposed_default"].strip():
         raise ValueError("This question has no proposed default to delegate")
+    if delegated and any(ob["id"] == question_id for ob in open_obligations(state)):
+        raise ValueError(f"{question_id} asks about a rejected assumption and cannot be delegated; answer it yourself")
     event = {"kind": "delegated" if delegated else "answer", "actor": "user_cli", "at": s.now(),
              "question_id": question_id, "question": q, "text": q["proposed_default"] if delegated else text,
              "contract_token": token(state["goal_contract"])}
@@ -945,6 +975,13 @@ def start_clarification_episode(state, started_by):
                                       "started_at": s.now(), "investigation_used": False,
                                       "used_at": None, "used_stage": None}
     state.pop("investigation_request", None)
+    # A remediation proposed under the old intent must be proposed again, and
+    # reviewed again, under the new one; its old hash can no longer discharge it.
+    for ob in open_obligations(state):
+        if ob.get("remediation"):
+            ob.setdefault("superseded_remediations", []).append(
+                {"record": ob["remediation"], "hash": ob.get("remediation_hash"), "by": started_by})
+            ob.update(remediation=None, remediation_hash=None, status="open")
     return state["clarification_episode"]
 
 
@@ -967,31 +1004,28 @@ def resolve_obligation(state, obligation_id, resolved_by):
     return None
 
 
-def resolve_cited_obligations(state, event):
-    """Saved feedback that names an obligation id, as a whole token, discharges it."""
-    for ob in open_obligations(state):
-        if re.search(r"(?<![\w-])" + re.escape(ob["id"]) + r"(?![\w-])", str(event.get("text", ""))):
-            resolve_obligation(state, ob["id"], event["id"])
-
-
-def delegate_all(state):
+def delegate_all(state, selected):
     """Bulk-delegate every currently pending question to its proposed default.
     Conservative by construction: a question with no default, or not explicitly
     marked delegable=True, blocks the whole call rather than being silently
     skipped or silently delegated. Never grants approval; inherits answer()'s
     approval invalidation for each question it delegates."""
+    check_displayed(state, selected)
     pending = state.get("pending_questions", [])
     if not pending:
         raise ValueError("No pending questions to delegate")
-    blocked = [q["id"] for q in pending if not q.get("proposed_default", "").strip() or not q.get("delegable", False)]
+    obligations = {ob["id"] for ob in open_obligations(state)}
+    blocked = [q["id"] for q in pending if not q.get("proposed_default", "").strip() or not q.get("delegable", False)
+               or q.get("category", "requested_outcome") in NON_INFERABLE_CATEGORIES or q["id"] in obligations]
     if blocked:
-        raise ValueError("These questions cannot be bulk-delegated (no proposed default, or not marked delegable): "
+        raise ValueError("These questions cannot be bulk-delegated (no proposed default, not marked delegable, "
+                         "a protected or unclassified category, or a rejected assumption): "
                          + ", ".join(blocked))
     for q in list(pending):
         answer(state, q["id"], "accept default", delegated=True)
 
 
-def reject_assumption(state, assumption_id):
+def reject_assumption(state, assumption_id, selected):
     """Record that the user rejects a specific structured assumption from the
     current requirements handoff. This never removes or rewords any entry in
     requirements[]: check_requirement_handoff and check_requirement_trace are
@@ -1000,6 +1034,7 @@ def reject_assumption(state, assumption_id):
     Never grants approval; invalidates any existing approval like answer() does."""
     if state["status"] not in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER", "PAUSED_PLANNING_BUDGET"):
         raise ValueError("Rejecting an assumption needs an open conversation checkpoint")
+    check_displayed(state, selected)
     handoff = (state.get("requirements_handoff") or {}).get("report") or {}
     rows = {row["id"]: row for row in
             (normalize_assumption(raw) for raw in handoff.get("proposed_assumptions", []))

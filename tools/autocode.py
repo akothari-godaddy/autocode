@@ -2212,7 +2212,8 @@ def main(unit=None) -> int:
                         help="Bind an authenticated legacy acceptance to current validated evidence without a new approval")
     parser.add_argument("--accept-completion", action="store_true",
                         help="Operator-accept completion after the runner itself verifies every gate; use when the model's completion report cannot be produced")
-    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token")
+    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token; "
+                        "also required by --delegate-all and --reject-assumption")
     args = parser.parse_args()
     if args.max_parallel_builders is not None and args.max_parallel_builders < 1:
         parser.error('--max-parallel-builders must be positive')
@@ -2247,8 +2248,12 @@ def main(unit=None) -> int:
         parser.error("Choose one action per invocation; answering and approving are separate events")
     if args.retry_builder and any(actions):
         parser.error("--retry-builder is a resume action; do not combine it with another action")
-    if args.review_token and not (args.approve_review or args.reconcile_review):
-        parser.error("--review-token requires --approve-review or --reconcile-review")
+    if (args.delegate_all or args.reject_assumption) and not args.review_token:
+        parser.error("--delegate-all and --reject-assumption require --review-token with the displayed goal token")
+    if args.review_token and not (args.approve_review or args.reconcile_review
+                                  or args.delegate_all or args.reject_assumption):
+        parser.error("--review-token requires --approve-review, --reconcile-review, --delegate-all "
+                     "or --reject-assumption")
     if args.reconcile_review and not args.review_token:
         parser.error("--reconcile-review requires --review-token")
     if not args.run_dir and any(actions[2:]):
@@ -2553,9 +2558,9 @@ def main(unit=None) -> int:
                     for question in args.delegate:
                         goals.answer(candidate, question, "accept default", delegated=True)
                     if args.delegate_all:
-                        goals.delegate_all(candidate)
+                        goals.delegate_all(candidate, args.review_token)
                     for assumption_id in args.reject_assumption:
-                        goals.reject_assumption(candidate, assumption_id)
+                        goals.reject_assumption(candidate, assumption_id, args.review_token)
                     if args.feedback is not None:
                         goals.feedback(candidate, args.feedback)
                     if args.edit_goal:

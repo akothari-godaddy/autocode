@@ -71,7 +71,8 @@ class PlanPreviewTests(PreviewCase):
     def test_late_revision_preview_has_no_answered_question_or_rejected_assumption(self):
         goals.answer(self.state, "Q1", "CLI")
         self.state["status"] = "WAITING_FOR_USER"
-        goals.reject_assumption(self.state, "A2")
+        goals.present(self.state)
+        goals.reject_assumption(self.state, "A2", goals.token(self.state["goal_contract"]))
         contract = body()
         contract["open_blocking_questions"] = [question("Q3")]
         goals.install_draft(self.state, contract, origin="glm_draft")

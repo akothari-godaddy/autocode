@@ -298,15 +298,20 @@ def _clarify_discoverable(state, stage, value, record):
         _check_resolution_refs(state, row["source_refs"])
         if question_id in by_id:
             raise ValueError(f"Question {question_id} was resolved from the workspace and must not also be asked")
-        accepted.append({**copy.deepcopy(row), "stage": stage, "episode_id": request["episode_id"], "at": support.now()})
+        accepted.append({**copy.deepcopy(row), "stage": stage, "episode_id": request["episode_id"],
+                         "requirements_handoff": goals.handoff_ref(state), "at": support.now()})
     for row in value.get("access_blockers") or []:
         question = by_id.get(row["question_id"])
         if not row["reason"].strip() or question is None or question.get("kind", "decision") != "decision":
             raise ValueError("An access_blocker must name a question that stays open as kind=decision, with a reason")
     if request:
-        dropped = set(request["question_ids"]) - resolved - set(by_id)
+        # Every question the held-back report asked must survive the pass, not
+        # just the discoverable ones: the original report was never installed,
+        # so no later gate could recover a decision dropped here.
+        asked = set(request.get("all_question_ids") or request["question_ids"])
+        dropped = asked - resolved - set(by_id) - set(state.get("answers", {}))
         if dropped:
-            raise ValueError("Investigation dropped discoverable questions without a machine_resolution: "
+            raise ValueError("Investigation dropped questions without a machine_resolution: "
                              + ", ".join(sorted(dropped)))
         state.setdefault("machine_resolutions", []).extend(accepted)
         state.pop("investigation_request")
@@ -318,6 +323,7 @@ def _clarify_discoverable(state, stage, value, record):
             state["investigation_request"] = {
                 "stage": stage, "episode_id": episode["id"], "handoff_hash": raised_hash,
                 "question_ids": [question["id"] for question in discoverable],
+                "all_question_ids": [question["id"] for question in questions],
                 "questions": copy.deepcopy(discoverable), "prior_output": record.get("output"),
                 "prior_report": copy.deepcopy(value), "created_at": support.now()}
             state.update(status="RUNNING", phase="PLANNING", next_stage=stage)
@@ -363,7 +369,9 @@ def _apply_obligations(state, stage, value):
     """
     obligations = {ob["id"]: ob for ob in goals.open_obligations(state)}
     if stage == "requirements_gather":
-        rejected = {ob["assumption_id"] for ob in obligations.values()}
+        # Resolving how to proceed without an assumption is not permission to
+        # restore it; there is no reinstatement path, so history always applies.
+        rejected = {ob.get("assumption_id") for ob in state.get("deferred_obligations", [])}
         reused = sorted(rejected & {row.get("id") for row in value.get("proposed_assumptions") or []
                                     if isinstance(row, dict)})
         if reused:
@@ -423,6 +431,9 @@ def _apply_obligations(state, stage, value):
             raise ValueError(f"obligation_decisions {obligation_id} does not name a remediation awaiting review")
         if decision["remediation_hash"] != obligation["remediation_hash"]:
             raise ValueError(f"Decision for {obligation_id} refers to a superseded remediation")
+        if (obligation.get("remediation") or {}).get("episode_id") != goals.clarification_episode(state)["id"]:
+            raise ValueError(f"Remediation {obligation_id} was proposed in a previous clarification episode; "
+                             "it must be proposed again")
         if decision["resolved"]:
             if not decision["rationale"].strip() or not decision["evidence_refs"]:
                 raise ValueError(f"Accepting remediation {obligation_id} needs a rationale and evidence")
@@ -494,9 +505,12 @@ def apply_planning(state, stage, value, record):
         if handoff:
             pending = {question["id"] for question in handoff["report"]["open_questions"]}
             preserved = {question["id"] for question in value["contract"]["open_blocking_questions"]}
-            episode_id = (state.get("clarification_episode") or {}).get("id")
+            # A fact settled from the workspace stays settled while the handoff
+            # that asked it is unchanged; answering another question renews the
+            # episode but not the handoff. A refreshed handoff must settle it again.
+            current = goals.handoff_ref(state)
             resolved = {row["question_id"] for row in state.get("machine_resolutions", [])
-                        if row.get("episode_id") == episode_id}
+                        if row.get("requirements_handoff") == current}
             missing = pending - preserved - set(state.get("answers", {})) - resolved
             if missing:
                 raise ValueError("Planner dropped unresolved requirements questions: " + ", ".join(sorted(missing)))

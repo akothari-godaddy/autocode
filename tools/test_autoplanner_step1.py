@@ -115,6 +115,12 @@ class RequirementPreservationTests(unittest.TestCase):
             goals.check_requirement_handoff(current, new_report)
 
 
+def shown(state):
+    state.setdefault("status", "WAITING_FOR_USER")  # hand-built fixtures; rendering needs a status
+    goals.present(state)
+    return goals.token(state["goal_contract"])
+
+
 def _contract(**overrides):
     contract = {"task_id": "t", "revision": 1, "body": {"open_blocking_questions": []}, "hash": "h",
                "approval_status": "draft", "approval_event": None}
@@ -130,7 +136,7 @@ class DelegateAllTests(unittest.TestCase):
             {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes", "delegable": True},
             {"id": "Q2", "question": "q2", "why": "w", "options": [], "proposed_default": "", "delegable": True}]
         with self.assertRaisesRegex(ValueError, "Q2"):
-            goals.delegate_all(current)
+            goals.delegate_all(current, shown(current))
         self.assertEqual({}, current.get("answers", {}))
 
     def test_blocks_when_delegable_is_absent_even_with_a_default(self):
@@ -139,15 +145,16 @@ class DelegateAllTests(unittest.TestCase):
         current["pending_questions"] = [
             {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes"}]
         with self.assertRaisesRegex(ValueError, "Q1"):
-            goals.delegate_all(current)
+            goals.delegate_all(current, shown(current))
 
     def test_delegates_every_pending_question_and_invalidates_approval(self):
         current = state()
-        question = {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes", "delegable": True}
+        question = {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes",
+                    "delegable": True, "category": "technical"}
         current["goal_contract"] = _contract(body={"open_blocking_questions": [question]},
                                              approval_status="approved", approval_event={"kind": "goal_approval"})
         current["pending_questions"] = [question]
-        goals.delegate_all(current)
+        goals.delegate_all(current, shown(current))
         self.assertEqual("yes", current["answers"]["Q1"]["text"])
         self.assertEqual("delegated", current["answers"]["Q1"]["kind"])
         self.assertEqual([], current["pending_questions"])
@@ -163,7 +170,7 @@ class RejectAssumptionTests(unittest.TestCase):
         current["requirements_handoff"] = {"report": {"proposed_assumptions": [
             {"id": "A1", "text": "Use the cheaper model", "kind": "inferable", "category": "cost",
              "convention_ref": "", "rationale": "", "supports": ["R1"]}]}, "output": "x.json"}
-        obligation = goals.reject_assumption(current, "A1")
+        obligation = goals.reject_assumption(current, "A1", shown(current))
         self.assertEqual("human_decision", obligation["kind"])
         self.assertEqual(["R1"], obligation["supports"])
         self.assertEqual("reject_assumption", current["user_events"][-1]["kind"])
@@ -173,7 +180,7 @@ class RejectAssumptionTests(unittest.TestCase):
         # with the same handoff still current, and confirm the duplicate is caught.
         current["status"] = "WAITING_FOR_USER"
         with self.assertRaisesRegex(ValueError, "already has an open rejection"):
-            goals.reject_assumption(current, "A1")
+            goals.reject_assumption(current, "A1", shown(current))
 
     def test_technical_category_becomes_a_remediation_obligation(self):
         current = state()
@@ -182,7 +189,7 @@ class RejectAssumptionTests(unittest.TestCase):
         current["requirements_handoff"] = {"report": {"proposed_assumptions": [
             {"id": "A2", "text": "A CLI is sufficient", "kind": "inferable", "category": "technical",
              "convention_ref": "tools/x.py:1", "rationale": "existing pattern", "supports": []}]}, "output": "x.json"}
-        obligation = goals.reject_assumption(current, "A2")
+        obligation = goals.reject_assumption(current, "A2", shown(current))
         self.assertEqual("remediation", obligation["kind"])
         self.assertEqual([], obligation["supports"])
 
@@ -192,7 +199,7 @@ class RejectAssumptionTests(unittest.TestCase):
         current["goal_contract"] = _contract()
         current["requirements_handoff"] = {"report": {"proposed_assumptions": ["Use a local CLI"]}, "output": "x.json"}
         with self.assertRaisesRegex(ValueError, "Unknown or legacy"):
-            goals.reject_assumption(current, "A1")
+            goals.reject_assumption(current, "A1", shown(current))
 
     def test_rejection_requires_an_open_conversation_checkpoint(self):
         current = state()
@@ -202,7 +209,7 @@ class RejectAssumptionTests(unittest.TestCase):
             {"id": "A1", "text": "x", "kind": "inferable", "category": "technical",
              "convention_ref": "tools/x.py:1", "rationale": "r", "supports": []}]}, "output": "x.json"}
         with self.assertRaisesRegex(ValueError, "open conversation checkpoint"):
-            goals.reject_assumption(current, "A1")
+            goals.reject_assumption(current, "A1", shown(current))
 
 
 if __name__ == "__main__":

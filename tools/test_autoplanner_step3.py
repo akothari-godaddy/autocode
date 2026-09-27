@@ -72,8 +72,10 @@ class ObligationCase(unittest.TestCase):
     def reject(self, category="technical"):
         """Requirements with one assumption, then the user rejects it at a checkpoint."""
         self.apply("requirements_gather", requirements([assumption(category=category)]))
-        self.state["status"] = "AWAITING_GOAL_APPROVAL"
-        obligation = goals.reject_assumption(self.state, "A1")
+        self.apply("astra_discovery", self.discovery(plan([decision_question("Q0")])))
+        self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        goals.present(self.state)
+        obligation = goals.reject_assumption(self.state, "A1", goals.token(self.state["goal_contract"]))
         self.apply("requirements_gather", requirements())
         return obligation["id"]
 
@@ -199,19 +201,6 @@ class HumanDecisionTests(ObligationCase):
         self.assertEqual("resolved", self.obligation(oid)["status"])
         self.apply("astra_discovery", self.discovery())
         self.assertEqual("astra_challenge", self.state["next_stage"])
-
-    def test_delegated_default_does_not_discharge_an_obligation(self):
-        oid = self.reject(category="cost")
-        question = {**decision_question(oid), "proposed_default": "Prefer quality"}
-        self.apply("astra_discovery", self.discovery(plan([question])))
-        goals.answer(self.state, oid, "accept default", delegated=True)
-        self.assertEqual("open", self.obligation(oid)["status"])
-
-    def test_feedback_citing_the_obligation_discharges_it(self):
-        oid = self.reject(category="cost")
-        self.apply("astra_discovery", self.discovery(plan([decision_question(oid)])))
-        goals.feedback(self.state, f"For {oid}: cost is not a concern, prefer quality.")
-        self.assertEqual("resolved", self.obligation(oid)["status"])
 
     def test_cap_full_defers_presentation_but_not_the_obligation(self):
         oid = self.reject(category="cost")

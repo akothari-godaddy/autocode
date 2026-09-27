@@ -136,7 +136,7 @@ class InvestigationPassTests(EpisodeCase):
 
     def test_pass_cannot_silently_drop_a_question(self):
         self.queue_pass([question("Q1")])
-        with self.assertRaisesRegex(ValueError, "dropped discoverable questions"):
+        with self.assertRaisesRegex(ValueError, "dropped questions"):
             self.apply("requirements_gather", requirements([]))
 
     def test_still_discoverable_after_the_pass_becomes_a_labelled_decision(self):

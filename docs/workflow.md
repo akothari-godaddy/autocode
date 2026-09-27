@@ -140,9 +140,13 @@ question under the obligation's id. Otherwise the Planner may propose a remediat
 still covers every requirement the assumption supported, and only a Plan Reviewer decision
 bound to the hash of that exact proposal discharges it; a revised proposal needs a new
 decision. Anything still open at final review comes back to you as a question, and the
-plan has no executable first task. Answering that question yourself, or `--feedback` that
-names the obligation id, discharges it; a delegated default does not. Approval is refused
-while any obligation is open.
+plan has no executable first task. Only your own answer to that question discharges it;
+feedback that merely mentions the obligation does not, and such a question cannot be
+delegated. A rejected assumption can never be restored, even after its obligation is
+resolved. Proposing a remediation under one intent does not carry over a change of intent:
+a new answer or feedback returns it to be proposed and reviewed again. Approval is refused
+while any obligation is open. `--delegate-all` and `--reject-assumption` act only on the
+revision you were shown, so both take its token with `--review-token`.
 Reviewer concerns have stable IDs; every concern requires a Planner response and a reviewer decision,
 including a concrete acceptance test. The final displayed brief includes the technical
 approach, milestones, and **first bounded implementation task**, all covered by its
