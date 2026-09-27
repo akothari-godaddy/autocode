@@ -140,6 +140,23 @@ class Fx01OracleTest(unittest.TestCase):
 
 
 class TrialVerdictTest(unittest.TestCase):
+    def test_harness_timeout_preserves_both_reports_and_oracle_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            oracle = scenarios.OracleResult(scenarios.FAIL, "not delivered", [{"name": "artifact", "ok": False}])
+            spec = {"title": "Fixture", "task": "fixture", "oracle_name": "FX01",
+                    "oracle": mock.Mock(return_value=oracle)}
+            with (mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": str(root / "evidence")}),
+                  mock.patch.object(live_trial, "make_workspace", return_value=root),
+                  mock.patch.object(scenarios, "scenario", return_value=spec),
+                  mock.patch.object(live_trial, "drive", side_effect=live_trial.TrialError("deadline exhausted"))):
+                self.assertEqual(1, live_trial.main(["LIVE-01", "--workspace", str(root)]))
+            evidence = root / "evidence/LIVE-01/01"
+            self.assertEqual("ERROR", json.loads((evidence / "result.json").read_text())["status"])
+            report = json.loads((evidence / "live-trial.json").read_text())
+            self.assertEqual("ERROR", report["verdict"])
+            self.assertEqual(oracle.checks, report["checks"])
+
     def test_verdict_matrix(self):
         cases = [
             ("TASK_COMPLETE", scenarios.PASS, scenarios.PASS),
@@ -229,6 +246,53 @@ class LiveTrialSmokeTest(unittest.TestCase):
         self.assertTrue(all(check["ok"] for check in payload["checks"]))
 
 
+class DrivingBoundsTest(unittest.TestCase):
+    def test_deadline_is_shared_across_cli_steps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            states = [{"status": "WAITING_FOR_USER", "pending_questions": [{"id": "Q1", "options": ["yes"]}]},
+                      {"status": "TASK_COMPLETE"}, {"status": "TASK_COMPLETE"}]
+            with (mock.patch.object(live_trial.time, "monotonic", side_effect=[0, 2, 5]),
+                  mock.patch.object(live_trial, "_discover_run_dir", return_value=root),
+                  mock.patch.object(live_trial, "load_state", side_effect=states),
+                  mock.patch.object(live_trial, "invoke", return_value=subprocess.CompletedProcess([], 0, "", "")) as invoke):
+                live_trial.drive(root, root, profiles.resolve("fixture"), "task", 8, 20, mock.Mock())
+            self.assertEqual([18, 15], [call.args[-1] for call in invoke.call_args_list])
+
+    def test_unhandled_pause_stops_without_blind_resume(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (mock.patch.object(live_trial, "_discover_run_dir", return_value=root),
+                  mock.patch.object(live_trial, "load_state", return_value={"status": "PAUSED_USAGE_UNKNOWN"}),
+                  mock.patch.object(live_trial, "invoke", return_value=subprocess.CompletedProcess([], 2, "", "")) as invoke):
+                result = live_trial.drive(root, root, profiles.resolve("fixture"), "task", 8, 20, mock.Mock())
+            self.assertEqual("PAUSED_USAGE_UNKNOWN", result["state"]["status"])
+            self.assertEqual(1, invoke.call_count)
+
+    def test_review_uses_public_cli_and_artifact_token(self):
+        state = {"status": "WAITING_FOR_USER", "user_request": {"kind": "human_review", "criteria": ["C1"]},
+                 "displayed_review": "artifact-token"}
+        step = mock.Mock()
+        self.assertTrue(live_trial._serve_gate(state, HERE, HERE, profiles.resolve("fixture"), step))
+        self.assertEqual(["--approve-review", "C1", "--review-token", "artifact-token"], step.call_args.args[1][-4:])
+        del state["displayed_review"]
+        with self.assertRaises(live_trial.TrialError):
+            live_trial._serve_gate(state, HERE, HERE, profiles.resolve("fixture"), step)
+
+    def test_timeout_stops_provider_in_separate_process_group(self):
+        import psutil
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker = root / "child.pid"
+            script = ("import subprocess,sys,time; from pathlib import Path; "
+                      "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); "
+                      f"Path({str(marker)!r}).write_text(str(child.pid)); time.sleep(60)")
+            with self.assertRaisesRegex(live_trial.TrialError, "budget exhausted"):
+                live_trial.invoke([sys.executable, "-c", script], dict(os.environ), root, 1)
+            pid = int(marker.read_text())
+            self.assertFalse(psutil.pid_exists(pid))
+
+
 class ProgramModeTest(unittest.TestCase):
     """`--mode program` drives `autocode program run` and serves each child run's gates."""
 
@@ -277,6 +341,15 @@ class ProgramModeTest(unittest.TestCase):
         cmd = live_trial.program_command(self.project, profiles.resolve("fixture"), self.root / "program.json",
                                          authorize_deployment=True)
         self.assertEqual(1, cmd.count("--authorize-deployment"))
+
+    def test_program_deadline_is_shared_across_gate_steps(self):
+        bundle = mock.Mock()
+        self.program_status = ["WAITING", "COMPLETE"]
+        with (mock.patch.object(live_trial.time, "monotonic", side_effect=[0, 2, 5, 8]),
+              mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke) as invoke):
+            live_trial.drive_program(self.project, self.root, profiles.resolve("fixture"),
+                                     {"version": 1}, 8, 20, bundle)
+        self.assertEqual([18, 15, 12], [call.args[-1] for call in invoke.call_args_list])
 
     def test_cli_deployment_opt_in_is_independent_of_live_spend(self):
         spec = {"title": "Fixture", "program_manifest": {"version": 1, "name": "x"},

@@ -86,6 +86,17 @@ In program mode, `--i-authorize-live-model-spend` authorizes model calls only.
 added automatically. `PROGRAM-01` needs no deployment authorization: generating its
 descriptors is ordinary code work, and no deployment is performed.
 
+`--timeout` is a single wall-clock budget shared by all CLI invocations in the
+runner-driving phase, including program child gates. Independent oracle scoring and
+bounded process cleanup are separate. On deadline the harness stops the CLI and its
+provider descendants, then records `ERROR` and scores whatever was delivered; it
+does not rewrite a still-`RUNNING` checkpoint into a successful or paused run.
+Unhandled runner pauses remain honest blockers instead of being blindly resumed.
+
+The first GLM 5.3 / MiMo v2.6 Pro task-type live trials produced no completed delivery;
+see [the evidence record](../VALIDATION.md). Passing offline controls must not be
+presented as live model success.
+
 ## Legacy migration — opt-in only
 
 Existing v3 approved contracts retain their exact content, hash and approval. New

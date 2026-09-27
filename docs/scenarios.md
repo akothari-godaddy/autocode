@@ -82,10 +82,15 @@ Exit codes and verdicts follow [testing](testing.md#live-trial-results):
 
 ## Limits, stated plainly
 
-- Every task-type baseline is `NOT_RUN`. The controls cover references and selected
-  broken variants, not arbitrary implementations or all task requirements. No live
-  model has been scored on these baselines yet. Record each live result
-  in [VALIDATION.md](../VALIDATION.md) with profile, revision and bundle path.
+- All five task types were attempted on 2026-09-26 with the `glm53-mimo` profile.
+  None delivered a completed product within the recorded budgets: planning and
+  report repair exhausted the attempts. The registry records `ERROR`, not PASS;
+  [VALIDATION.md](../VALIDATION.md) distinguishes external interruptions from enforced
+  deadlines, includes independent post-stop scores, and records source/driver identities.
+  These bounded failures are not a ranking of the models or proof that the tasks
+  cannot be solved. Offline controls still cover only references and selected defects.
+  A later BUGFIX-01 retest with stable report-repair inputs reached the Builder but
+  still exhausted its 1,200-second budget without delivery; its baseline remains ERROR.
 - One case per task type is a capability example, not a general pass rate. Comparing
   `PROGRAM-01` in run and program modes reuses the task and scorer, but program mode
   additionally supplies a handwritten decomposition and has separate child budgets

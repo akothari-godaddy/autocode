@@ -1108,7 +1108,9 @@ SCENARIOS = {
         "oracle_name": "BUGFIX-01",
         "expected_class": "pass_or_honest",
         "deliverables": list(BUGFIX_DELIVERABLES),
-        "baseline": {"status": "NOT_RUN", "note": "oracle checked against reference and targeted broken variants only"},
+        "baseline": {"status": "ERROR", "profile": "glm53-mimo", "record": "VALIDATION.md",
+                     "note": "2026-09-26: report-repair fix rerun reached Builder but exhausted 1200-second deadline; "
+                             "unchanged seed still fails oracle; no completed delivery"},
     },
     "FEATURE-01": {
         "title": "Feature: case-insensitive tag filter in a seeded notes CLI",
@@ -1119,7 +1121,8 @@ SCENARIOS = {
         "oracle_name": "FEATURE-01",
         "expected_class": "pass_or_honest",
         "deliverables": list(FEATURE_DELIVERABLES),
-        "baseline": {"status": "NOT_RUN", "note": "oracle checked against reference and targeted broken variants only"},
+        "baseline": {"status": "ERROR", "profile": "glm53-mimo", "record": "VALIDATION.md",
+                     "note": "2026-09-26: externally interrupted during report repair; unchanged seed fails oracle; no completed delivery"},
     },
     "ARCH-01": {
         "title": "Architecture: service decomposition with enforced boundaries",
@@ -1132,7 +1135,8 @@ SCENARIOS = {
         "deliverables": [ARCH_ADR, "architecture/components.json", "architecture/check.py",
                          "docs/architecture.md"] + [f"contracts/{c}.json" for c in ARCH_COMPONENTS]
                         + [f"services/{c}/api.py" for c in ARCH_COMPONENTS],
-        "baseline": {"status": "NOT_RUN", "note": "oracle checked against reference and targeted broken variants only"},
+        "baseline": {"status": "ERROR", "profile": "glm53-mimo", "record": "VALIDATION.md",
+                     "note": "2026-09-26: 900-second deadline during report repair; no architecture delivered"},
     },
     "PROGRAM-01": {
         "title": "Program: four-service order system behind a gateway",
@@ -1147,7 +1151,8 @@ SCENARIOS = {
         # The same brief can run as one run with parallel milestone Builders or
         # as `autocode program run` with this manifest; the oracle is identical.
         "program_manifest": PROGRAM_MANIFEST,
-        "baseline": {"status": "NOT_RUN", "note": "oracle checked against reference and targeted broken variants only"},
+        "baseline": {"status": "ERROR", "profile": "glm53-mimo", "record": "VALIDATION.md",
+                     "note": "2026-09-26: program mode hit 1200-second deadline planning contracts; nothing merged"},
     },
     "UI-01": {
         "title": "UI: implement a frozen design reference (Figma stand-in)",
@@ -1158,7 +1163,8 @@ SCENARIOS = {
         "oracle_name": "UI-01",
         "expected_class": "pass_or_honest",
         "deliverables": list(UI_DELIVERABLES),
-        "baseline": {"status": "NOT_RUN", "note": "oracle checked against reference and targeted broken variants only; "
-                                                  "the live Figma route (autocode ui --build) has no offline oracle"},
+        "baseline": {"status": "ERROR", "profile": "glm53-mimo", "record": "VALIDATION.md",
+                     "note": "2026-09-26: frozen-spec code run hit 900-second deadline in report repair; no UI delivered; "
+                             "live Figma route remains untested"},
     },
 }

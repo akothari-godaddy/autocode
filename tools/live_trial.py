@@ -17,6 +17,7 @@ Deployment authorization in program mode requires the separate
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -25,6 +26,8 @@ import sys
 import tempfile
 import time
 from pathlib import Path
+
+import psutil
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -96,7 +99,31 @@ def autocode_command(project: Path, profile: dict, task: str | None,
 
 
 def invoke(cmd: list[str], env: dict, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, env=env, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+    with subprocess.Popen(cmd, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, start_new_session=True) as proc:
+        try:
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Providers can start their own process groups, so stopping only the
+            # CLI would leave model calls running after the trial deadline.
+            try:
+                descendants = psutil.Process(proc.pid).children(recursive=True)
+            except psutil.NoSuchProcess:
+                descendants = []
+            proc.kill()
+            for child in descendants:
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            psutil.wait_procs(descendants, timeout=3)
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.stdout.close()
+                proc.stderr.close()
+            raise TrialError(f"runner-driving wall-clock budget exhausted; stopped CLI and its provider descendants") from None
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def load_state(run_dir: Path) -> dict:
@@ -120,12 +147,13 @@ def drive(project: Path, root: Path, profile: dict, task: str,
 
     # 0 = finished, 2 = paused for a human gate. Both are successful CLI exits.
     def step(kind: str, cmd: list[str], *, allow_codes=(0, 2)) -> subprocess.CompletedProcess:
-        if time.monotonic() - started > timeout:
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
             raise TrialError(f"wall-clock budget exceeded after {len(steps)} CLI steps")
         if len(steps) >= budget_stages:
             raise TrialError(f"stage budget exceeded after {len(steps)} CLI steps")
         bundle.log("cli_step", kind=kind, cmd=cmd)
-        proc = invoke(cmd, env, root, timeout)
+        proc = invoke(cmd, env, root, remaining)
         record = {"kind": kind, "cmd": cmd, "returncode": proc.returncode,
                   "stdout_tail": proc.stdout[-800:], "stderr_tail": proc.stderr[-800:]}
         steps.append(record)
@@ -199,8 +227,7 @@ def _discover_run_dir(project: Path) -> Path | None:
 
 def _resumable(state: dict) -> bool:
     status = state.get("status", "")
-    return (status in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER", "PAUSED_REQUESTED")
-            or status.startswith("PAUSED_"))
+    return status in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER", "PAUSED_PLANNING_BUDGET")
 
 
 def _serve_gate(state: dict, run_dir: Path, project: Path, profile: dict, step) -> bool:
@@ -213,8 +240,8 @@ def _serve_gate(state: dict, run_dir: Path, project: Path, profile: dict, step) 
         step("feedback", autocode_command(project, profile, None, run_dir, [
             "--feedback",
             "The previous planning cycle exhausted its review budget. Produce a "
-            "complete final contract now with all four milestones and their "
-            "declared affected_paths, then finalize."]),
+            "complete final contract for the original request, preserving its "
+            "requirements, exclusions and declared affected_paths, then finalize."]),
             allow_codes=(0, 2))
         return True
 
@@ -241,11 +268,12 @@ def _serve_gate(state: dict, run_dir: Path, project: Path, profile: dict, step) 
     if status == "WAITING_FOR_USER" or state.get("user_request"):
         request = state.get("user_request") or {}
         if request.get("kind") == "human_review":
-            token = state.get("displayed_review") or state.get("displayed_goal")
+            token = state.get("displayed_review")
+            if not token:
+                raise TrialError("human review requested without displayed_review token")
             for cid in request.get("criteria", []):
-                arg = f"{cid}={token}" if token else cid
                 step("accept-review", autocode_command(
-                    project, profile, None, run_dir, ["--accept-review", arg]),
+                    project, profile, None, run_dir, ["--approve-review", cid, "--review-token", token]),
                     allow_codes=(0, 2))
             return True
 
@@ -289,12 +317,13 @@ def drive_program(project: Path, root: Path, profile: dict, manifest: dict,
     started = time.monotonic()
 
     def step(kind: str, cmd: list[str], *, allow_codes=(0, 2)) -> subprocess.CompletedProcess:
-        if time.monotonic() - started > timeout:
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
             raise TrialError(f"wall-clock budget exceeded after {len(steps)} CLI steps")
         if len(steps) >= budget_stages:
             raise TrialError(f"stage budget exceeded after {len(steps)} CLI steps")
         bundle.log("cli_step", kind=kind, cmd=cmd)
-        proc = invoke(cmd, env, root, timeout)
+        proc = invoke(cmd, env, root, remaining)
         record = {"kind": kind, "cmd": cmd, "returncode": proc.returncode,
                   "stdout_tail": proc.stdout[-800:], "stderr_tail": proc.stderr[-800:]}
         steps.append(record)
@@ -399,6 +428,7 @@ def write_report(bundle: Bundle, scenario_id: str, spec: dict,
         "product": str(run.get("product", "")),
         "baseline": spec.get("baseline"),
         "source": source_revision(),
+        "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
     }
     path = bundle.dir / "live-trial.json"
     path.write_text(json.dumps(payload, indent=2, default=str))
@@ -419,7 +449,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--budget-stages", type=int, default=40,
                         help="max CLI invocations before an honest budget stop")
     parser.add_argument("--timeout", type=int, default=1800,
-                        help="wall-clock seconds for the whole trial")
+                        help="wall-clock seconds for runner driving; oracle scoring and bounded cleanup are separate")
     parser.add_argument("--i-authorize-live-model-spend", action="store_true",
                         help="required for any non-fixture profile")
     parser.add_argument("--authorize-deployment", action="store_true",
@@ -522,6 +552,20 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         return 0 if result.status == scenarios.PASS else 1
     except TrialError as error:
+        run_dir = _discover_run_dir(project)
+        state = load_state(run_dir) if run_dir else {}
+        product = project
+        if args.mode == "program":
+            paths = list((project / ".autocode/programs").glob("*/state.json"))
+            if len(paths) == 1:
+                saved = json.loads(paths[0].read_text())
+                state = {"status": saved.get("status"), "program": saved}
+                product = Path(saved.get("integration", {}).get("workspace", project))
+        oracle = spec["oracle"](product)
+        result = scenarios.OracleResult(scenarios.ERROR, f"{error}; {oracle.summary}", oracle.checks)
+        bundle.state("final", state)
+        write_report(bundle, args.scenario, spec, args.profile, profile, result,
+                     {"state": state, "mode": args.mode, "product": product})
         bundle.finish(scenarios.ERROR, str(error))
         print(f"{args.scenario} ERROR: {error}", file=sys.stderr)
         print(f"evidence: {bundle.dir}", file=sys.stderr)

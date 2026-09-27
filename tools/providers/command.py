@@ -156,12 +156,15 @@ class CommandProvider:
             + json.dumps(schema, indent=2) + "\n")
         return prompt.replace("\nCURRENT HANDOFF DATA\n", instructions + "\nCURRENT HANDOFF DATA\n", 1)
 
-    def final_report(self, path, *, recover_wrapped=False):
+    def final_report(self, path, *, recover_wrapped=False, response_path=None):
         if self.OUTPUT == "opencode_events":
-            return _opencode_events.final_report(path)
+            return _opencode_events.final_report(path, recover_wrapped=recover_wrapped, response_path=response_path)
         report_path = Path(path).with_suffix(".json")
         try:
-            value = json.loads(report_path.read_text())
+            text = report_path.read_text()
+            if response_path is not None:
+                Path(response_path).write_text(text)
+            value = json.loads(text)
         except (OSError, json.JSONDecodeError) as error:
             raise RuntimeError(f"Tool did not write a JSON report at {report_path}: {error}") from error
         if not isinstance(value, dict):

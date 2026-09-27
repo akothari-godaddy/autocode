@@ -61,7 +61,9 @@ class RegistryTest(unittest.TestCase):
                                        ("PROGRAM-01", "program"), ("UI-01", "ui")):
             self.assertIn(scenario_id, registry)
             self.assertEqual(task_type, registry[scenario_id]["task_type"])
-            self.assertEqual("NOT_RUN", registry[scenario_id]["baseline"]["status"])
+            self.assertEqual("ERROR", registry[scenario_id]["baseline"]["status"])
+            self.assertEqual("glm53-mimo", registry[scenario_id]["baseline"]["profile"])
+            self.assertEqual("VALIDATION.md", registry[scenario_id]["baseline"]["record"])
         self.assertIn("LIVE-01", registry)
         with self.assertRaisesRegex(ValueError, "BUGFIX-01"):
             live_scenarios.scenario("NOPE-00")
