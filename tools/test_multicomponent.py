@@ -139,6 +139,20 @@ class BuildAndIntegrateTests(unittest.TestCase):
         return mc.MultiComponentBuild(self.repo, self.arch, options=FIXTURE_OPTIONS, env=self.env, timeout=300,
                                       max_advances=max_advances).build(auto_approve=auto_approve)
 
+    def test_a_worktree_directory_removed_without_prune_is_recovered(self):
+        # Reproduces a real failure: deleting .autocode-components/<id> by hand (or a
+        # crashed earlier attempt) leaves git's own worktree registration behind, so
+        # the next `git worktree add` for that path fails outright — this raised an
+        # unhandled subprocess.CalledProcessError before build() pruned stale
+        # registrations itself.
+        self.write_manifest(beta={"description": "the beta component", "file": "components/beta/message.txt",
+                                  "content": "unused\n", "check": "true"})
+        git(self.repo, "worktree", "add", "-q", "-b", "components/alpha-stale",
+            str(self.repo / ".autocode-components" / "alpha"), "HEAD")
+        shutil.rmtree(self.repo / ".autocode-components" / "alpha")
+        build = self.build(auto_approve=True)
+        self.assertTrue(build["alpha"].ready_to_integrate, build["alpha"].error)
+
     def test_two_independent_components_build_and_integrate(self):
         # Batching itself (independent components share one ThreadPoolExecutor batch)
         # is proven deterministically in BatchingTests; concurrent execution within a

@@ -191,6 +191,13 @@ class MultiComponentBuild:
         resolves it through the returned ``ComponentResult.run`` and calls
         ``build`` again to continue the rest.
         """
+        # A worktree directory removed without `git worktree remove`/`prune` (by hand,
+        # or by a crashed earlier attempt) leaves its registration behind; the next
+        # `git worktree add` for that path then fails outright. Since callers are
+        # expected to have already checked no `.autocode-components/<id>` directory
+        # exists (autocode_components.cli does), any registration still around at this
+        # point is exactly that stale case, safe to clear before building anything.
+        _git(self.repo, "worktree", "prune")
         for batch in self.architecture.batches():
             pending = [c for c in batch if c.id not in self.results]
             if not pending:
@@ -212,6 +219,9 @@ class MultiComponentBuild:
             return ComponentResult(component, workspace, base_commit, run=run, view=view, error=error)
         except TaskRunError as error:
             return ComponentResult(component, workspace, None, error=str(error))
+        except subprocess.CalledProcessError as error:
+            detail = (error.stderr or error.stdout or str(error)).strip()
+            return ComponentResult(component, workspace, None, error=f"could not prepare a worktree: {detail}")
 
     def _new_worktree_run(self, component: Component, workspace: Path) -> tuple[str, TaskRun]:
         workspace.parent.mkdir(parents=True, exist_ok=True)
