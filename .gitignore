@@ -16,3 +16,6 @@ __pycache__/
 
 # October desktop — local canvas state
 .october/
+
+# Test-kit artifacts written by tools/autopilot_testkit.py during suite runs
+.tmp-autopilot-testkit/

@@ -1,23 +1,9 @@
 """Interaction regressions for inboxes with existing planning/report recovery."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import unittest
 from unittest.mock import patch
-try:
-    from . import test_report_repair as repair_fixtures
-    from . import test_goals as goal_fixtures
-except ImportError:
-    import test_report_repair as repair_fixtures
-    import test_goals as goal_fixtures
+from . import test_report_repair as repair_fixtures
+from . import test_goals as goal_fixtures
 
 runner = repair_fixtures.runner
 support = repair_fixtures.support
