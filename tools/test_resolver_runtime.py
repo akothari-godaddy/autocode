@@ -1,14 +1,17 @@
 """Runner boundary integration, with no live models or autonomous code writes."""
 import copy
+from contextlib import contextmanager
+import json
 import os
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
 from . import test_autocode as base
 from . import test_report_repair as repairs
-from .goal_fixtures import approve_fixture
+from .goal_fixtures import approve_fixture, envelope
 
 runner, support = base.runner, base.s
 # The exact module instance runner.autopilot itself dispatches through: importing
@@ -247,7 +250,7 @@ class OperationalDiagnosisTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'paused for repeated failure'):
             self.admit()
 
-    def test_admission_requires_an_exhausted_report_repair_identity(self):
+    def test_admission_requires_a_stopped_report_repair_identity(self):
         self.state.update(status='PAUSED_REPEATED_FAILURE')
         with self.assertRaisesRegex(ValueError, 'retry-failed-stage'):
             self.admit()
@@ -373,13 +376,17 @@ class OperationalDiagnosisTests(unittest.TestCase):
             runner.resolver_runtime.diagnostic_call_limit(self.state)
 
     def charge(self):
-        return runner.resolver_runtime.charge_diagnostic_dispatch(runner, self.state, self.run, self.root)
+        record = self.state.get('active_stage') or {'stage': self.state['next_stage']}
+        runner.resolver_runtime.charge_diagnostic_dispatch(runner, self.state, self.run, self.root, record)
+        if record.get('diagnostic_reservation_id'):
+            self.state['active_stage'] = record
+            support.atomic_json(self.run / 'state.json', self.state)
 
     def archive_timed_out_astra_diagnose_attempt(self):
         """Simulate what automatically_recover_timed_out_stage actually does:
         archive the timed-out attempt into state['stages'] at the same
         iteration, then route back to astra_diagnose for a fresh launch."""
-        self.state.setdefault('stages', []).append({
+        self.state.setdefault('stages', []).append({**self.state.pop('active_stage'),
             'stage': 'astra_diagnose', 'role': 'astra', 'iteration': self.state.get('iteration'),
             'automatic_recovery': True, 'timed_out': True})
         self.state['next_stage'] = 'astra_diagnose'
@@ -399,14 +406,36 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.assertEqual(1, saved['resolver']['diagnostic_calls'])
 
     def test_charge_dispatch_rechecking_the_same_unlaunched_attempt_is_idempotent(self):
-        # No new stages row appeared between these calls (no relaunch
-        # actually happened), so this must not spend the budget three times.
+        # Reconciliation of the same reserved record must not spend again.
         self.repeated_terra_failure()
         self.admit()
         self.charge()
         self.charge()
         self.charge()
         self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+
+    def test_malformed_diagnostic_accounting_refuses_before_launch(self):
+        self.repeated_terra_failure()
+        self.admit()
+        original = copy.deepcopy(self.state)
+        invalid = [
+            {'diagnostic_calls': True}, {'diagnostic_calls': -1},
+            {'diagnostic_dispatch_charged_through': '1'},
+            {'diagnostic_reservations': []},
+            {'diagnostic_legacy_calls': -1, 'diagnostic_reservations': []},
+            {'diagnostic_legacy_calls': 0, 'diagnostic_reservations': 'not-a-list'},
+            {'diagnostic_legacy_calls': 0, 'diagnostic_reservations': ['same', 'same']},
+            {'diagnostic_legacy_calls': 0, 'diagnostic_reservations': ['']},
+        ]
+        for index, fields in enumerate(invalid):
+            with self.subTest(fields=fields):
+                self.state = copy.deepcopy(original)
+                self.state['iteration'] += index
+                self.state['resolver'].update(fields)
+                with self.provider() as launches, self.assertRaises(ValueError):
+                    self.dispatch()
+                self.assertEqual([], launches)
+                self.assertNotIn('active_stage', self.state)
 
     def test_charge_dispatch_charges_a_genuine_timeout_relaunch_again(self):
         # The exact case the review found uncounted: a real timeout archives
@@ -456,54 +485,350 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.assertEqual('PAUSED_STALE_HANDOFF', caught.exception.status)
         self.assertNotIn('diagnostic_calls', self.state['resolver'])
 
+    def test_reservation_survives_iteration_blocker_archive_changes_and_resume(self):
+        self.repeated_terra_failure()
+        self.admit()
+        ids = []
+        for iteration in (1, 2):
+            self.state['iteration'] = iteration
+            self.state['diagnosis_request']['blocker_id'] = f'blocker-{iteration}'
+            self.charge()
+            ids.append(self.state['active_stage']['diagnostic_reservation_id'])
+            self.state = support.read(self.run / 'state.json')
+            runner.resolver_runtime.reset_for_resume(self.state)
+            self.charge()
+            self.assertEqual(iteration, self.state['resolver']['diagnostic_calls'])
+            self.state.pop('active_stage')
+            self.state['stages'] = []  # identity cannot depend on retained rows
+        self.assertEqual(2, len(set(ids)))
+        self.state['iteration'] = 3
+        with self.assertRaisesRegex(support.Paused, 'budget exhausted'):
+            self.charge()
+
+    def test_legacy_counter_watermark_and_concrete_attempts_are_conservative(self):
+        self.repeated_terra_failure()
+        self.admit()
+        baseline = copy.deepcopy(self.state)
+        for calls, watermark, count, expected in ((1, 1, 3, 3), (2, 2, 0, 2), (0, 2, 0, 2), (0, 0, 2, 2)):
+            with self.subTest(calls=calls, watermark=watermark, count=count):
+                self.state = copy.deepcopy(baseline)
+                self.state['resolver'].update(diagnostic_calls=calls, diagnostic_dispatch_charged_through=watermark)
+                self.state['stages'] += [{'stage': 'astra_diagnose', 'iteration': i, 'output': f'old-{i}.json'}
+                                         for i in range(count)]
+                with self.assertRaisesRegex(support.Paused, 'budget exhausted'):
+                    self.charge()
+                self.assertEqual(expected, support.read(self.run / 'state.json')['resolver']['diagnostic_calls'])
+        self.state = baseline
+        self.state['resolver'].update(diagnostic_calls=1, diagnostic_dispatch_charged_through=1)
+        self.charge()
+        self.assertEqual(1, self.state['resolver']['diagnostic_legacy_calls'])
+        self.assertEqual(2, self.state['resolver']['diagnostic_calls'])
+        self.state = support.read(self.run / 'state.json')
+        self.charge()
+        self.assertEqual(2, self.state['resolver']['diagnostic_calls'])
+
+    @contextmanager
+    def provider(self, *, value=None, timeout=False, uncertain=False):
+        """Exercise real run_role, mocking only provider process creation/wait."""
+        value = value if value is not None else {
+            'diagnosis': 'The summary field was omitted.',
+            'recommendation': {'action': 'retry', 'rationale': 'Include a nonempty summary field.',
+                               'guidance': 'Add the missing field.', 'evidence_refs': []}}
+        launches = []
+        real_popen = runner.subprocess.Popen
+
+        def launch(command, **kwargs):
+            if command[0] == 'git':
+                return real_popen(command, **kwargs)
+            self.assertEqual('codex', command[0])
+            checkpoint = support.read(self.run / 'state.json')
+            record = checkpoint['active_stage']
+            launches.append(record)
+            if not record.get('report_only'):
+                self.assertIn(record['diagnostic_reservation_id'], checkpoint['resolver']['diagnostic_reservations'])
+                self.assertEqual(len(checkpoint['resolver']['diagnostic_reservations']), checkpoint['resolver']['diagnostic_calls'])
+            support.atomic_json(command[command.index('-o') + 1], value)
+            events = [{'type': 'thread.started', 'thread_id': record.get('expected_session') or 'diagnosis-session'}]
+            if not timeout and not uncertain:
+                events.append({'type': 'turn.completed'})
+            kwargs['stdout'].write(''.join(json.dumps(event) + '\n' for event in events))
+            kwargs['stdout'].flush()
+            return SimpleNamespace(pid=99999999)
+
+        with patch.object(runner.subprocess, 'Popen', side_effect=launch), \
+             patch.object(runner.processes, 'process_table', return_value={}), \
+             patch.object(runner.processes, 'wait_for_stage', return_value=(-15, True) if timeout else (0, False)):
+            yield launches
+
+    def dispatch(self):
+        return runner.autopilot.dispatch_unit(runner, self.state, 'astra_diagnose', self.root, self.run)
+
+    def cli(self, *options):
+        local = {'auth_mode': 'fixture'}
+        self.state['settings']['transport_identity'] = local
+        self.state['settings'].setdefault('limits', {
+            'iteration_ceiling': 18, 'max_seconds': None, 'max_reported_tokens': None,
+            'no_progress_batches': 3, 'automatic_retries': 0})
+        support.atomic_json(self.run / 'state.json', self.state)
+        argv = ['autocode.py', '--workspace', str(self.root), '--run-dir', str(self.run), '--resume-paused', *options]
+        with tempfile.TemporaryDirectory() as registry_home, \
+             patch.dict(os.environ, {'AUTOCODE_HOME': registry_home}), \
+             patch.object(sys, 'argv', argv), patch.object(support, 'assert_no_legacy_process'), \
+             patch.object(support, 'local_settings', return_value=local):
+            return runner.main()
+
     def test_cli_diagnose_failed_stage_reaches_astra_diagnose_and_retries_terra(self):
         """The real production dispatch path (autocode.main), not a test helper."""
-        local = {'auth_mode': 'fixture'}
-        self.state['settings'].update(transport_identity=local,
-            limits={'iteration_ceiling': 18, 'max_seconds': None, 'max_reported_tokens': None,
-                    'no_progress_batches': 3, 'automatic_retries': 0})
-        self.state['workspace'] = str(self.root.resolve())
         self.repeated_terra_failure()
-        support.atomic_json(self.run / 'state.json', self.state)
-        called = []
-
-        def fake_role(**kwargs):
-            stage = kwargs['state']['next_stage']
-            called.append(stage)
-            out = self.run / f'{stage}-cli.json'
-            ev = self.run / f'{stage}-cli.jsonl'
-            ev.write_text('{"type":"turn.completed"}\n')
-            if stage == 'astra_diagnose':
-                value = {'diagnosis': 'The summary field was omitted from the report.',
-                         'recommendation': {'action': 'retry', 'rationale': 'Include a nonempty summary field.',
-                                            'guidance': 'Add commands_run, results and a nonempty summary.'}}
-                support.atomic_json(out, value)
-                record = {'role': kwargs['role'], 'stage': stage, 'iteration': kwargs['state']['iteration'],
-                          'output': str(out), 'events': str(ev), 'changed_files': [],
-                          'source_revision': kwargs['state']['diagnosis_request']['source_revision'], 'duration_seconds': 0.01}
-                return value, record
-            raise support.Paused('PAUSED_REQUESTED', 'stop after the diagnosed retry for this test')
-
-        argv = ['autocode.py', '--workspace', str(self.root.resolve()), '--run-dir', str(self.run.resolve()),
-                '--resume-paused', '--diagnose-failed-stage']
-        # A registry home nested inside the git workspace (the base fixture's own
-        # convenience) is untracked and would make the run's own bookkeeping
-        # writes look like uncommitted source drift; keep it genuinely external
-        # here, matching how AUTOCODE_HOME works outside this test suite.
-        registry_home = tempfile.TemporaryDirectory()
-        self.addCleanup(registry_home.cleanup)
-        with patch.dict(os.environ, {'AUTOCODE_HOME': registry_home.name}), \
-             patch.object(sys, 'argv', argv), patch.object(support, 'assert_no_legacy_process'), \
-             patch.object(support, 'local_settings', return_value=local), patch.object(runner, 'run_role', side_effect=fake_role):
-            code = runner.main()
+        with self.provider() as launches:
+            code = self.cli('--diagnose-failed-stage', '--pause-after-stage')
         self.assertEqual(2, code)
-        self.assertEqual(['astra_diagnose', 'terra'], called)
+        self.assertEqual(['astra_diagnose'], [row['stage'] for row in launches])
         saved = support.read(self.run / 'state.json')
-        self.assertEqual('PAUSED_REQUESTED', saved['status'])
         self.assertEqual('terra', saved['next_stage'])
         self.assertNotIn('diagnosis_request', saved)
         self.assertEqual(1, saved['resolver']['diagnostic_calls'])
         self.assertEqual([2], list(saved['resolver']['attempts'].values()))
+
+    def test_shared_dispatch_real_timeout_recovery_reload_and_replacement_cap(self):
+        self.repeated_terra_failure()
+        self.admit()
+        with self.provider(timeout=True) as launches:
+            for count in (1, 2):
+                self.assertIs(runner.autopilot.SKIP, self.dispatch())
+                self.state = support.read(self.run / 'state.json')
+                self.assertNotIn('active_stage', self.state)
+                self.assertEqual(count, self.state['resolver']['diagnostic_calls'])
+                self.assertEqual(count, len(self.state['automatic_timeout_recoveries']))
+            with self.assertRaisesRegex(support.Paused, 'budget exhausted'):
+                self.dispatch()
+        self.assertEqual(2, len(launches))
+        self.assertEqual(2, len({row['diagnostic_reservation_id'] for row in launches}))
+
+    def test_cli_real_timeout_recovery_stops_at_lifetime_cap(self):
+        self.repeated_terra_failure()
+        with self.provider(timeout=True) as launches:
+            self.assertEqual(2, self.cli('--diagnose-failed-stage'))
+        saved = support.read(self.run / 'state.json')
+        self.assertEqual(2, len(launches))
+        self.assertEqual(2, saved['resolver']['diagnostic_calls'])
+        self.assertEqual(2, len(saved['automatic_timeout_recoveries']))
+        self.assertEqual('PAUSED_REPEATED_FAILURE', saved['status'])
+        self.assertNotIn('active_stage', saved)
+
+    def test_cli_new_iteration_source_and_blocker_do_not_reset_lifetime_cap(self):
+        blockers = []
+        self.state['iteration'] = 1
+        with self.provider() as launches:
+            for iteration in (1, 2, 3):
+                self.assertEqual(iteration, self.state['iteration'])
+                (self.root / 'cause-fixed.txt').write_text(f'source revision {iteration}')
+                original = self.repeated_terra_failure()
+                blockers.append(original['failure_key'])
+                self.assertEqual(2, self.cli('--diagnose-failed-stage', '--pause-after-stage'))
+                self.state = support.read(self.run / 'state.json')
+                self.assertEqual(min(iteration, 2), self.state['resolver']['diagnostic_calls'])
+                if iteration < 3:
+                    self.assertEqual('terra', self.state['next_stage'])
+                    # Advance via the actual approved review transition, not a
+                    # counter reset fabricated by the test between diagnoses.
+                    self.state.update(status='RUNNING', next_stage='astra_review')
+                    decision = {**base.RetrofitTest.decision(self), **envelope(self.state),
+                        'next_task': {'kind': 'implement', 'milestone_id': 'M1',
+                                      'requirements': ['Return the approved greeting'],
+                                      'acceptance_criteria': ['C1'], 'validation_plan': ['Run greeting checks']}}
+                    output = self.run / f'review-{iteration}.json'
+                    support.atomic_json(output, decision)
+                    runner.commit_stage_result(self.state, 'astra_review', decision,
+                        {'stage': 'astra_review', 'role': 'astra', 'iteration': iteration,
+                         'output': str(output), 'source_revision': support.snapshot(self.root)['revision']},
+                        self.root, self.run)
+                    self.state = support.read(self.run / 'state.json')
+        self.assertEqual(3, len(set(blockers)))
+        self.assertEqual([1, 2], [row['iteration'] for row in launches])
+        self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+
+    def test_cli_rejected_output_resume_spends_new_reservation(self):
+        self.repeated_terra_failure()
+        self.state['settings']['report_repair'] = {'max_attempts': 0}
+        with self.provider(value={}) as launches:
+            self.assertEqual(2, self.cli('--diagnose-failed-stage'))
+            self.state = support.read(self.run / 'state.json')
+            self.assertEqual('PAUSED_INVALID_OUTPUT', self.state['status'])
+            self.assertNotIn('active_stage', self.state)
+            self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+            self.assertEqual(2, self.cli())
+            self.state = support.read(self.run / 'state.json')
+            self.assertEqual(2, self.state['resolver']['diagnostic_calls'])
+            self.assertEqual(2, self.cli())
+            self.state = support.read(self.run / 'state.json')
+            self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+            self.assertEqual(2, self.cli())
+            self.state = support.read(self.run / 'state.json')
+            self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+        self.assertEqual(2, len(launches))
+        self.assertEqual(2, len({row['diagnostic_reservation_id'] for row in launches}))
+
+    def test_uncertain_launch_is_not_refunded_or_replayed_on_reload(self):
+        self.repeated_terra_failure()
+        self.admit()
+        with self.provider(uncertain=True) as launches:
+            with self.assertRaises(support.Paused):
+                self.dispatch()
+            self.state = support.read(self.run / 'state.json')
+            reservation = self.state['active_stage']['diagnostic_reservation_id']
+            with self.assertRaisesRegex(support.Paused, 'Uncertain stage'):
+                runner.reconcile_active(self.state, self.run, self.root)
+            self.charge()  # rechecking the saved reservation is idempotent
+            with self.assertRaisesRegex(support.Paused, 'Reconcile the active diagnosis'):
+                self.dispatch()
+        self.assertEqual(1, len(launches))
+        self.assertEqual([reservation], self.state['resolver']['diagnostic_reservations'])
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        runner.abandon_stage(self.state, self.run, self.root, runner.attempt_id(self.state['active_stage']))
+        self.state = support.read(self.run / 'state.json')
+        with self.provider() as replacements:
+            self.assertEqual(2, self.cli('--pause-after-stage'))
+        self.assertEqual(1, len(replacements))
+        self.assertNotEqual(reservation, replacements[0]['diagnostic_reservation_id'])
+        self.assertEqual(2, support.read(self.run / 'state.json')['resolver']['diagnostic_calls'])
+
+    def test_crash_after_reservation_checkpoint_before_popen_remains_uncertain(self):
+        self.repeated_terra_failure()
+        self.admit()
+        original_write = runner.write_json
+
+        def crash_after_checkpoint(path, value):
+            original_write(path, value)
+            if path == self.run / 'state.json' and value.get('active_stage'):
+                raise SystemExit('crash between checkpoint and launch')
+
+        with self.provider() as launches, patch.object(runner, 'write_json', side_effect=crash_after_checkpoint):
+            with self.assertRaises(SystemExit):
+                self.dispatch()
+        self.assertEqual([], launches)
+        self.state = support.read(self.run / 'state.json')
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        self.assertIn('diagnostic_reservation_id', self.state['active_stage'])
+        with self.provider() as launches:
+            self.assertEqual(2, self.cli())
+        self.assertEqual([], launches)
+        saved = support.read(self.run / 'state.json')
+        self.assertIn('active_stage', saved)
+        self.assertEqual(1, saved['resolver']['diagnostic_calls'])
+
+    def test_completed_active_reconciliation_is_idempotent_without_relaunch(self):
+        self.repeated_terra_failure()
+        self.admit()
+        with self.provider() as launches, patch.object(runner, 'commit_stage_result', side_effect=SystemExit('crash before apply')):
+            with self.assertRaises(SystemExit):
+                self.dispatch()
+        self.assertEqual(1, len(launches))
+        self.state = support.read(self.run / 'state.json')
+        with self.provider() as replays:
+            runner.reconcile_active(self.state, self.run, self.root)
+            self.state = support.read(self.run / 'state.json')
+            runner.reconcile_active(self.state, self.run, self.root)
+        self.assertEqual([], replays)
+        self.assertNotIn('active_stage', self.state)
+        self.assertEqual('terra', self.state['next_stage'])
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+
+    def test_report_only_repair_has_separate_allowance_not_another_diagnosis(self):
+        self.repeated_terra_failure()
+        self.admit()
+        self.state['settings']['operational_diagnosis'] = {'max_calls_per_run': 1}
+        with self.provider(value={}) as launches:
+            self.assertIs(runner.autopilot.SKIP, self.dispatch())
+        self.assertEqual(1, len(launches))
+        self.state = support.read(self.run / 'state.json')
+        self.assertEqual(0, self.state['pending_report_repair']['attempts'])
+        with self.provider() as repairs_launched:
+            runner.execute_report_repair(self.state, self.run, self.root)
+        self.assertEqual(1, len(repairs_launched))
+        self.assertTrue(repairs_launched[0]['report_only'])
+        self.assertNotIn('diagnostic_reservation_id', repairs_launched[0])
+        self.assertEqual(1, self.state['resolver']['diagnostic_calls'])
+        self.assertEqual('terra', self.state['next_stage'])
+
+    def test_prelaunch_guards_do_not_charge_in_either_dispatch_path(self):
+        self.repeated_terra_failure()
+        self.admit()
+        baseline = copy.deepcopy(self.state)
+        guards = ((runner.milestones, 'dispatch_guard', 'PAUSED_MILESTONE_BUDGET'),
+                  (runner.workflow, 'dispatch_guard', 'PAUSED_WORKFLOW_CONFLICT'),
+                  (runner.goals, 'execution_guard', 'PAUSED_GOAL_UNAPPROVED'),
+                  (runner.interventions, 'admission', 'PAUSED_INTERVENTION_PENDING'),
+                  (runner, 'timeout_recovery_guard', 'PAUSED_TIMEOUT_RECOVERY'))
+        for cli in (False, True):
+            for module, method, status in guards:
+                with self.subTest(cli=cli, guard=method, status=status):
+                    self.state = copy.deepcopy(baseline)
+                    with self.provider() as launches, patch.object(module, method, side_effect=support.Paused(status, 'guard refused')):
+                        if cli:
+                            self.assertEqual(2, self.cli())
+                            self.state = support.read(self.run / 'state.json')
+                        else:
+                            with self.assertRaises(support.Paused) as caught:
+                                self.dispatch()
+                            self.assertEqual(status, caught.exception.status)
+                    self.assertEqual([], launches)
+                    self.assertNotIn('diagnostic_calls', self.state['resolver'])
+                    self.assertNotIn('active_stage', self.state)
+
+    def test_source_contract_evidence_refused_without_charge(self):
+        self.repeated_terra_failure()
+        self.admit()
+        baseline = copy.deepcopy(self.state)
+        for cli in (False, True):
+            for field in ('source_revision', 'contract_hash', 'evidence_hashes'):
+                with self.subTest(cli=cli, field=field):
+                    self.state = copy.deepcopy(baseline)
+                    self.state['diagnosis_request'][field] = (
+                        {str(self.evidence): 'changed-hash'} if field == 'evidence_hashes' else 'changed')
+                    with self.provider() as launches:
+                        if cli:
+                            self.assertEqual(2, self.cli())
+                            self.state = support.read(self.run / 'state.json')
+                        else:
+                            with self.assertRaisesRegex(support.Paused, 'Diagnosis'):
+                                self.dispatch()
+                    self.assertEqual([], launches)
+                    self.assertNotIn('diagnostic_calls', self.state['resolver'])
+
+    def test_source_drift_during_preparation_is_rechecked_at_launch_admission(self):
+        self.repeated_terra_failure()
+        self.admit()
+        changed = self.root / 'changed-during-preparation.txt'
+        with self.provider() as launches, patch.object(runner, 'rotate_if_needed', side_effect=lambda *args: changed.write_text('new source')):
+            with self.assertRaisesRegex(support.Paused, 'current source'):
+                self.dispatch()
+        self.assertEqual([], launches)
+        self.assertNotIn('diagnostic_calls', self.state['resolver'])
+        self.assertNotIn('active_stage', self.state)
+
+    def test_cli_time_and_token_budget_guards_do_not_charge(self):
+        self.repeated_terra_failure()
+        self.admit()
+        baseline = copy.deepcopy(self.state)
+        for budget in ('time', 'tokens', 'unknown_tokens'):
+            with self.subTest(budget=budget):
+                self.state = copy.deepcopy(baseline)
+                self.state['settings']['limits'] = {
+                    'iteration_ceiling': 18, 'max_seconds': 1 if budget == 'time' else None,
+                    'max_reported_tokens': None if budget == 'time' else 1,
+                    'no_progress_batches': 3, 'automatic_retries': 0}
+                self.state['active_seconds'] = 2
+                if budget == 'tokens':
+                    for row in self.state['stages']:
+                        row['metrics'] = {'provider_tokens': {'input_tokens': 2, 'output_tokens': 0}}
+                with self.provider() as launches:
+                    self.assertEqual(2, self.cli())
+                saved = support.read(self.run / 'state.json')
+                self.assertEqual({'time': 'PAUSED_TIME_LIMIT', 'tokens': 'PAUSED_BUDGET',
+                                  'unknown_tokens': 'PAUSED_USAGE_UNKNOWN'}[budget], saved['status'])
+                self.assertEqual([], launches)
+                self.assertNotIn('diagnostic_calls', saved['resolver'])
 
     def test_cli_rejects_combining_diagnose_and_retry_failed_stage(self):
         argv = ['autocode.py', '--workspace', str(self.root.resolve()), '--run-dir', str(self.run.resolve()),

@@ -314,6 +314,8 @@ def run_role(
     state: dict[str, Any], schema: Path, model: str | None, allow_write: bool,
     dry_run: bool, report_only: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    if state.get('next_stage') == 'astra_diagnose' and state.get('active_stage'):
+        raise support.Paused('PAUSED_UNCERTAIN_STAGE', 'Reconcile the active diagnosis before another provider request')
     timeout_recovery_guard(state)
     # Unskippable chokepoint: every Builder/Validator/Completion launch goes
     # through run_role. Before_code_stage and dispatch are belt-and-suspenders.
@@ -334,6 +336,8 @@ def run_role(
         processes.process_table()  # fail before creating an active request
     if report_only:
         stage += '_report_repair'
+    if stage == 'astra_diagnose' and not dry_run:
+        resolver_runtime.check_diagnostic_capacity(sys.modules[__name__], state, run_dir)
     # New names cannot overwrite legacy finals or an uncertain provider request.
     attempt = 1 + sum(r.get("stage") == stage and r.get("iteration") == iteration for r in state.get("stages", []))
     base = run_dir / "iterations" / f"{iteration:03d}" / f"{stage}-{attempt:02d}"
@@ -439,6 +443,7 @@ def run_role(
             with interventions.admission(run_dir):
                 if joint_stage and not report_only:
                     planning.charge(state, original_stage)
+                resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], state, run_dir, workspace, record)
                 state["active_stage"] = record
                 write_json(run_dir / "state.json", state)
                 child_stdin = (subprocess.DEVNULL if engine == "opencode" and configured_tool
@@ -2739,8 +2744,6 @@ def main(unit=None) -> int:
                 # retry lane blocks the serial writer launch here as well.
                 if stage == "terra":
                     autopilot.builder_policy.guard(current)
-                if stage == "astra_diagnose":
-                    resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], current, run_dir, workspace)
                 milestones.dispatch_guard(current, stage)
                 workflow.dispatch_guard(current,stage,workspace)
                 if stage == "orchestrator":
