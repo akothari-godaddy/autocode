@@ -20,7 +20,7 @@ def client_server(make_plan):
     files = {
         'M1': {'shared.py': "USER_PATH = '/users/'\n"},
         'M2': {'server.py': textwrap.dedent('''\
-            import json
+            import json, socketserver
             from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
             from shared import USER_PATH
             class Handler(BaseHTTPRequestHandler):
@@ -30,7 +30,12 @@ def client_server(make_plan):
                     raw=json.dumps({'id':self.path[len(USER_PATH):]}).encode()
                     self.send_response(200); self.end_headers(); self.wfile.write(raw)
                 def log_message(self,*args): pass
-            def create(): return ThreadingHTTPServer(('127.0.0.1',0),Handler)
+            class Server(ThreadingHTTPServer):
+                def server_bind(self):
+                    # Skip HTTPServer's reverse-DNS getfqdn(): ~35s per bind on macOS CI runners.
+                    socketserver.TCPServer.server_bind(self)
+                    self.server_name, self.server_port = self.server_address[:2]
+            def create(): return Server(('127.0.0.1',0),Handler)
             ''')},
         'M3': {'client.py': "import json\nfrom urllib.request import urlopen\nfrom shared import USER_PATH\ndef fetch(base,uid): return json.load(urlopen(base+USER_PATH+uid))\n"},
         'M4': {'integration.py': textwrap.dedent('''\
@@ -55,8 +60,13 @@ def client_server(make_plan):
 
 def duplicate_api(make_plan):
     server=textwrap.dedent('''\
-        import json, threading
+        import json, socketserver, threading
         from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+        class Server(ThreadingHTTPServer):
+            def server_bind(self):
+                # Skip HTTPServer's reverse-DNS getfqdn(): ~35s per bind on macOS CI runners.
+                socketserver.TCPServer.server_bind(self)
+                self.server_name, self.server_port = self.server_address[:2]
         def create():
             records={}; lock=threading.Lock()
             class Handler(BaseHTTPRequestHandler):
@@ -71,7 +81,7 @@ def duplicate_api(make_plan):
                         value={'id':records[key][1],'count':len(records)}
                     self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(value).encode())
                 def log_message(self,*args): pass
-            return ThreadingHTTPServer(('127.0.0.1',0),Handler)
+            return Server(('127.0.0.1',0),Handler)
         ''')
     oracle=textwrap.dedent('''\
         import concurrent.futures, json, threading
