@@ -73,13 +73,14 @@ mapping (the unit column is `autopilot.unit_for`):
 | `review_change` | Reviewer: the review workflow's only stage (`autocode_review_job.py`) | AutoReview |
 | `review_design` | Architect: the design workflow's first stage (`autocode_design_job.py`) | AutoReview |
 | `check_design` | Architect: checks an approved design against the repository before a build implements it (`autocode_design_check_job.py`) | AutoReview |
+| `investigate_stuck` | Investigator: why a stage stopped converging, before the run pauses (`autocode_stuck_job.py`) | AutoResolver |
 | `astra_review`, `astra_checkpoint` | Completion Owner | AutoReview |
 | `astra_resolve` | AutoResolver | AutoResolver |
 | `investigate_bug` | Investigator: the bug-fix workflow's first stage (`autocode_bug_job.py`) | AutoResolver |
 | `answer_question` | Analyst: the discuss workflow's only stage (`autocode_discuss_job.py`) | AutoResolver |
 
 Stages that belong to one workflow rather than to the build pipeline (`review_change`,
-`investigate_bug`, `review_design`, `answer_question`, `check_design`) are listed in `tools/autocode_jobs.py`; the runner and Autopilot
+`investigate_bug`, `review_design`, `answer_question`, `check_design`, `investigate_stuck`) are listed in `tools/autocode_jobs.py`; the runner and Autopilot
 consult that table, so a new one is added there, not in `autocode.py` or `autopilot.py`.
 
 CLI model flags follow the code names: `--astra-model`, `--glm-model`,

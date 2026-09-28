@@ -58,6 +58,8 @@ if os.environ.get("AUTOCODE_FIXTURE_QUOTA_STAGE") == stage:
     raise SystemExit(3)
 if stage == "recognize_workflow":
     result = {"workflow": "build", "reason": "Offline fixture: every request is treated as a build", "signals": [], "design_document": ""}
+elif stage == "investigate_stuck":
+    result = {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
 elif stage == "requirements_gather":
     draft = body(questions=not data["saved_answers"])
     result = {

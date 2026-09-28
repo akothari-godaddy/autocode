@@ -2757,7 +2757,7 @@ def _main_body(unit=None) -> int:
                 workflow.dispatch_guard(current,stage,workspace)
                 if stage == "orchestrator":
                     return autopilot.unit_module(stage).dispatch(current, workspace, run_dir)
-                request = autopilot.unit_module(stage).prepare(current, stage, state_path, SCHEMA_DIR)
+                request = autopilot.prepare_request(current, stage, state_path, SCHEMA_DIR)
                 role, route_role = request.role, request.route_role
                 rotate_if_needed(current, route_role, run_dir)
                 prompt, metrics = request.prompt, request.metrics
@@ -2818,7 +2818,7 @@ def _main_body(unit=None) -> int:
             try:
                 orchestrator.drive(state, dispatch_code_stage, before=before_code_stage,
                                    persist=lambda current: (autopilot.publish_handoffs(current, run_dir), write_json(state_path, current)),
-                                   after=after_code_stage)
+                                   after=after_code_stage, investigate=not args.unit)
             except orchestrator.LoopExit as stopped:
                 return stopped.code
         except (support.Paused, ValueError, RuntimeError, OSError) as error:

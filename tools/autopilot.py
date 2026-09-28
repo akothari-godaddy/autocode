@@ -7,11 +7,13 @@ import re
 from pathlib import Path
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_jobs as jobs
+    from . import autocode_stuck_job as stuck
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
     from .units import autoplanner as planning_unit
 except ImportError:
     import autocode_support as support, autocode_jobs as jobs
+    import autocode_stuck_job as stuck
     import autocode_goals as goals
     import autocode_workflow as workflow
     import autocode_milestones as milestones
@@ -32,32 +34,21 @@ class LoopExit(Exception):
 
 
 def drive(state, dispatch, *, apply=None, before=None, after=None, persist=None,
-          active=lambda value: value.get('status') == 'RUNNING'):
+          active=lambda value: value.get('status') == 'RUNNING', investigate=False):
     """Run the saved state's next stage until its workflow reaches a boundary.
 
-    Units own prompts and schemas; Autopilot owns code-workflow transitions. This function owns the
-    common sequence: guard -> select saved stage -> dispatch -> apply -> persist.
-    Returning SKIP from a hook restarts from the newly saved state without
-    pretending a stage completed.
+    Units own prompts and schemas; Autopilot owns code-workflow transitions. The loop itself
+    (guard -> select saved stage -> dispatch -> apply -> persist) is autocode_stuck_job.drive;
+    SKIP from a hook restarts from the newly saved state without pretending a stage completed.
+    With ``investigate``, a stage that stops converging goes to the Investigator before a pause.
     """
-    while active(state):
-        if before and before(state) is SKIP:
-            continue
-        stage = state.get('next_stage')
-        if not isinstance(stage, str) or not stage:
-            raise ValueError('Running orchestration has no next stage')
-        outcome = dispatch(state, stage)
-        if outcome is SKIP:
-            continue
-        if apply:
-            applied = apply(state, stage, outcome)
-            if applied is SKIP:
-                continue
-        if persist:
-            persist(state)
-        if after:
-            after(state, stage, outcome)
-    return state
+    return stuck.drive(state, dispatch, apply=apply, before=before, after=after, persist=persist,
+                       active=active, skip=SKIP, paused=support.Paused, investigate=investigate)
+
+
+def prepare_request(state, stage, state_path, schema_dir):
+    """A unit's model request for ``stage``, carrying the Investigator's guidance when in force."""
+    return stuck.with_guidance(state, stage, unit_module(stage).prepare(state, stage, state_path, schema_dir))
 
 UNITS = ("autoplanner", "autocode", "autoreview", "autoresolver")
 
@@ -135,7 +126,7 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     if stage == "orchestrator":
         return unit.dispatch(state, workspace, run_dir)
     state_path = run_dir / "state.json"
-    request = unit.prepare(state, stage, state_path, runtime.SCHEMA_DIR)
+    request = prepare_request(state, stage, state_path, runtime.SCHEMA_DIR)
     runtime.rotate_if_needed(state, request.route_role, run_dir)
     state["pending_context_metrics"] = request.metrics
     if request.metrics["estimated_prompt_tokens"] > request.metrics["soft_budget_tokens"]:

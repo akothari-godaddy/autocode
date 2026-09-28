@@ -25,6 +25,8 @@ def plan():
 def report(data):
     if data["stage"] == "recognize_workflow":
         return {"workflow": "build", "reason": "Fixture: every request is a build", "signals": [], "design_document": ""}
+    if data["stage"] == "investigate_stuck":
+        return {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
     common = {"contract_revision": data["goal_contract"]["revision"], "contract_hash": data["goal_contract"]["hash"],
               "task_id": (data.get("current_task") or {}).get("id", ""), "deferred_backlog": [],
               "user_request": {"kind": "none", "discovered": "", "impact": "", "decision_needed": "",

@@ -613,10 +613,16 @@ class JointFlow(unittest.TestCase):
         run, state = self.draft("planning-invalid", report_repair=0)
         self.assertEqual("PAUSED_INVALID_OUTPUT", state["status"])
         self.assertEqual(2, state["planning"]["astra_calls"])
+        # The rejected final was investigated once (autocode_stuck_job); the fixture's Investigator
+        # pauses, so the original pause stands and no review allowance was granted.
+        self.assertEqual([("astra_finalize:PAUSED_INVALID_OUTPUT", "paused")],
+                         [(row["identity"], row["outcome"]) for row in state["stuck_investigations"]])
         self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
         paused = self.saved()[1]
         self.assertEqual("PAUSED_PLANNING_BUDGET", paused["status"])
-        self.assertEqual(7, len(paused["stages"]))
+        self.assertEqual(2, paused["planning"]["astra_calls"])
+        self.assertEqual(8, len(paused["stages"]))
+        self.assertEqual(1, sum(row["stage"] == "investigate_stuck" for row in paused["stages"]))
         self.assertNotIn("active_stage", paused)
         self.env["AUTOCODE_FIXTURE_MODE"] = "no-human"
         self.launch(["--run-dir", str(run), "--feedback", "Try the simpler version"], 0)

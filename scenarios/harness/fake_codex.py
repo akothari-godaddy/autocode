@@ -225,6 +225,9 @@ def report_for(stage: str, data: dict) -> dict:
         return answer()
     if stage == "check_design":
         return check_design(data)
+    if stage == "investigate_stuck":
+        # A scripted run that got stuck is a scenario defect; pause and say so.
+        return {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
     if stage == "review_change":
         return review()
     if stage == "review_design":

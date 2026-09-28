@@ -121,6 +121,8 @@ common = {"contract_revision": contract["revision"], "contract_hash": contract["
               "decision_needed": "", "options": [], "proposed_delta": ""}}
 if stage == "recognize_workflow":
     result = {"workflow": "build", "reason": "Offline fixture: every request is treated as a build", "signals": [], "design_document": ""}
+elif stage == "investigate_stuck":
+    result = {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
 elif stage == "requirements_gather":
     draft = body(questions=not data["saved_answers"], human=False)
     result = {
