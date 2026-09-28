@@ -278,15 +278,14 @@ def note(state, event, **detail):
 
 
 def _worktree(project, name, branch, base):
-    parent = project / ".autocode/worktrees"
+    parent = workspaces.keep_out_of_git(project) / "worktrees"
     parent.mkdir(parents=True, exist_ok=True)
     workspace = parent / name
     with WORKTREE_LOCK:
         workspaces.git(project, "worktree", "add", "-b", branch, str(workspace), base)
     data = {"version": 1, "project_workspace": str(project), "workspace": str(workspace),
             "branch": branch, "base_commit": base}
-    artifact = workspace / ".autocode/task-workspace.json"
-    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact = workspaces.keep_out_of_git(workspace) / "task-workspace.json"
     artifact.write_text(json.dumps(data, indent=2) + "\n")
     return data
 
@@ -785,6 +784,7 @@ def cli_run(argv, *, status_only=False):
             preview["next"] = "Run without --dry-run to create the integration branch and start the first wave."
         print(json.dumps(preview, indent=2))
         return 0
+    workspaces.keep_out_of_git(project)
     program_dir.mkdir(parents=True, exist_ok=True)
     options = {"max_parallel": args.max_parallel, "authorize_deployment": args.authorize_deployment,
                "engine": args.engine, "passthrough": passthrough, "retry_workstreams": args.retry_workstream}

@@ -101,6 +101,26 @@ class UnlimitedSubprocessTests(unittest.TestCase):
         self.assertIsNone(state['settings']['limits']['iteration_ceiling'])
         self.assertEqual('runner_default',state['settings']['budget_origins']['iteration_ceiling'])
 
+    def test_cli_new_run_bounds_time_while_iterations_stay_unlimited(self):
+        self.env['AUTOCODE_FIXTURE_MODE']='no-human'
+        self.launch(['Build greeting','--chat'],0,answers='CLI\nyes\n')
+        _,state=self.saved()
+        limits,origins=state['settings']['limits'],state['settings']['budget_origins']
+        self.assertEqual(43200,limits['max_seconds'])
+        self.assertEqual(3600,limits['stage_timeout_seconds'])
+        # Runner defaults, so AutoResolver may extend each once after verified progress.
+        self.assertEqual('runner_default',origins['max_seconds'])
+        self.assertEqual('runner_default',origins['stage_timeout_seconds'])
+        self.assertEqual('TASK_COMPLETE',state['status'])
+
+    def test_cli_explicit_zero_disables_the_time_limits(self):
+        self.env['AUTOCODE_FIXTURE_MODE']='no-human'
+        self.launch(['Build greeting','--max-seconds','0','--max-stage-seconds','0','--chat'],0,answers='CLI\nyes\n')
+        _,state=self.saved()
+        self.assertEqual(0,state['settings']['limits']['max_seconds'])
+        self.assertEqual(0,state['settings']['limits']['stage_timeout_seconds'])
+        self.assertEqual('user_explicit',state['settings']['budget_origins']['max_seconds'])
+
     def test_cli_unlimited_is_saved_and_goal_completion_still_works(self):
         self.env['AUTOCODE_FIXTURE_MODE']='no-human'
         self.launch(['Build greeting','--unlimited-iterations','--chat'],0,answers='CLI\nyes\n')

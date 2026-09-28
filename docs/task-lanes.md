@@ -107,6 +107,38 @@ The command prints the task workspace and branch; the dashboard discovers its ru
 through the registry. Each worktree has its own runner lock, checkpoints, and code.
 Two writers still cannot operate on the same worktree.
 
+AutoCode's own directories (`.autocode/`, `.autocode-components/`, `.autocode-ui/`)
+each hold a `.gitignore` containing `*`, so run state, logs and nested task worktrees
+never appear in `git status` or get staged by `git add -A` in your checkout or in a
+task worktree. Your own `.gitignore` is not touched, and a `.gitignore` you already
+put in one of these directories is left as it is.
+
+### When a task finishes
+
+When a run in a task worktree completes, AutoCode commits the delivered source to the
+task's branch (`autocode/<task>-<id>`, author `AutoCode <autocode@localhost>`) and
+prints the branch and commit. Only the branch moves: the worktree is detached at the
+commit it started from, with the delivered changes still in its files, so the
+completion evidence (pinned to the worktree's HEAD) stays current and you can still
+inspect or run the result there. Later work in the same worktree, such as a rework
+after feedback, is committed on top at its next completion. Runs started with
+`--in-place`, program workstreams and components are never committed this way.
+
+Review and merge the branch like any other, for example `git merge autocode/<task>-<id>`
+from your checkout. Then remove finished worktrees:
+
+```sh
+autocode clean-worktrees --workspace /path/to/project         # list what would be removed
+autocode clean-worktrees --workspace /path/to/project --yes   # remove it
+```
+
+A worktree is removed only when every run in it is `TASK_COMPLETE`, its source is
+exactly what its branch holds, and no runner holds its lock. Its `.autocode/`
+records (run state, logs, evidence) are copied to `.autocode/archive/<worktree>/`
+first; the branch is kept. Anything else is listed with the reason it is kept.
+Worktrees recorded by an `autocode program` are left to that command. The
+dashboard and registry show a removed worktree's runs as `workspace_missing`.
+
 Resume with the printed run path and either the original project or task workspace:
 
 ```sh
@@ -115,8 +147,12 @@ autocode --workspace /path/to/project \
 ```
 
 Existing runs retain their original checkout. `--in-place` explicitly starts a new
-task in the selected checkout and retains its single-writer lock. Worktrees and
-branches remain available after a task ends; inspect and commit their changes, then
-merge the branch when ready. Autocode does not automatically merge or delete them.
+task in the selected checkout. Only one run's agents work in a checkout at a time:
+a second run started there (or resumed there) while another run's agents are working
+prints which run holds the checkout and exits with status 2, changing nothing. Run
+the same command again once the other run stops, or start the task without
+`--in-place` so it gets its own worktree. Answering, approving or giving feedback to
+a waiting run launches no agent and is not blocked. AutoCode never merges branches;
+see [When a task finishes](#when-a-task-finishes) for committing and removing worktrees.
 
 See also: [Figma design](figma.md) · [Workflow](workflow.md)

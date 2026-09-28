@@ -58,7 +58,12 @@ security reports:
   evidence. Integrity checks are not a boundary against that.
 - Provider tool permissions and after-the-fact source checks are **not an OS
   sandbox**. OpenCode, Codex and external command tools each have their own,
-  different isolation.
+  different isolation. Credential-like environment variables are withheld from
+  agents and from the tests the runner executes (see
+  [Providers](docs/providers.md#environment-variables-agents-see)), but an agent
+  with shell access can still read files your user account can read, such as
+  `~/.aws/credentials`. Run AutoCode as a user without credentials you would not
+  hand to a model.
 - A model producing wrong, insecure, or low-quality **application code** is a
   quality problem for the review stages, not a vulnerability in AutoCode.
 - Running your own project's commands (tests, dev servers) does what those

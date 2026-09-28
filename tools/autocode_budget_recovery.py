@@ -22,6 +22,10 @@ HARD_CEILINGS = {
     "max_seconds": 86400,
     "milestone_max_seconds": 10800,
 }
+# New runs start with these finite limits unless the user sets their own. Each is a
+# runner default, so AutoResolver may double it once after verified progress, up to
+# HARD_CEILINGS. The iteration ceiling has no default: new runs are unlimited there.
+RUNNER_DEFAULTS = {"max_seconds": 43200, "stage_timeout_seconds": 3600}
 RECENT_SECONDS = 1800
 PLANNING_KIND = "planning_review_call_limit"
 _CEILINGS = {**HARD_CEILINGS, PLANNING_KIND: 4}

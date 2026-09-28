@@ -17,13 +17,14 @@ import uuid
 try:
     from . import autocode_support as s, autocode_goals as goals
     from . import autocode_milestones as milestones, autocode_process as processes
-    from . import autocode_interventions as interventions
+    from . import autocode_interventions as interventions, autocode_worktrees as worktrees
 except ImportError:
     import autocode_support as s
     import autocode_goals as goals
     import autocode_milestones as milestones
     import autocode_process as processes
     import autocode_interventions as interventions
+    import autocode_worktrees as worktrees
 
 
 DEFAULTS = {"enabled": True, "max_parallel": 2}
@@ -41,14 +42,17 @@ def _model_family(model):
     """GLM/MiMo family for cross-verification; GPT tiers keep their own id.
 
     openai/gpt-5.6-terra and openai/gpt-6-astra are different tiers and are
-    independent. zai-coding-plan/* is one family; xiaomi-token-plan-sgp/* is
-    another — those must swap for verifier≠producer.
+    independent. zai-coding-plan/* and any glm-* name (the dashboard's Codex
+    console uses bare glm-5.3 / glm-5.3-flash) are one family;
+    xiaomi-token-plan-sgp/* and mimo-* are another — those must swap for
+    verifier≠producer.
     """
     if not isinstance(model, str) or not model:
         return ""
-    if model.startswith("zai-coding-plan/"):
+    name = model.rsplit("/", 1)[-1].lower()
+    if model.startswith("zai-coding-plan/") or name.startswith("glm-"):
         return "glm"
-    if model.startswith("xiaomi-token-plan-sgp/") or model.startswith("mimo-"):
+    if model.startswith("xiaomi-token-plan-sgp/") or name.startswith("mimo-"):
         return "mimo"
     return model
 
@@ -438,6 +442,8 @@ def integrate(state, workspace, run_dir, batch):
     current = s.snapshot(workspace)
     if current != batch["expected"]:
         raise s.Paused("PAUSED_ORCHESTRATOR_DRIFT", "Integration does not match saved Builder output; inspect retained patch")
+    # Integrated and verified: the workers' patch is saved in the batch, so their worktrees go.
+    worktrees.retire_builders(batch, workspace)
     tasks = [row["task"] for row in batch["workers"]]
     combined = copy.deepcopy(tasks[0])
     combined.update(id="task-" + batch["id"], milestone_ids=[t["milestone_id"] for t in tasks],
