@@ -297,7 +297,8 @@ def normalized_events(rows):
     if any(not row.get("part", {}).get("id") for row in rows if row.get("type") in phase_types):
         return normalized
     phases = [row for row in parts.values() if row.get("type") in phase_types]
-    if steps and phases[-1].get("type") == "step_finish" and steps[-1].get("reason") in ("stop", "length"):
+    terminal_reason = steps[-1].get("reason") if steps else None
+    if steps and phases[-1].get("type") == "step_finish" and terminal_reason in ("stop", "length", "tool-calls"):
         def total(field, subfield=None):
             containers = [p.get("tokens") for p in steps]
             values = [tokens.get(field) if isinstance(tokens, dict) else None for tokens in containers]
@@ -313,12 +314,21 @@ def normalized_events(rows):
                  "output_tokens": sum(output_parts) if all(v is not None for v in output_parts) else None,
                  "reasoning_output_tokens": total("reasoning")}
         usage = {k: v for k, v in usage.items() if v is not None}
-        if steps[-1].get("reason") == "length":
+        if terminal_reason == "length":
             # A successful process exit can still be an incomplete model turn.
             # Preserve reported consumption without granting completion evidence.
             normalized.append({"type": "turn.failed", "usage": usage, "error": {
                 "code": "output_token_limit",
                 "message": "OpenCode exhausted its output token limit (finish reason: length). "
+                           "The attempt is incomplete; review saved work before recovery."}})
+        elif terminal_reason == "tool-calls":
+            # The process ended between a step's tool calls and their results, so
+            # the turn never completed (observed: every call auto-rejected as an
+            # external directory). The reported tokens were still consumed, and
+            # denying that leaves the runner unable to enforce a token cap.
+            normalized.append({"type": "turn.failed", "usage": usage, "error": {
+                "code": "turn_cut_short",
+                "message": "OpenCode ended mid-turn after tool calls (finish reason: tool-calls). "
                            "The attempt is incomplete; review saved work before recovery."}})
         elif not errors:
             normalized.append({"type": "turn.completed", "usage": usage})
