@@ -51,13 +51,17 @@ report ──> baseline ──> Builder ──> verify ──> [Reviewer] ──
    the model as quoted data with an instruction to ignore embedded requests.
 2. **Isolation.** A new worktree and branch `autocode/fix-<issue>-<id>` are
    created from `--base` (default `HEAD`) under `.autocode/worktrees/`. Your
-   checkout is not modified. Ignored dependency directories (`node_modules`,
-   `.venv`, `venv`) in the checkout are linked into the worktree so tests can
-   run; they are never part of the fix. `--in-place` works in a clean checkout
-   instead and leaves the change uncommitted.
+   checkout's files are not modified; `/.autocode/` is added to its local
+   `.git/info/exclude` so run records never reach a `git add -A`. Ignored
+   dependency directories (`node_modules`, `.venv`, `venv`) in the checkout are
+   linked into the worktree so tests can run; they are never part of the fix.
+   The worktree's own code (and its `src/`) goes first on `PYTHONPATH`, so an
+   editable install of your checkout cannot shadow it. `--in-place` works in a
+   clean checkout instead and leaves the change uncommitted.
 3. **Baseline, before any model call.** The project's test command runs on the
-   base revision. If it cannot run at all (for example every test errors on a
-   missing dependency), the run stops with `ENV_BROKEN` and no model spend.
+   base revision. If it cannot run at all (the command is not found, no test
+   passes, a pytest or unittest run reports no results, or it times out), the
+   run stops with `ENV_BROKEN` and no model spend.
    Pre-existing failing tests are recorded and passed to the Builder as "not
    yours to fix".
 4. **Builder (one call).** One agent turn investigates, writes a regression
@@ -71,11 +75,20 @@ report ──> baseline ──> Builder ──> verify ──> [Reviewer] ──
    engine's Validator model and so a different model from the Builder, reads
    the report, the diff and the executed results. It looks for what tests cannot show: symptom-only fixes,
    the same bug left in related paths, unintended behavior or API changes.
-   Critical or high findings go back to the Builder. If the Reviewer changes
-   any file, the run stops with `ERROR`.
-7. **Result.** On `READY` the change is committed on the fix branch. In every
-   case with a change, `patch.diff` and `PR.md` are written to the run
-   directory, and the verification evidence is kept.
+   A review blocks unless its verdict is `APPROVE` and it names no critical or
+   high finding (severity is read case-insensitively); blocking findings go
+   back to the Builder. Once a Reviewer has spoken, every later candidate is
+   reviewed again, however small. If the Reviewer changes any file, the run
+   stops with `ERROR`.
+7. **Result.** On `READY` the fix branch gets one commit, built from the base
+   revision with exactly the verified files (anything else the Builder staged
+   or committed is left out) and without running commit hooks, so the commit
+   is the tree that was verified. In every case with a change, `patch.diff`
+   (byte-exact) and `PR.md` are written to the run directory, and the
+   verification evidence is kept. If a later attempt breaks a candidate that
+   the runner had already proven, the worktree is put back to the proven one,
+   re-verified, and reported as `NEEDS_REVIEW`. Any runner failure ends in a
+   recorded `ERROR`, never a run left `RUNNING`.
 
 ### Cost controls
 
@@ -83,7 +96,7 @@ report ──> baseline ──> Builder ──> verify ──> [Reviewer] ──
 | --- | --- | --- |
 | `--max-attempts N` | 3 | Builder calls, including repairs. |
 | `--escalate-model M` | none | Use a stronger model only for the final attempt, and only after a failure. The escalated attempt starts a fresh session. |
-| `--review auto\|always\|never` | `auto` | `auto` skips review only for a tiny single-file change (≤ 15 changed source lines) that tests already prove; a human reads it in the PR anyway. |
+| `--review auto\|always\|never` | `auto` | `auto` skips review only for a tiny code change in one source file (≤ 15 changed lines) whose regression is proven by named tests, with no non-code or binary files changed and no earlier review in the run; a human reads it in the PR anyway. |
 | `--stage-timeout`, `--idle-timeout` | 1800 s, 600 s | Per model call; a timeout is never success. Work left in the tree is still verified. |
 | `--test-timeout` | 900 s | Per test command. |
 | `--dry-run` | off | Load the issue and run the baseline without calling a model. |
@@ -115,11 +128,20 @@ workspace. It assembles two scratch worktrees from the recorded diff:
   `fail_to_pass`. A test in the same files that already fails on the pristine base
   (for example one that needs network access) is reported but does not block the
   fix or count as its proof. Any other failure on the candidate does block it.
-* **No regressions (pass-to-pass).** The project suite must pass on the
-  candidate. If it already failed on base, per-test results (pytest via JUnit
-  XML, unittest via its failure headers) must show that no test that passed on
-  base fails now, and that no fewer tests ran. Without per-test results the
-  outcome is `UNVERIFIED`, never `PASS`.
+  A test counts only if it ran: a module that fails to import on base (for
+  example because the test imports a name the fix adds) is not a reproduction,
+  and a skipped or deselected test is not a pass.
+* **No regressions (pass-to-pass).** With per-test results (pytest via JUnit
+  XML, unittest via its verbose output), every test that passed on base must
+  pass on the candidate: not fail, and not be skipped, deselected, renamed or
+  missing. A pytest or unittest run that reports no results at all (for example
+  because the process exited early with status 0) is `UNVERIFIED`. Without
+  per-test results the exit code decides when base was green, and the outcome
+  is `UNVERIFIED` when it was not.
+* **Weaker proof is flagged.** When the regression proof rests on exit codes
+  instead of named tests, or non-code or binary files changed, the verification
+  lists why a person or the Reviewer must read the change, and `--review auto`
+  reviews it.
 * **Test integrity.** A candidate is rejected if it deletes existing test files,
   removes existing Python `def test*` functions, changes only tests, or adds no
   test. `--allow-no-test` downgrades a missing test to `UNVERIFIED`; it never
@@ -127,10 +149,10 @@ workspace. It assembles two scratch worktrees from the recorded diff:
 * **Binding.** The candidate snapshot is hashed before and after verification.
   A verdict belongs to exactly one candidate.
 
-Test files are recognized by name or location: `test_*.py`, `*_test.py`,
-`conftest.py`, `*_test.go`, `*.test.[jt]s(x)`, `*.spec.[jt]s(x)`, `*_spec.rb`,
-`*Test.java`, and anything under `test/`, `tests/`, `spec/`, `__tests__/` or
-`testdata/`.
+Test files are recognized by name: `test_*.py`, `*_test.py`, `conftest.py`,
+`*_test.go`, `*.test.[jt]s(x)`, `*.spec.[jt]s(x)`, `*.snap`, `*_spec.rb`,
+`FooTest.java` or `TestFoo.java` (case-sensitive, so `Latest.java` is product
+code), and by the locations listed under test commands below.
 
 ### Test commands
 
@@ -146,8 +168,13 @@ Test files are recognized by name or location: `test_*.py`, `*_test.py`,
 `--test-command` and `--regression-command` override detection, and `--python`
 selects the interpreter (default: the checkout's `.venv`/`venv`, then
 `python3`). A Builder-reported regression command is used only when detection
-has none and the command names a changed test file. A command that does not
-run the tests cannot prove anything.
+has none and the command names a changed test file, and even then only to
+give the Builder feedback: a Builder-chosen command never produces `PASS`, so
+such a run ends `UNVERIFIED` unless you pass the command yourself.
+
+Test files by location: `tests/`, `__tests__/`, `__snapshots__/` and `testdata/`
+anywhere; `test/` and `spec/` only at the repository root (so `django/test/` and
+`numpy/testing/` count as product code); and Maven or Gradle `src/test/`.
 
 The verifier also runs standalone on any checkout, for example a human's or
 another agent's fix:

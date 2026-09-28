@@ -166,14 +166,34 @@ class FixFlow(unittest.TestCase):
         self.assertEqual("ERROR", record["status"])
         self.assertIn("Reviewer changed the workspace", record["reason"])
 
-    def test_a_builder_commit_is_verified_and_kept(self):
+    def test_the_fix_branch_holds_one_commit_of_exactly_the_verified_files(self):
+        """Review r6: a Builder that runs `git add -A` must not commit the linked .venv."""
+        (self.project / ".venv").mkdir()
         record, _ = self.fix([{"role": "builder", "write": REFERENCE, "report": REPORT, "commit": True}])
         self.assertEqual("READY", record["status"])
         subjects = subprocess.run(["git", "log", "--format=%s", f"{self.base}..{record['branch']}"], cwd=self.project,
                                   capture_output=True, text=True, check=True).stdout.splitlines()
-        self.assertEqual(["agent commit"], subjects)
-        self.assertEqual(subjects and record["commit"], subprocess.run(
-            ["git", "rev-parse", record["branch"]], cwd=self.project, capture_output=True, text=True).stdout.strip())
+        self.assertEqual(1, len(subjects))
+        self.assertTrue(subjects[0].startswith("Fix: "))
+        files = subprocess.run(["git", "diff", "--name-only", self.base, record["branch"]], cwd=self.project,
+                               capture_output=True, text=True, check=True).stdout.split()
+        self.assertEqual(["greet.py", "test_greet.py"], sorted(files))
+        # Run records and worktrees stay out of `git add -A` in the user's checkout.
+        status = subprocess.run(["git", "status", "--porcelain"], cwd=self.project, capture_output=True,
+                                text=True, check=True).stdout
+        self.assertNotIn(".autocode", status)
+
+    def test_a_failing_commit_hook_cannot_change_or_block_the_verified_commit(self):
+        """Review r9: hooks do not run on the runner's commit."""
+        hooks = Path(subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=self.project,
+                                    capture_output=True, text=True, check=True).stdout.strip())
+        hooks = hooks if hooks.is_absolute() else self.project / hooks
+        hooks.mkdir(parents=True, exist_ok=True)
+        (hooks / "pre-commit").write_text("#!/bin/sh\nexit 1\n")
+        (hooks / "pre-commit").chmod(0o755)
+        record, _ = self.fix([{"role": "builder", "write": REFERENCE, "report": REPORT}])
+        self.assertEqual("READY", record["status"])
+        self.assertIn("commit", record)
 
     def test_a_silent_builder_is_stopped_and_never_counted_as_success(self):
         record, _ = self.fix([{"role": "builder", "write": {}, "report": REPORT, "sleep": 30}],
@@ -211,6 +231,84 @@ class FixFlow(unittest.TestCase):
         # Without sessions a repair restates the whole task plus the runner's feedback.
         self.assertIn("THE REPORT", second["prompt"])
         self.assertIn("No regression test was added", second["prompt"])
+
+    def test_a_blocked_candidate_is_reviewed_again_even_when_it_becomes_tiny(self):
+        """Review r5: trimming a rejected change below the size threshold must not skip review."""
+        padded = REFERENCE["greet.py"] + "".join(f"# note {i}\n" for i in range(20))
+        record, _ = self.fix([
+            {"role": "builder", "write": {**REFERENCE, "greet.py": padded}, "report": REPORT},
+            {"role": "reviewer", "report": BLOCK},
+            {"role": "builder", "write": {"greet.py": REFERENCE["greet.py"]}, "report": REPORT},
+            {"role": "reviewer", "report": APPROVE},
+        ])
+        self.assertEqual("READY", record["status"])
+        self.assertEqual({"builder": 2, "reviewer": 2}, record["cost"]["model_calls_by_role"])
+
+    def test_request_changes_blocks_whatever_the_severity_words(self):
+        """Review r5: REQUEST_CHANGES with only medium findings, and a capitalized "High"."""
+        for review in ({"verdict": "REQUEST_CHANGES", "summary": "Rename", "findings": [
+                           {"severity": "medium", "file": "greet.py", "line": 1, "problem": "Unclear name",
+                            "suggestion": ""}]},
+                       {"verdict": "APPROVE", "summary": "ok", "findings": [
+                           {"severity": "High", "file": "greet.py", "line": 1, "problem": "Tabs pass",
+                            "suggestion": ""}]}):
+            with self.subTest(review=review["verdict"]):
+                shutil.rmtree(self.project / ".autocode" / "fix", ignore_errors=True)
+                self.script.with_suffix(".count").unlink(missing_ok=True)
+                record, _ = self.fix([{"role": "builder", "write": REFERENCE, "report": REPORT},
+                                      {"role": "reviewer", "report": review}],
+                                     "--review", "always", "--max-attempts", "1", expected=2)
+                self.assertEqual("NEEDS_REVIEW", record["status"])
+
+    def test_a_proven_candidate_survives_a_later_attempt_that_breaks_it(self):
+        """Review r13: attempt 2 fails verification; attempt 1's proven fix is restored, not lost."""
+        vacuous = SEED["test_greet.py"].replace(
+            "    def test_ada(self):", "    def test_blank(self):\n        self.assertTrue(True)\n\n    def test_ada(self):")
+        record, _ = self.fix([
+            {"role": "builder", "write": REFERENCE, "report": REPORT},
+            {"role": "reviewer", "report": BLOCK},
+            {"role": "builder", "write": {"greet.py": SEED["greet.py"], "test_greet.py": vacuous}, "report": REPORT},
+        ], "--review", "always", "--max-attempts", "2", expected=2)
+        self.assertEqual("NEEDS_REVIEW", record["status"])
+        self.assertIn("Attempt 1 was proven", record["reason"])
+        self.assertEqual("PASS", scenarios.bugfix01_oracle(Path(record["workspace"])).status)
+        self.assertNotIn("commit", record)
+
+    def test_cannot_reproduce_with_leftover_test_edits_asks_instead_of_failing(self):
+        """Review finding 14: a reproduction attempt left in the tests is not a fix attempt."""
+        record, _ = self.fix([{"role": "builder", "write": {"test_greet.py": REFERENCE["test_greet.py"]},
+                               "report": {**REPORT, "status": "CANNOT_REPRODUCE", "question": "Which shell?"}}],
+                             expected=2)
+        self.assertEqual("NEEDS_INPUT", record["status"])
+        self.assertIn("test_blank_name_rejected", Path(record["patch"]).read_text())
+
+    def test_non_utf8_files_end_in_a_recorded_status_with_an_exact_patch(self):
+        """Review r7: Latin-1 content crashed patch generation and left the run RUNNING."""
+        record, _ = self.fix([{"role": "builder", "write": REFERENCE, "report": REPORT,
+                               "write_latin1": {"names.txt": "Ren\u00e9e\n"}}], "--review", "never")
+        self.assertEqual("READY", record["status"])
+        self.assertIn("Ren\u00e9e".encode("latin-1"), Path(record["patch"]).read_bytes())
+
+    def test_a_provider_that_never_reads_a_huge_prompt_still_times_out(self):
+        """Review r10: a review prompt over the pipe buffer used to block the timeout loop."""
+        big = "".join(f"# filler line {i:05d} " + "x" * 60 + "\n" for i in range(1200))
+        record, _ = self.fix([
+            {"role": "builder", "write": {**REFERENCE, "big.py": big}, "report": REPORT},
+            {"role": "reviewer", "no_stdin": True, "sleep": 60, "report": APPROVE},
+        ], "--idle-timeout", "2", expected=2, issue=TASK + " Reproduction log: " + "y" * 8000)
+        self.assertEqual("NEEDS_REVIEW", record["status"])
+        review_call = record["model_calls"][1]
+        self.assertEqual("reviewer", review_call["role"])
+        self.assertLess(review_call["duration_seconds"], 30)
+        self.assertGreater(Path(review_call["events"]).with_suffix(".prompt.md").stat().st_size, 65536)
+
+    def test_an_unexpected_runner_failure_is_recorded_not_left_running(self):
+        """Review finding 8: any exception after the record exists ends in ERROR."""
+        (self.project / ".autocode").mkdir()
+        (self.project / ".autocode" / "worktrees").write_text("not a directory\n")
+        record, _ = self.fix([], expected=1)
+        self.assertEqual("ERROR", record["status"])
+        self.assertEqual([], self.calls())
 
     def test_cannot_reproduce_stops_without_guessing(self):
         record, _ = self.fix([{"role": "builder", "write": {}, "report": {
