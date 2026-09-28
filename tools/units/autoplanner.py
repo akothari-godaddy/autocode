@@ -117,6 +117,12 @@ for _stage in ("astra_challenge", "astra_finalize"):
     SCHEMAS[_stage]["properties"]["obligation_decisions"] = {"type": "array", "items": OBLIGATION_DECISION}
 
 
+# The job type travels requirements -> contract -> approval. Every planning stage still runs;
+# for a bug fix they plan and review a small, defect-shaped plan instead of a feature.
+SCHEMAS["requirements_gather"]["properties"]["task_kind"] = goals.TASK_KIND
+JOB_TYPE_POLICY = goals.JOB_TYPE_POLICY
+
+
 def enabled(state):
     return bool(state.get("settings", {}).get("joint_planning"))
 
@@ -572,7 +578,7 @@ def context(state, stage, state_path):
         # everything it needs explicitly.
         packet["investigation_request"] = request
         clarification_policy += INVESTIGATION_POLICY
-    prompt = (PROMPTS[stage] + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
+    prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,

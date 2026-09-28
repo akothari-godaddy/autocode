@@ -97,7 +97,27 @@ DELTA_SCHEMA = obj({"schema_version": {"type": "integer", "enum": [1]}, "stage":
                     "decisions": {"type": "array", "items": DELTA_DECISION},
                     "graph_node_diffs": {"type": "array", "items": GRAPH_NODE_DIFF},
                     "graph_edge_diffs": {"type": "array", "items": GRAPH_EDGE_DIFF}})
+# Optional job type. "bugfix" makes the runner prove the fix with a regression test
+# (it must fail on the base revision and pass on the fix) before completion. It is
+# part of the hashed body, so changing it requires approving the brief again. Old
+# bodies without it are "build".
+TASK_KINDS = ("build", "bugfix")
+TASK_KIND = {"type": "string", "enum": list(TASK_KINDS)}
+for _schema in (LEGACY_BODY_SCHEMA, BODY_SCHEMA, PLANNING_BODY_SCHEMA):
+    _schema["properties"]["task_kind"] = TASK_KIND
 DISCOVERY_SCHEMA = obj({"contract": BODY_SCHEMA, "summary": STRING})
+JOB_TYPE_POLICY = """
+JOB TYPE. task_kind is "bugfix" when the request reports existing behavior that is wrong
+(a crash, a wrong result, a missed validation, a regression) and asks for it to be corrected;
+otherwise "build". The Requirements Gatherer proposes it and says why in its summary; the
+Planner sets contract.task_kind; the Plan Reviewer confirms or challenges it. The user sees it
+at approval. For a bugfix, keep the plan to the defect: reproduction, root cause, the smallest
+correct fix, and a regression test in the project's own test suite that fails on the current
+code and passes after the fix. One milestone is usually enough; do not add features or
+unrelated refactors, and keep review concerns to whether the plan fixes the root cause and
+proves it. Before completion the runner itself runs the new or changed tests against the
+original code (they must fail) and the fixed code (they must pass), then the project suite.
+"""
 USER_REQUEST = obj({"kind": {"type": "string", "enum": [
     "none", "clarification", "contradiction", "infeasible", "permission", "goal_change", "blocker"]},
     "discovered": STRING, "impact": STRING, "decision_needed": STRING,
@@ -750,7 +770,7 @@ def migrate(state):
     state.setdefault("deferred_backlog", [])
     state["pre_goal_checkpoint"] = {k: copy.deepcopy(state.get(k)) for k in (
         "status", "next_stage", "acceptance_criteria", "criteria_revision", "plan", "next_action")}
-    body = {k: [] for k in BODY_SCHEMA["properties"]}
+    body = {k: [] for k in BODY_SCHEMA["properties"] if k != "task_kind"}
     body.update(intended_outcome=state["task"], intended_user="Unconfirmed",
                 acceptance_criteria=[{"id": c["id"], "criterion": c["criterion"],
                     "verification_method": "Unconfirmed; reconstruct from saved evidence", "human_review": False}
@@ -836,6 +856,10 @@ def plan_preview(state):
     return lines
 
 
+def task_kind(state):
+    return ((state.get("goal_contract") or {}).get("body") or {}).get("task_kind") or "build"
+
+
 def render(state):
     contract = state.get("goal_contract")
     if not contract:
@@ -863,6 +887,12 @@ def render(state):
     if state.get("discovery_summary"):
         lines += ["", "Planning: " + state["discovery_summary"]]
     lines += plan_preview(state)
+    if body.get("task_kind") == "bugfix":
+        lines += ["", "Job type: bug fix. Before completion the runner itself checks that a new or changed",
+                  "test fails on the original code and passes with the fix, and that no test that",
+                  "passed before now fails."]
+    elif "task_kind" in body:
+        lines += ["", "Job type: build (not a bug fix; no runner regression proof is required)."]
     display_order = ("intended_user", "intended_outcome", "end_to_end_flow", "deliverables", "scope_exclusions",
                      "constraints", "permission_boundaries", "accepted_assumptions", "delegated_decisions",
                      "required_behaviors", "important_failure_cases", "acceptance_criteria", "technical_approach",

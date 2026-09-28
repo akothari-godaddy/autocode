@@ -40,6 +40,7 @@ The detailed guides describe supported paths, defaults, and limitations. They ar
 | Configurable runtimes and models | OpenCode is the default engine; Codex and configured command-tool adapters are available, including a bundled KiloCode configuration. Roles and supported reasoning settings are configurable. | [Providers](docs/providers.md), [Models](docs/models.md) |
 | Multiple task lanes | Tasks in a lane run sequentially; separate lanes can run concurrently in separate worktrees. Lane branches are **not** automatically merged into one product. | [Task lanes](docs/task-lanes.md) |
 | Program workstreams | A large requirement becomes a manifest of workstreams with explicit dependencies and literal ownership, derived from an approved plan. Each workstream is an ordinary reviewed run in its own worktree; completed workstreams are merged `--no-ff` onto one integration branch in dependency order, conflicts pause, and deployment workstreams wait for explicit authorization. The integration branch is **not** merged into your default branch. | [Programs](docs/program.md) |
+| Bug fixes proven by the runner | A bug report runs through every normal stage. The contract records `task_kind: bugfix`, shown at approval. Before the Validator, the runner itself (no model call) proves the fix: the new or changed tests fail on the run's base commit and pass on the current code, and no test that passed on base fails. The completion gate refuses a bug fix without a passing proof for the current source. Offline coverage only; no live-model result yet. | [Bug fixes](docs/workflow.md#bug-fixes) |
 | Task-type scenario catalogue | Frozen scenarios for a bug fix, a feature in an existing project, an architecture task, a multi-service program, and a design-reference UI, each with an independent executable oracle proven against reference and broken deliveries. A driver seeds, runs, serves human gates, and scores; `--score-only` scores any delivered workspace. No live baselines are recorded yet. | [Scenarios](docs/scenarios.md) |
 
 **Important boundaries:** Parallel milestone integration is not automatic merging into `master`. Programs add one level (workstreams with an integration branch), not the full Project → Workstream → Milestone → Task hierarchy, and their merged branch still needs your review. The scenario oracles prove what a delivery must do; they do not yet record that any model delivered it. Existing conversations and checkpoints are the foundation for the broader one-conversation workspace—not a claim that all planned engineering workflows already exist.
@@ -399,7 +400,8 @@ tools/autopilot.py       overall workflow controller
 tools/units/            planning, build, review, and repair units
 tools/autocode_*.py     contracts, findings, evidence, execution, and recovery
 tools/autocode_program.py  program workstreams: manifest, derive, waves, integration branch
-tools/autocode_verify.py   model-free fail-to-pass / pass-to-pass test runs (not yet wired into a stage)
+tools/autocode_verify.py   model-free fail-to-pass / pass-to-pass test runs in scratch worktrees
+tools/autocode_regression.py  runner-owned regression proof and completion requirement for bug fixes
 tools/task_scenarios.py    task-type scenarios and their independent oracles
 tools/live_trial.py     scenario driver: seed, run, serve gates, score
 tools/providers/        runtime adapters and bundled command-tool configs

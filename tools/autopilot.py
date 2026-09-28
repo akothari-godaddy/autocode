@@ -12,7 +12,9 @@ try:
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
     from . import autocode_resolver_human as human, autocode_failures as failures
     from .units import autoplanner as planning_unit
+    from . import autocode_regression as regression
 except ImportError:
+    import autocode_regression as regression
     import autocode_support as support
     import autocode_goals as goals
     import autocode_planning_artifacts as planning_artifacts
@@ -145,6 +147,7 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     unit = unit_module(stage)
     if stage == "orchestrator":
         return unit.dispatch(state, workspace, run_dir)
+    regression.before_review(state, stage, workspace, run_dir)
     state_path = run_dir / "state.json"
     request = unit.prepare(state, stage, state_path, runtime.SCHEMA_DIR)
     runtime.rotate_if_needed(state, request.route_role, run_dir)
@@ -949,6 +952,12 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                 save_record(state, record)
                 return
             if not support.completion_ready(state, value, current):
+                if not regression.complete(state, current["revision"]):
+                    proof = state.get("regression_proof") or {}
+                    reasons = "; ".join((proof.get("failures") or []) + (proof.get("unverified") or [])) or \
+                        "no proof exists for the current source"
+                    raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: this bug fix has no passing "
+                                         f"regression proof for the current source ({reasons})")
                 raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: missing, stale, failed or unverified independent evidence")
             state.update(status="TASK_COMPLETE", completed_at=now(), final_decision=value, next_stage=None)
             if milestones.enabled(state):
