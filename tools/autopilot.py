@@ -175,6 +175,9 @@ def start_planning(state):
     if state.get("planning"):
         state.setdefault("planning_history", []).append(copy.deepcopy(state["planning"]))
     state["planning"] = {"astra_calls": 0, "reports": {}, "final_token": None}
+    saved_review_limit = state.get("settings", {}).get("planning_review_call_limit")
+    if type(saved_review_limit) is int and saved_review_limit == 0:
+        state["planning"].update(review_call_limit=0, review_call_limit_origin="user_explicit")
     state.update(status="RUNNING", phase="PLANNING", next_stage="astra_challenge", pending_questions=[])
 
 

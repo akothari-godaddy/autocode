@@ -2384,7 +2384,7 @@ def _main_body(unit=None) -> int:
                              "read-only model diagnosis instead of a blind retry; requires --resume-paused; "
                              "cannot combine with --retry-failed-stage")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
-                        help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
+                        help="Save a review allowance at a planning-budget pause; 0 disables the cap persistently and is also allowed at a reconciled stopped checkpoint; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
                         help="With --resume-paused, retry an exact exhausted format-failed report as fresh independent validation")
     parser.add_argument("--accept-transport-change", action="store_true",
@@ -2428,8 +2428,8 @@ def _main_body(unit=None) -> int:
         parser.error("--diagnose-failed-stage requires --run-dir and --resume-paused")
     if args.diagnose_failed_stage and args.retry_failed_stage:
         parser.error("--diagnose-failed-stage and --retry-failed-stage are alternative responses to the same pause; use one")
-    if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
-        parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
+    if args.planning_review_call_limit is not None and args.planning_review_call_limit != 0 and args.planning_review_call_limit < 2:
+        parser.error("--planning-review-call-limit must be 0 (unlimited) or at least 2")
     if unit and args.unit != unit:
         parser.error(f"This entry point runs only {unit}")
     if args.unit in ("autocode", "autoreview", "autoresolver") and not args.run_dir:

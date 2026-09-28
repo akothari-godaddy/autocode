@@ -152,25 +152,31 @@ def start(state):
 
 
 def review_call_limit(state):
-    limit = state.get("planning", {}).get("review_call_limit", 2)
-    if type(limit) is not int or limit < 2:
-        raise ValueError("Planning review call limit must be an integer of at least 2")
+    limit = state.get("planning", {}).get("review_call_limit",
+                state.get("settings", {}).get("planning_review_call_limit", 2))
+    if type(limit) is not int or (limit != 0 and limit < 2):
+        raise ValueError("Planning review call limit must be 0 (unlimited) or an integer of at least 2")
     return limit
 
 
 def set_review_call_limit(state, limit):
-    """An explicit current-cycle allowance, not a refund or approval."""
+    """An explicit allowance, preserving usage and approval boundaries."""
+    unlimited_checkpoint = (type(limit) is int and limit == 0
+                            and state.get("status") in ("PAUSED_STAGE_ABANDONED", "PAUSED_REQUESTED"))
     if (not enabled(state) or not state.get("planning")
-            or state.get("status") != "PAUSED_PLANNING_BUDGET"
-            or state.get("next_stage") not in ("astra_challenge", "astra_finalize")
+            or (not unlimited_checkpoint and (state.get("status") != "PAUSED_PLANNING_BUDGET"
+                or state.get("next_stage") not in ("astra_challenge", "astra_finalize")))
             or any(state.get(key) for key in ("active_stage", "pending_report_repair", "uncertain_artifacts"))):
         raise ValueError("Planning allowance requires a reconciled PAUSED_PLANNING_BUDGET checkpoint")
     previous = review_call_limit(state)
-    if type(limit) is not int or limit < previous or limit < state["planning"]["astra_calls"]:
-        raise ValueError("Planning review call limit must be a finite integer no smaller than the current limit and usage")
+    if type(limit) is not int or (limit != 0 and (limit < 2 or limit < previous or limit < state["planning"]["astra_calls"])):
+        raise ValueError("Planning review call limit must be 0 (unlimited) or an integer no smaller than the current limit and usage")
     if limit == previous:
         return
     state["planning"]["review_call_limit"] = limit
+    state["planning"]["review_call_limit_origin"] = "user_explicit"
+    if limit == 0:
+        state["settings"]["planning_review_call_limit"] = 0
     state.setdefault("user_events", []).append({
         "kind": "planning_budget_change", "actor": "user_cli", "at": s.now(),
         "previous_limit": previous, "limit": limit, "calls_used": state["planning"]["astra_calls"],
@@ -182,7 +188,7 @@ def charge(state, stage):
         return
     planning = state["planning"]
     limit = review_call_limit(state)
-    if planning["astra_calls"] >= limit:
+    if limit and planning["astra_calls"] >= limit:
         raise s.Paused("PAUSED_PLANNING_BUDGET", f"{planning['astra_calls']}/{limit} plan-review calls used. "
                        "Inspect the saved exchange; use --planning-review-call-limit N to explicitly increase "
                        "this cycle's total allowance, then --resume-paused; or --feedback for a new cycle. "
@@ -428,7 +434,7 @@ def context(state, stage, state_path):
                   if (entry.get("report") or {}).get("conflicts")],
               "saved_answers": state.get("answers", {}), "brief_feedback": state.get("brief_feedback", []),
                "planning": exchange,
-               "budget": f"{review_call_limit(state)} plan-review calls in this cycle, including failed attempts; "
+               "budget": f"{review_call_limit(state) or 'Unlimited'} plan-review calls in this cycle, including failed attempts; "
                          "only an explicit operator action can extend the allowance"}
     if stage == "requirements_gather":
         packet["requirement_coverage_checklist"] = goals.cue_sentences(state.get("task"))
