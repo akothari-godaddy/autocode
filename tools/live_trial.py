@@ -344,13 +344,15 @@ def _serve_gate(state: dict, run_dir: Path, project: Path, profile: dict, step) 
     # Answer whenever questions are outstanding: a pause does not make them
     # optional, and refusing to answer is how DAG-10 drops become permanent.
     if questions:
-        for question in questions:
-            qid = question.get("id")
-            options = question.get("options") or []
-            default = question.get("proposed_default") or (options[0] if options else "yes")
-            step("answer", autocode_command(
-                project, profile, None, run_dir, ["--answer", f"{qid}={default}"]),
-                allow_codes=(0, 2))
+        # One answer per step: answering consumes the AutoResolver request, so the
+        # next question is answered against the freshly published request token.
+        question = questions[0]
+        qid = question.get("id")
+        options = question.get("options") or []
+        default = question.get("proposed_default") or (options[0] if options else "yes")
+        token = (state.get("resolver_human_request") or {}).get("request_token")
+        extra = ["--answer", f"{qid}={default}"] + (["--resolver-token", token] if token else [])
+        step("answer", autocode_command(project, profile, None, run_dir, extra), allow_codes=(0, 2))
         return True
 
     return False

@@ -6,6 +6,7 @@ from unittest.mock import patch
 from . import test_goals, test_autocode, test_subprocess
 import autocode as runner
 import autocode_support as s
+from goal_fixtures import assert_operational_wait
 
 
 class UnlimitedTests(unittest.TestCase):
@@ -24,6 +25,8 @@ class UnlimitedTests(unittest.TestCase):
         expected=copy.deepcopy(original['settings']);expected['limits']['iteration_ceiling']=None
         expected['report_repair']={'max_attempts':2}
         expected['provider']='opencode'
+        # The explicit flag is recorded as user-owned so AutoResolver never rewrites it.
+        expected['budget_origins']={'iteration_ceiling':'user_explicit'}
         expected['roles']['completion']={**expected['roles']['astra'],
             'model':runner.DEFAULT_ROLE_MODELS['completion'],
             'reasoning_effort':runner.opencode.DEFAULT_REASONING_EFFORTS['completion']}
@@ -58,7 +61,8 @@ class UnlimitedLoopTests(unittest.TestCase):
         self.state['settings']['limits'].update(iteration_ceiling=None,no_progress_batches=1)
         self.state.update(iteration=9999,no_progress_batches=1)
         self.assertEqual(2,self.invoke())
-        self.assertEqual('PAUSED_NO_PROGRESS',self.state['status'])
+        # The no-progress stop now waits on an operational AutoResolver request.
+        assert_operational_wait(self,self.state,'PAUSED_NO_PROGRESS')
 
     def test_unlimited_reaches_dispatch_without_completing(self):
         self.approve()

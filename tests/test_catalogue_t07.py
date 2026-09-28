@@ -196,6 +196,7 @@ class RepairScenarios(RepairCase):
                                 {"output": str(output),
                                  "source_revision": support.snapshot(self.root)["revision"]},
                                 self.root, self.run)
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.check("waiting_for_user", "WAITING_FOR_USER", self.state["status"])
         self.check("specific_permission_request", "Provide the fixture credential",
                    self.state["user_request"]["decision_needed"])
@@ -263,6 +264,7 @@ class RepairScenarios(RepairCase):
                       "acceptance_criteria": [], "settings": dict(self.state["settings"])}
         goals.migrate(case_state)
         goals.install_draft(case_state, body(), origin="test")
+        goals.human.evaluate(case_state)
         goals.present(case_state)
         goals.approve(case_state, goals.token(case_state["goal_contract"]))
         case_state["settings"]["limits"] = {"iteration_ceiling": 5, "max_seconds": None,

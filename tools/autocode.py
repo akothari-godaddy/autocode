@@ -3302,7 +3302,7 @@ def _main_body(unit=None) -> int:
                 state.update(status='RUNNING', phase='EXECUTING')
                 state.pop('stop_reason', None)
                 write_json(state_path, state)
-            if (not decision_action and args.grant_recovery is None
+            if (not decision_action and args.grant_recovery is None and not args.diagnose_failed_stage
                     and state.get('status') != 'RUNNING'
                     and not acknowledged_planning_extension and not acknowledged_bound_change
                     and str(state.get('status', '')).startswith('PAUSED_')
@@ -3331,6 +3331,7 @@ def _main_body(unit=None) -> int:
                 return 0
             if (not decision_action and not any((args.retry_builder, args.retry_failed_stage,
                                                    args.retry_report, args.abandon_stage,
+                                                   args.diagnose_failed_stage,
                                                    args.grant_recovery is not None))
                     and not (args.chat and state.get('status') == 'WAITING_FOR_USER'
                              and resolver_human.current(state))

@@ -190,6 +190,7 @@ class ParallelScenarios(ParallelCase):
         revised = body()
         revised["required_behaviors"].append("Accept Unicode names")
         goals.install_draft(self.state, revised, origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         before = dict(self.state)

@@ -58,6 +58,7 @@ class AssignmentScenarios(unittest.TestCase):
         draft["milestones"] = milestones
         draft["scope_exclusions"] = ["tests/", "config/", "notes/unrelated.txt"]
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.state["settings"].update(

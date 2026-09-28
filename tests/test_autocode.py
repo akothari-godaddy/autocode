@@ -18,7 +18,7 @@ import autocode as runner
 import autocode_support as s
 import autocode_goals as goals
 import autocode_builder_policy as builder_policy
-from goal_fixtures import approve_fixture, envelope
+from goal_fixtures import approve_fixture, assert_operational_wait, envelope
 from . import LOGIN_SHELL
 
 
@@ -685,7 +685,8 @@ class RetrofitTest(unittest.TestCase):
         self.assertNotIn("active_stage", self.state)
         self.assertNotIn("terra", self.state["sessions"])
         self.assertTrue((self.root / "partial.py").exists())
-        archived = self.state["stages"][-1]
+        # AutoResolver's runner-owned observation receipt may follow the archive.
+        archived = [row for row in self.state["stages"] if not row.get("runner_owned")][-1]
         self.assertTrue(archived["automatic_recovery"])
         self.assertEqual(["partial.py"], archived["changed_files"])
         self.assertEqual(1, len(self.state["automatic_timeout_recoveries"]))
@@ -895,7 +896,8 @@ class RetrofitTest(unittest.TestCase):
              contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(2, runner.main())
         saved = s.read(self.run / "state.json")
-        self.assertEqual("PAUSED_BUILDER_RETRY_LIMIT", saved["status"])
+        # The exhausted Builder lane now waits on an operational AutoResolver request.
+        assert_operational_wait(self, saved, "PAUSED_BUILDER_RETRY_LIMIT")
         self.assertEqual("terra", saved["next_stage"])
         self.assertNotIn("active_stage", saved)
 
@@ -959,20 +961,28 @@ class RetrofitTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'No unchanged repeated failure'):
             runner.authorize_failure_retry(no_failure, self.run, self.root)
         self.assertEqual(state, s.read(self.run / 'state.json'))
-        runner.authorize_failure_retry(state, self.run, self.root)
-        self.assertNotIn(selected, state['failure_history'])
+        history = copy.deepcopy(state['failure_history'])
+        stages = copy.deepcopy(state['stages'])
+        authorization = runner.authorize_failure_retry(state, self.run, self.root)
+        # Since 009c8b8 authorization is audit plus a one-use grant: the failure
+        # history and stage provenance are preserved, never erased.
+        self.assertEqual(history, state['failure_history'])
+        self.assertIn(selected, state['failure_history'])
         self.assertIn(other_key, state['failure_history'])
-        self.assertEqual([other_key], [r['failure_key'] for r in state['stages'] if r.get('failure_key')])
-        self.assertTrue(all('failure_key' not in r for r in state['stages'] if r['stage'] == 'terra'))
+        self.assertEqual(stages, state['stages'])
         self.assertEqual(1, len(state['failure_retry_authorizations']))
         self.assertEqual(selected, state['failure_retry_authorizations'][0]['failure_key'])
         self.assertEqual(3, state['failure_retry_authorizations'][0]['count'])
         self.assertEqual('failure_retry_authorized', state['user_events'][-1]['kind'])
-        runner.repeated_failure_resume_guard(state, self.root)
         persisted = s.read(self.run / 'state.json')
-        self.assertNotIn(selected, persisted['failure_history'])
-        self.assertIn(other_key, persisted['failure_history'])
-
+        self.assertEqual(history, persisted['failure_history'])
+        # Loading the checkpoint alone never authorizes the retry ...
+        with self.assertRaises(s.Paused):
+            runner.repeated_failure_resume_guard(persisted, self.root)
+        # ... only the returned authorization does, exactly once, for the selected failure.
+        runner.repeated_failure_resume_guard(state, self.root, authorization=authorization)
+        with self.assertRaises(s.Paused):
+            runner.repeated_failure_resume_guard(state, self.root, authorization=authorization)
 
 if __name__ == "__main__":
     unittest.main()

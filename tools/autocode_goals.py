@@ -1007,7 +1007,10 @@ def present(state):
                           for row in state.get('human_reviews', {}).values())
     if not recorded_review:
         state.pop("displayed_review", None)
-    if public and public["scope"] == "goal_approval" and state.get("goal_contract"):
+    # Any current request is shown against the contract: --delegate-all and
+    # --reject-assumption act on that display at clarification and permission
+    # stops. Approval itself still requires the goal-approval status.
+    if public and state.get("goal_contract"):
         state["displayed_goal"] = token(state["goal_contract"])
         state["displayed_handoff"] = handoff_ref(state)
     if public:

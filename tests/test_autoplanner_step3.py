@@ -73,11 +73,18 @@ class ObligationCase(unittest.TestCase):
         """Requirements with one assumption, then the user rejects it at a checkpoint."""
         self.apply("requirements_gather", requirements([assumption(category=category)]))
         self.apply("astra_discovery", self.discovery(plan([decision_question("Q0")])))
+        self.publish()
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         goals.present(self.state)
         obligation = goals.reject_assumption(self.state, "A1", goals.token(self.state["goal_contract"]))
         self.apply("requirements_gather", requirements())
         return obligation["id"]
+
+    def publish(self):
+        """The runner's writer boundary: a queued human request becomes visible
+        (status, pending_questions, resolver token) only when AutoResolver publishes it."""
+        self.assertEqual("RESOLVER_PENDING", self.state["status"])
+        goals.human.evaluate(self.state)
 
     def obligation(self, obligation_id):
         return next(ob for ob in self.state["deferred_obligations"] if ob["id"] == obligation_id)
@@ -134,7 +141,11 @@ class RemediationTransitionTests(ObligationCase):
         self.assertEqual(events, len(self.state["user_events"]))
         self.apply("glm_revise", self.revise())
         self.apply("astra_finalize", self.finalize())
-        self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
+        # Finalize queues the approval request; AutoResolver publishes it at the
+        # writer boundary once final-plan evidence matches the current source.
+        self.assertEqual("RESOLVER_PENDING", self.state["status"])
+        self.assertEqual("goal_approval", self.state[goals.human.PRIVATE]["scope"])
+        self.assertEqual("AWAITING_GOAL_APPROVAL", self.state[goals.human.PRIVATE]["status"])
 
     def test_revise_emitted_remediation_must_be_decided_at_finalize(self):
         oid = self.reject()
@@ -178,6 +189,7 @@ class RemediationTransitionTests(ObligationCase):
         with self.assertRaisesRegex(ValueError, "block an executable initial_task"):
             self.apply("astra_finalize", self.finalize([self.decide(oid, resolved=False)], [decision_question(oid)]))
         self.apply("astra_finalize", self.finalize([self.decide(oid, resolved=False)], [decision_question(oid)], NO_TASK))
+        self.publish()
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual("open", self.obligation(oid)["status"])
         goals.answer(self.state, oid, "Keep the CLI; reject empty names")
@@ -196,6 +208,7 @@ class HumanDecisionTests(ObligationCase):
         with self.assertRaisesRegex(ValueError, "must return to the user"):
             self.apply("astra_discovery", self.discovery(plan([decision_question("Q9")])))
         self.apply("astra_discovery", self.discovery(plan([decision_question(oid)])))
+        self.publish()
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         goals.answer(self.state, oid, "Quality matters more than cost here")
         self.assertEqual("resolved", self.obligation(oid)["status"])
@@ -206,6 +219,7 @@ class HumanDecisionTests(ObligationCase):
         oid = self.reject(category="cost")
         others = [decision_question(q) for q in ("Q1", "Q2", "Q3")]
         self.apply("astra_discovery", self.discovery(plan(others)))
+        self.publish()
         self.assertEqual("open", self.obligation(oid)["status"])
         self.assertEqual(["Q1", "Q2", "Q3"], [q["id"] for q in self.state["pending_questions"]])
 
@@ -247,7 +261,9 @@ class ApprovalGateTests(ObligationCase):
         self.state["workspace"] = "/absent-workspace"
         self.state["settings"]["joint_planning"] = False
         goals.install_draft(self.state, body(), origin="user_cli_edit")
+        self.publish()
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
+        self.assertEqual("goal_approval", self.state["resolver_human_request"]["scope"])
         self.state["deferred_obligations"] = [{"id": "obligation-1", "kind": "remediation", "status": "open"}]
         goals.present(self.state)
         with self.assertRaisesRegex(ValueError, "unresolved obligations"):

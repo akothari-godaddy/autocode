@@ -35,6 +35,9 @@ class PreviewCase(unittest.TestCase):
         contract["accepted_assumptions"].append({"text": "CLI invocation is sufficient",
                                                  "basis": "agent_proposed", "answer_id": ""})
         goals.install_draft(self.state, contract, origin="glm_draft")
+        # The clarification stop exists once the runner's writer boundary publishes it.
+        self.assertEqual("RESOLVER_PENDING", self.state["status"])
+        goals.human.evaluate(self.state)
 
     def preview(self):
         return "\n".join(goals.plan_preview(self.state))
@@ -43,6 +46,7 @@ class PreviewCase(unittest.TestCase):
 class PlanPreviewTests(PreviewCase):
     def test_preview_shows_known_assumed_and_undecided_at_a_clarification_stop(self):
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        self.assertEqual("clarification", self.state["resolver_human_request"]["scope"])
         text = goals.present(self.state)
         self.assertIn("PLAN PREVIEW for " + goals.token(self.state["goal_contract"]), text)
         handoff = support.digest(self.state["requirements_handoff"]["report"])[:12]
@@ -70,12 +74,18 @@ class PlanPreviewTests(PreviewCase):
 
     def test_late_revision_preview_has_no_answered_question_or_rejected_assumption(self):
         goals.answer(self.state, "Q1", "CLI")
-        self.state["status"] = "WAITING_FOR_USER"
+        # The answer retired the published request; the runner asks the remaining question again.
+        remaining = self.state["goal_contract"]["body"]["open_blocking_questions"]
+        self.assertEqual(["Q2"], [q["id"] for q in remaining])
+        goals.human.queue(self.state, "clarification", {"stage": "astra_discovery"}, questions=remaining)
+        goals.human.evaluate(self.state)
+        self.assertEqual("WAITING_FOR_USER", self.state["status"])
         goals.present(self.state)
         goals.reject_assumption(self.state, "A2", goals.token(self.state["goal_contract"]))
         contract = body()
         contract["open_blocking_questions"] = [question("Q3")]
         goals.install_draft(self.state, contract, origin="glm_draft")
+        goals.human.evaluate(self.state)
         text = self.preview()
         self.assertNotIn("[Q1]", text)
         self.assertNotIn("Names are ASCII", text)

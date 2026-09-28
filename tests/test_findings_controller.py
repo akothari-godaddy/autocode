@@ -86,6 +86,7 @@ class ControllerFindingsTests(unittest.TestCase):
                                           "id": "C2", "criterion": "Reject empty names"})
         body["milestones"][0]["acceptance_criteria"].append("C2")
         runner.goals.install_draft(self.state, body, origin="test")
+        runner.goals.human.evaluate(self.state)
         runner.goals.present(self.state)
         runner.goals.approve(self.state, runner.goals.token(self.state["goal_contract"]))
         first = self.astra_decision("REWORK")
@@ -135,6 +136,7 @@ class ControllerFindingsTests(unittest.TestCase):
                                     "decision_needed": "Provide test credentials", "options": [], "proposed_delta": ""}
         record = {"output": str(self.run / "blocked.json"), "source_revision": support.snapshot(self.root)["revision"]}
         runner.apply_result(self.state, "astra_review", decision, record, self.root, self.run)
+        runner.goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual(["Missing authorization check"],
                          [row["finding"] for row in findings.open_entries(self.state, "astra")])

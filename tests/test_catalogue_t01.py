@@ -87,6 +87,7 @@ class ApprovalCase(kit.CatalogueCase):
 
     def approve_now(self, **kwargs):
         self.draft(**kwargs)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
 
@@ -103,6 +104,11 @@ class ApprovalCase(kit.CatalogueCase):
 
     def invoke(self, *args, role=None):
         support.atomic_json(self.run / "state.json", self.state)
+        published = self.state.get("resolver_human_request") or {}
+        if ({"--answer", "--delegate"} & set(args) and "--resolver-token" not in args
+                and published.get("request_token")):
+            # Answers must carry the exact token of the AutoResolver request being answered.
+            args = (*args, "--resolver-token", published["request_token"])
         argv = ["autocode", "--workspace", str(self.root), "--run-dir", str(self.run), *args]
         with patch.object(sys, "argv", argv), patch.object(support, "assert_no_legacy_process"), \
                 patch.object(support, "local_settings", return_value=self.local), \
@@ -153,6 +159,7 @@ class ApprovalScenarios(ApprovalCase):
         # Recovery: answering and approving the exact plan starts the build path.
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
         self.draft()  # answered question incorporated; no open blockers remain
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("recovery_approval_opens_execution", goals.approved(self.state))
@@ -177,6 +184,7 @@ class ApprovalScenarios(ApprovalCase):
         self.check("no_source_mutation", True, self.source_clean())
         self.compare_with_oracle()
         # Recovery: authentic approval admits exactly one build path.
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         try:
@@ -189,6 +197,7 @@ class ApprovalScenarios(ApprovalCase):
     def test_app03_approve_exact_displayed_plan_once(self):
         """APP-03. Existing: test_goals.test_approval_requires_displayed_exact_revision."""
         self.draft()
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         selected = goals.token(self.state["goal_contract"])
         goals.approve(self.state, selected)
@@ -211,6 +220,7 @@ class ApprovalScenarios(ApprovalCase):
         revised = body()
         revised["required_behaviors"].append("Support Unicode names")
         goals.install_draft(self.state, revised, origin="user_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         self.expect_raises("stale_token_rejected", ValueError, goals.approve, self.state, stale)
         self.check("r2_remains_unapproved", False, goals.approved(self.state))
@@ -247,6 +257,8 @@ class ApprovalScenarios(ApprovalCase):
         draft = body(questions=True)
         draft["open_blocking_questions"].append({**draft["open_blocking_questions"][0], "id": "Q2"})
         goals.install_draft(self.state, draft, origin="test")
+        # The runner's writer boundary publishes the draft questions before they can be answered.
+        self.assertEqual(2, self.invoke())
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
         self.check("answer_saved_once", "CLI", self.state["answers"]["Q1"]["text"])
         self.check("answer_is_not_approval", False, goals.approved(self.state))
@@ -296,6 +308,7 @@ class ApprovalScenarios(ApprovalCase):
         goals.wait_for_user(self.state, {"kind": "goal_change", "decision_needed": "Allow Unicode?",
                                          "impact": "Changes scope", "discovered": "Non-ASCII names",
                                          "options": ["Yes", "No"], "proposed_delta": "Accept Unicode"})
+        goals.human.evaluate(self.state)
         goals.answer(self.state, self.state["pending_questions"][0]["id"], "Yes")
         revised = body()
         revised["required_behaviors"].append("Accept Unicode")
@@ -305,6 +318,7 @@ class ApprovalScenarios(ApprovalCase):
         self.check("old_approval_does_not_cover_r2", False, goals.approved(self.state))
         self.expect_raises("old_token_cannot_approve_r2", ValueError, goals.approve, self.state, old_token)
         self.check("history_explains_change", True, bool(self.state.get("contract_history")))
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("r2_approval_recovers", goals.approved(self.state))
@@ -319,10 +333,12 @@ class ApprovalScenarios(ApprovalCase):
                    "impact": "The exact test is excluded", "options": ["Repair", "Keep excluded"],
                    "discovered": "An assertion races navigation", "proposed_delta": "Only the fallback test"}
         goals.wait_for_user(self.state, request)
+        goals.human.evaluate(self.state)
         qid = self.state["pending_questions"][0]["id"]
         goals.resolve_permission(self.state, qid, "No, leave it excluded")  # denial
         self.check("denial_recorded", "No, leave it excluded", self.state["answers"][qid]["text"])
         goals.wait_for_user(self.state, copy.deepcopy(request))
+        goals.human.evaluate(self.state)
         self.check("denial_reused_not_escalated", "RUNNING", self.state["status"])
         self.check("denial_answer_bound", "No, leave it excluded",
                    self.state["permission_reuse_context"]["answer"])
@@ -330,6 +346,7 @@ class ApprovalScenarios(ApprovalCase):
         wider = copy.deepcopy(request)
         wider["proposed_delta"] = "Change production navigation too"
         goals.wait_for_user(self.state, wider)
+        goals.human.evaluate(self.state)
         self.check("wider_scope_not_authorized_by_qualification", "WAITING_FOR_USER", self.state["status"])
         self.check("contract_untouched_by_permission_flow", original_contract,
                    self.state["goal_contract"])
@@ -338,6 +355,8 @@ class ApprovalScenarios(ApprovalCase):
     def test_app11_reuse_answered_question_without_looping(self):
         """APP-11. Existing: test_goals.test_existing_answers_persist_and_cannot_be_asked_again."""
         self.draft(questions=True)
+        # The runner's writer boundary publishes the draft question before it can be answered.
+        self.assertEqual(2, self.invoke())
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
         # Asking the already-answered question again is explicitly refused.
         self.expect_raises("same_question_rejected", ValueError,
@@ -346,6 +365,7 @@ class ApprovalScenarios(ApprovalCase):
         draft = body(questions=True)
         draft["open_blocking_questions"][0].update(id="Q9", question="A materially different question?")
         goals.install_draft(self.state, draft, origin="test")
+        goals.human.evaluate(self.state)
         self.check("distinct_new_question_allowed", ["Q9"],
                    [q["id"] for q in self.state["pending_questions"]])
         self.finish(summary="SCOPED_PROGRESS: exact answers reused; genuinely new questions still asked")

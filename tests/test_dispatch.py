@@ -15,7 +15,7 @@ import autocode_dispatch as d
 import autocode_goals as g
 import autocode_milestones as m
 import autocode_support as s
-from goal_fixtures import body, envelope
+from goal_fixtures import assert_operational_wait, body, envelope
 
 
 class DispatchTests(unittest.TestCase):
@@ -34,6 +34,7 @@ class DispatchTests(unittest.TestCase):
             {"id": "M3", "objective": "Combine outputs", "depends_on": ["M1", "M2"], "acceptance_criteria": ["C3"],
              "affected_paths": ["combined.txt"]}]
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.state["settings"].update(orchestration=copy.deepcopy(d.DEFAULTS),
@@ -244,6 +245,7 @@ class DispatchTests(unittest.TestCase):
         d.run_workers(self.state, self.run, old)
         draft["constraints"].append("Updated requirement")
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.advance("M1")
@@ -390,7 +392,8 @@ class DispatchCliTests(unittest.TestCase):
         self.env["AUTOCODE_BUILDER_FAIL"] = "M2"
         self.launch(["Produce two outputs and combine", "--max-parallel-builders", "2", "--chat"], 2, answers="yes\n")
         run, state = self.saved()
-        self.assertEqual("PAUSED_ORCHESTRATOR_WORKER", state["status"])
+        # An exhausted operational pause is now surfaced as an AutoResolver operational request.
+        assert_operational_wait(self, state, "PAUSED_ORCHESTRATOR_WORKER")
         first = (self.root / "barrier/M1").read_bytes()
         self.env.pop("AUTOCODE_BUILDER_FAIL")
         self.launch(["--run-dir", str(run), "--resume-paused", "--retry-builder", "M2", "--no-chat"], 0)
