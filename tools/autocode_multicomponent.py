@@ -37,6 +37,7 @@ import subprocess
 import tempfile
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -45,6 +46,7 @@ try:
 except ImportError:
     from autocode_taskrun import TaskRun, TaskRunError
 
+_WORKTREE_LOCK = threading.Lock()
 GIT_IDENTITY = ("-c", "user.name=AutoCode", "-c", "user.email=autocode@localhost")
 EXCLUDE = (":(exclude).autocode", ":(exclude).autocode-ui", ":(exclude,glob)**/__pycache__/**",
           ":(exclude,glob)**/*.pyc")
@@ -229,8 +231,12 @@ class MultiComponentBuild:
     def _new_worktree_run(self, component: Component, workspace: Path) -> tuple[str, TaskRun]:
         workspace.parent.mkdir(parents=True, exist_ok=True)
         branch = f"components/{component.id}-{uuid.uuid4().hex[:8]}"
-        base_commit = _git(self.repo, "rev-parse", "HEAD")
-        _git(self.repo, "worktree", "add", "-b", branch, str(workspace), base_commit)
+        # Components in one batch start in parallel threads, but `git worktree add` on one
+        # repository is not safe to run concurrently (ref and worktree-metadata locks), so
+        # only the git setup is serialized; the component runs themselves stay parallel.
+        with _WORKTREE_LOCK:
+            base_commit = _git(self.repo, "rev-parse", "HEAD")
+            _git(self.repo, "worktree", "add", "-b", branch, str(workspace), base_commit)
         run = TaskRun.start(workspace, component_brief(component, self.architecture),
                             options=self.options, env=self.env, timeout=self.timeout)
         return base_commit, run
