@@ -149,7 +149,9 @@ The Investigator runs on a strong OpenAI model different from the stuck stage's 
 Astra, or GPT-6 Sol when the stuck stage runs on Astra) at xhigh effort, on a fresh route
 and session. It reads the task, the saved state and the stuck stage's attempts and returns
 a diagnosis, then either guidance for one more attempt or the question only you can answer.
-Guidance goes into the retried stage's prompt: for planning, every planning stage until the
+`--investigator-model MODEL` (and `--investigator-reasoning-effort`) pins the Investigator's model for
+a run instead; a `provider/model` id such as `openai/gpt-6-astra` runs it through OpenCode even in a
+Codex run. Guidance goes into the retried stage's prompt: for planning, every planning stage until the
 plan is presented; otherwise that stage until it completes.
 
 Bounds: one investigation per distinct stage and pause, three per run

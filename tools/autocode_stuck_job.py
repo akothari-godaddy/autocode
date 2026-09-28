@@ -180,6 +180,42 @@ def route(roles: dict, stuck_model: str) -> dict:
     return base
 
 
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+
+
+def add_arguments(parser) -> None:
+    """The Investigator's CLI flags (autocode.py): pin its model instead of the automatic choice."""
+    parser.add_argument("--investigator-model",
+                        help="Pin the stuck-stage Investigator's model for this run; a provider/model id "
+                             "(e.g. openai/gpt-6-astra) runs it through OpenCode. Default: GPT-6 Astra, or "
+                             "Sol when the stuck stage runs on Astra")
+    parser.add_argument("--investigator-reasoning-effort", choices=EFFORTS,
+                        help="Reasoning effort for the pinned Investigator model (default: xhigh)")
+
+
+def configure(settings: dict, args) -> dict:
+    """Save a pinned Investigator route from the CLI flags (new and resumed runs, any engine);
+    resumes keep it unless given again. Returns ``settings``."""
+    model = getattr(args, "investigator_model", None)
+    effort = getattr(args, "investigator_reasoning_effort", None)
+    if not model and not effort:
+        return settings
+    saved = (settings.get("stuck_investigation") or {}).get("route") or {}
+    model = model or saved.get("model")
+    if not model:
+        raise ValueError("--investigator-reasoning-effort needs --investigator-model (or a saved pinned model)")
+    settings.setdefault("stuck_investigation", {})["route"] = {
+        "model": model, "reasoning_effort": effort or saved.get("reasoning_effort") or "xhigh", "provider": None,
+        # provider/model ids are OpenCode routes (the repository's convention); bare names use the run's engine.
+        "engine": "opencode" if "/" in model else settings.get("engine", "codex")}
+    return settings
+
+
+def pinned_route(settings: dict) -> dict | None:
+    route = ((settings or {}).get("stuck_investigation") or {}).get("route")
+    return dict(route) if route else None
+
+
 def packet(state: dict, state_path, inventory: dict | None = None, engine: str | None = None) -> dict:
     request = state["stuck_investigation"]
     recent = [{key: row.get(key) for key in ("stage", "iteration", "output", "rejected", "rejection_reason")
@@ -216,14 +252,22 @@ def check(value: dict, changed_files) -> None:
         raise ValueError("A pause for the user must say what the user has to decide")
 
 
+def release_route(state: dict) -> dict:
+    """The Investigator's route exists only while it runs: saved roles are re-validated on resume
+    (e.g. native Codex runs refuse a non-Codex role), and a pinned route may be an OpenCode one."""
+    return (state.get("settings") or {}).get("roles", {}).pop(ROUTE, None) or {}
+
+
 def apply(state: dict, value: dict, record: dict, workspace) -> None:
     check(value, record.get("changed_files"))
     request = state.pop("stuck_investigation")
+    used = release_route(state)
     retry = value["recommendation"] == "retry" and request["status"] in RETRYABLE
     outcome = "retried" if retry else "paused"
     entry = next(row for row in reversed(state["stuck_investigations"]) if row["identity"] == request["identity"])
     entry.update(outcome=outcome, diagnosis=value["diagnosis"], cause=value["cause"], guidance=value["guidance"],
                  user_question=value["user_question"], evidence_refs=value["evidence_refs"],
+                 model=used.get("model"), engine=used.get("engine"), reasoning_effort=used.get("reasoning_effort"),
                  output=record.get("output"), finished_at=now())
     state["next_stage"] = request["stage"]
     if not retry:
@@ -266,8 +310,9 @@ def grant_one_attempt(state: dict, request: dict) -> None:
 def abandon(state: dict, error: str) -> tuple[str, str]:
     """The investigation itself failed: restore the original pause, never a worse one."""
     request = state.pop("stuck_investigation")
+    used = release_route(state)
     entry = next(row for row in reversed(state["stuck_investigations"]) if row["identity"] == request["identity"])
-    entry.update(outcome="investigation_failed", error=error, finished_at=now())
+    entry.update(outcome="investigation_failed", error=error, model=used.get("model"), finished_at=now())
     reason = f"{request['reason']}\n(The Investigator could not finish: {error})"
     restore(state, request, reason)
     return request["status"], reason

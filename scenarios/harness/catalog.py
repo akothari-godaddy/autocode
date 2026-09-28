@@ -26,6 +26,7 @@ CATEGORIES = ("bugfix", "feature", "greenfield", "port", "parallel", "architectu
 EXPECTED = ("complete", "stop", "any")
 KEYS = {"title", "category", "requires", "fake", "run"}
 RUN_KEYS = {"max_steps", "timeout_minutes", "expected", "known_failure"}
+FAKE_KEYS = {"check", "flags", "fault", "live_investigator"}
 
 
 @dataclass(frozen=True)
@@ -43,6 +44,12 @@ class Scenario:
     # Why AutoCode is known not to pass this scenario yet. A verdict other than
     # PASS is reported but does not fail the suite; a PASS says to remove the key.
     known_failure: str = ""
+    # [fake] extras: CLI flags added to the scripted run, a named scripted fault
+    # (scenarios/harness/fake_codex.py), and whether the scripted run still makes a
+    # real model call (then it needs --i-authorize-live-model-spend, or is skipped).
+    fake_flags: tuple[str, ...] = ()
+    fake_fault: str = ""
+    fake_live_calls: bool = False
 
     @property
     def seed(self) -> Path:
@@ -85,12 +92,17 @@ def load(scenario_id: str) -> Scenario:
         raise ValueError(f"{scenario_id}/scenario.toml: unknown [run] keys {sorted(unknown)}")
     if run.get("expected", "complete") not in EXPECTED:
         raise ValueError(f"{scenario_id}: [run] expected must be one of {EXPECTED}")
+    fake = meta.get("fake", {})
+    unknown = set(fake) - FAKE_KEYS
+    if unknown:
+        raise ValueError(f"{scenario_id}/scenario.toml: unknown [fake] keys {sorted(unknown)}")
     return Scenario(
         id=scenario_id, dir=root, title=meta["title"], category=meta["category"],
         brief=(root / "brief.md").read_text().strip(), requires=tuple(meta.get("requires", ())),
         fake_check=meta.get("fake", {}).get("check"), max_steps=run.get("max_steps", 40),
         timeout_minutes=run.get("timeout_minutes", 60), expected=run.get("expected", "complete"),
-        known_failure=run.get("known_failure", ""))
+        known_failure=run.get("known_failure", ""), fake_flags=tuple(fake.get("flags", ())),
+        fake_fault=fake.get("fault", ""), fake_live_calls=bool(fake.get("live_investigator", False)))
 
 
 def load_all() -> list[Scenario]:

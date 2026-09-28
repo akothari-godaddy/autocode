@@ -195,6 +195,13 @@ def role_for(state, stage):
     return "astra" if stage.startswith("astra") else stage
 
 
+# Workflow stages that run on a route of their own (their unit's prepare() creates it). run_role
+# derives engine, effort and session from route_for, so without this they silently ran on the
+# Plan Reviewer's route: its effort, and its saved session (context leaking between stages).
+JOB_ROUTES = {"investigate_bug": "investigator", "review_design": "architect", "check_design": "architect",
+              "answer_question": "analyst", "investigate_stuck": "stuck_investigator"}
+
+
 def route_for(state, stage, role=None):
     """Return the saved model route for a semantic workflow role.
 
@@ -204,6 +211,8 @@ def route_for(state, stage, role=None):
     """
     if stage in ("astra_resolve", "astra_diagnose"):
         return "resolver"
+    if JOB_ROUTES.get(stage) in state.get("settings", {}).get("roles", {}):
+        return JOB_ROUTES[stage]
     if stage == "requirements_gather":
         return "requirements"
     if stage == RECOGNIZE:

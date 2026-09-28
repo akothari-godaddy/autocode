@@ -105,6 +105,31 @@ class ApplyTests(unittest.TestCase):
         self.assertTrue(state["stuck_investigation"]["in_force"])
         self.assertEqual("retried", state["stuck_investigations"][0]["outcome"])
 
+    def test_the_route_exists_only_while_the_investigator_runs(self):
+        state = self.investigated("PAUSED_REPEATED_FAILURE")
+        state["settings"]["roles"][stuck.ROUTE] = {"model": "openai/gpt-6-astra", "engine": "opencode",
+                                                   "reasoning_effort": "xhigh"}
+        stuck.apply(state, report(), {"output": "o"}, "/ws")
+        self.assertNotIn(stuck.ROUTE, state["settings"]["roles"])
+        self.assertEqual(("openai/gpt-6-astra", "opencode"),
+                         (state["stuck_investigations"][0]["model"], state["stuck_investigations"][0]["engine"]))
+
+    def test_pinned_route_from_the_cli(self):
+        from types import SimpleNamespace
+        settings = {"engine": "codex"}
+        self.assertIs(settings, stuck.configure(settings, SimpleNamespace()))
+        self.assertNotIn("stuck_investigation", settings)
+        stuck.configure(settings, SimpleNamespace(investigator_model="openai/gpt-6-sol", investigator_reasoning_effort=None))
+        self.assertEqual({"model": "openai/gpt-6-sol", "reasoning_effort": "xhigh", "provider": None, "engine": "opencode"},
+                         settings["stuck_investigation"]["route"])
+        stuck.configure(settings, SimpleNamespace(investigator_model=None, investigator_reasoning_effort="max"))
+        self.assertEqual(("openai/gpt-6-sol", "max"), (stuck.pinned_route(settings)["model"],
+                                                     stuck.pinned_route(settings)["reasoning_effort"]))
+        stuck.configure(settings, SimpleNamespace(investigator_model="gpt-6-astra", investigator_reasoning_effort=None))
+        self.assertEqual("codex", settings["stuck_investigation"]["route"]["engine"], "a bare name keeps the run's engine")
+        with self.assertRaises(ValueError):
+            stuck.configure({"engine": "codex"}, SimpleNamespace(investigator_model=None, investigator_reasoning_effort="high"))
+
     def test_retry_grants_exactly_one_more_review_round_or_batch(self):
         for stage, used, expected in (("astra_challenge", 2, 4), ("astra_finalize", 2, 3)):
             state = self.investigated("PAUSED_PLANNING_BUDGET", stage=stage,

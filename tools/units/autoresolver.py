@@ -108,7 +108,8 @@ def prepare_stuck(state, state_path):
     stage's, at xhigh, so the Investigator does not inherit the stuck stage's reasoning."""
     roles = state["settings"]["roles"]
     stuck_route = autoplanner.route_for(state, state["stuck_investigation"]["stage"])
-    roles[stuck_job.ROUTE] = stuck_job.route(roles, (roles.get(stuck_route) or {}).get("model", ""))
+    roles[stuck_job.ROUTE] = (stuck_job.pinned_route(state["settings"])
+                              or stuck_job.route(roles, (roles.get(stuck_route) or {}).get("model", "")))
     state.setdefault("sessions", {}).pop(stuck_job.ROUTE, None)
     prompt, metrics = stuck_job.prompt(
         state, state_path, autoplanner.workspace_inventory(state["workspace"], state["task"]),

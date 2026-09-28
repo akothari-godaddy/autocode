@@ -104,6 +104,7 @@ them" → build → bug found → fix), which needs a multi-turn driver.
 | `bugfix-duplicate-on-timeout` | bugfix | A retry after an uncertain timeout renews a domain twice. Hidden tests inject lost replies before and after processing; removing retries or raising the deadline both fail. Requires a root-cause note and no requirements gathering. |
 | `bugfix-stale-prices` | bugfix | Checkout charges stale prices because cache invalidation is left to each write path. The fix belongs at the store's write path (every cache hears every write); either fix route passes, with no requirements gathering. Patching today's callers or dropping the cache both fail hidden tests. |
 | `bugfix-cent-drift` | bugfix | Invoice, charge and refunds each round money their own way and drift by a cent. The fix touches every billing module, needs one half-up money rule, and leaves an accounting choice open (tax per line or per invoice), so it must take the planned path: diagnosis, Planner, Plan Reviewer, the user's approval, no requirements gathering. Deriving only the charge from the invoice, or rounding everything with float `round()`, both fail hidden tests. |
+| `stuck-planner-citation` | bugfix | The stuck-stage Investigator, with a real model. Every stage is scripted except the Investigator (`--investigator-model openai/gpt-6-astra`); the scripted Planner repeats a mistake seen live (prose after a cited path) until repairs run out. Passes only if the real Investigator names the cause and its guidance gets the retried Planner through. One real model call: skipped without `--i-authorize-live-model-spend`. |
 | `bugfix-trivial` | bugfix | An off-by-one. Correctness is easy; the check is proportionality: no requirements gathering, no plan-review rounds, no questions, at most five model stages. |
 | `bugfix-not-reproducible` | bugfix | The reported bug does not exist in this code. Passes by saying so or asking; a "defensive" change to working code fails. |
 | `feature-timesheet-by-project` | feature | Adding an option to an existing CLI without changing existing output. |
@@ -130,6 +131,9 @@ with `docker compose` and checked end to end.
 ```
 catalog/<id>/
   scenario.toml     title, category, optional requires = ["go"], [fake] check = "...",
+                    optional [fake] flags = [...] (extra CLI flags), fault = "name" (a scripted
+                    mistake in harness/fake_codex.py), live_investigator = true (the scripted run
+                    still makes one real model call; needs --i-authorize-live-model-spend),
                     [run] max_steps, timeout_minutes, expected = "complete"|"stop"|"any", known_failure = "why"
   brief.md          the request, exactly as a user would type it (plain text, no headings)
   seed/             the starting project, committed before the run (omit for an empty repo)

@@ -26,12 +26,10 @@ try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode
     from . import autocode_regression as regression
-    from . import autocode_run_view as run_view
-    from . import autocode_workflows as workflows
+    from . import autocode_run_view as run_view, autocode_workflows as workflows
 except ImportError:
     import autocode_regression as regression
-    import autocode_support as support, autocode_jobs as jobs
-    import autocode_workflows as workflows
+    import autocode_support as support, autocode_jobs as jobs, autocode_workflows as workflows
     import autocode_goals as goals
     import autocode_interventions as interventions
     import autocode_providers
@@ -2204,7 +2202,7 @@ def configure(args, state):
             if not settings.get("orchestration", {}).get("enabled"):
                 raise ValueError("Start a new run to enable milestone orchestration")
             settings["orchestration"]["max_parallel"] = args.max_parallel_builders
-        return settings
+        return autopilot.stuck.configure(settings, args)
     if engine == "opencode":
         local = opencode.local_settings(state["workspace"])
     elif engine == "gocode":
@@ -2280,7 +2278,7 @@ def configure(args, state):
         settings['planning_flow'] = 'v2'
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
-    return settings
+    return autopilot.stuck.configure(settings, args)
 
 
 def iteration_limit_reached(iteration, ceiling):
@@ -2866,6 +2864,7 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--resolver-model", help="Override the saved Resolver model without changing its engine")
     parser.add_argument("--resolver-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override the saved Resolver reasoning effort")
+    autopilot.stuck.add_arguments(parser)
     parser.add_argument("--plan-reviewer-model",
                         help="Override the independent plan-reviewer model for the saved engine")
     parser.add_argument("--plan-reviewer-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],

@@ -91,3 +91,34 @@ class PlannerUnitTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class JobRouteTests(unittest.TestCase):
+    """run_role launches on route_for(); every job stage must resolve to the route its unit prepared,
+    or it silently takes the Plan Reviewer route's engine, effort and saved session."""
+
+    def test_each_job_stage_resolves_to_its_own_route_when_prepared(self):
+        roles = {"astra": {"model": "a"}, "plan_reviewer": {"model": "p"}}
+        for stage, route in autoplanner.JOB_ROUTES.items():
+            with self.subTest(stage=stage):
+                state = {"settings": {"roles": {**roles, route: {"model": "m", "reasoning_effort": "xhigh"}}}}
+                self.assertEqual(route, autoplanner.route_for(state, stage, "astra"))
+                # Before its unit has prepared the route, the stage keeps the old behaviour.
+                self.assertEqual("astra", autoplanner.route_for({"settings": {"roles": roles}}, stage, "astra"))
+
+    def test_the_stuck_investigator_launches_on_its_prepared_route(self):
+        import tempfile
+        from pathlib import Path
+        import autocode_stuck_job as stuck
+        from units import autoresolver
+        with tempfile.TemporaryDirectory() as workspace:
+            state = {"version": 3, "task": "t", "workspace": workspace, "status": "RUNNING", "next_stage": "terra",
+                     "stages": [], "phase": "EXECUTING",
+                     "settings": {"stuck_investigation": {"route": {"model": "openai/gpt-6-astra", "engine": "opencode",
+                                                                    "reasoning_effort": "xhigh", "provider": None}},
+                                  "roles": {"astra": {"model": "gpt-6-astra", "engine": "codex"},
+                                            "terra": {"model": "gpt-6-sol"}}}}
+            stuck.intercept(state, "PAUSED_REPEATED_FAILURE", "x")
+            request = autoresolver.prepare(state, stuck.STAGE, Path(workspace) / "state.json", None)
+        self.assertEqual(request.route_role, autoplanner.route_for(state, stuck.STAGE, request.role))
+        self.assertEqual("opencode", autoplanner.engine_for(state["settings"], request.route_role))

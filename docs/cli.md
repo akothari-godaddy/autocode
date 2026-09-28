@@ -52,6 +52,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--approve-goal 'r3:<hash>'` | Approve the exact displayed revision. |
 | `--edit-goal body.json` | Load a full contract body as a new draft revision. |
 | `--approve-review C1 --review-token '…'` | Record a human-review decision for criterion `C1`. |
+| `--investigator-model MODEL`, `--investigator-reasoning-effort LEVEL` | Pin the stuck-stage Investigator's model for this run (default: GPT-6 Astra, or Sol when the stuck stage runs on Astra, at xhigh). A `provider/model` id runs it through OpenCode. See [Workflow](workflow.md#when-a-stage-stops-making-progress). |
 | `--resolver-response provide_information --resolver-request ID --resolver-token '…'` | Answer an AutoResolver operational request with corrective information. `--resolver-response` requires both `--resolver-request` and `--resolver-token`; the response itself authorizes no retry, approval or budget change. |
 
 ### Execution and recovery

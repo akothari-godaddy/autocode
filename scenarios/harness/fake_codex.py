@@ -22,6 +22,7 @@ import uuid
 from pathlib import Path
 
 CONFIG = json.loads(Path(os.environ["SCENARIO_FAKE_CONFIG"]).read_text())
+PROMPT = ""
 CHECK = CONFIG["check"]
 PATHS = CONFIG["paths"]
 
@@ -250,7 +251,10 @@ def report_for(stage: str, data: dict) -> dict:
                 "proposed_assumptions": [], "open_questions": [], "requirements": requirements(),
                 "ignored_statements": [], "conflicts": [], "proposed_reframes": []}
     if stage == "astra_discovery":
-        return {"summary": "Scripted plan", "contract": contract(), "alternatives": [], "uncertainties": [], **planning}
+        report = {"summary": "Scripted plan", "contract": contract(), "alternatives": [], "uncertainties": [], **planning}
+        if CONFIG.get("fault") == "planner_citation" and not guided_to_fix_citation():
+            report["code_refs"] = [f"{note} (saved diagnosis: observed, reproduction, root cause)" for note in bug_notes()]
+        return report
     if stage == "astra_challenge":
         return {"summary": "Scripted plan review: no concerns", "concerns": []}
     if stage == "glm_revise":
@@ -290,6 +294,22 @@ def report_for(stage: str, data: dict) -> dict:
     raise SystemExit(f"fake_codex: no scripted report for stage {stage!r}")
 
 
+def bug_notes() -> list[str]:
+    return [f"docs/bugs/{path.name}" for path in sorted((Path(CONFIG["reference"]) / "docs" / "bugs").glob("*.json"))]
+
+
+def guided_to_fix_citation() -> bool:
+    """Fault "planner_citation" (scenarios/catalog/stuck-planner-citation): the scripted Planner
+    repeats a mistake seen live, citing the bug note with prose after its path, until an
+    Investigator's guidance in its prompt names the actual problem (code_refs, or the exact path).
+    Vague guidance leaves it stuck: the scenario judges the real Investigator, not this script."""
+    marker = "INVESTIGATOR GUIDANCE"
+    if marker not in PROMPT:
+        return False
+    guidance = PROMPT.split(marker, 1)[1].split("CURRENT HANDOFF DATA", 1)[0]
+    return "code_refs" in guidance or "code_ref" in guidance.lower() or any(note in guidance for note in bug_notes())
+
+
 def complete(value, schema: dict):
     """Give every required field the script leaves out an empty value of its schema type.
 
@@ -326,7 +346,8 @@ def main() -> int:
     if sys.argv[1:] == ["login", "status"]:
         print("Logged in using ChatGPT (scenario fake provider)")
         return 0
-    prompt = sys.stdin.read()
+    global PROMPT
+    prompt = PROMPT = sys.stdin.read()
     session = sys.argv[sys.argv.index("resume") + 1] if "resume" in sys.argv else str(uuid.uuid4())
     emit({"type": "thread.started", "thread_id": session})
     if "CURRENT HANDOFF DATA\n" not in prompt:

@@ -110,6 +110,8 @@ def run_one(scenario, args) -> dict:
     solution = scenario.dir / args.fake_solution
     if args.fake and not scenario.fake_check:
         skip.append("no [fake] check in scenario.toml")
+    if args.fake and scenario.fake_live_calls and not getattr(args, "i_authorize_live_model_spend", False):
+        skip.append("its Investigator is a real model: add --i-authorize-live-model-spend")
     if args.fake and not solution.is_dir():
         skip.append(f"no {args.fake_solution}/ solution for the fake to apply")
     if skip:
