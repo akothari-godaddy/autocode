@@ -12,8 +12,9 @@ from pathlib import Path
 try:
     from .. import autocode_support as support, autocode_goals as goals, autocode_bug_job as bug_job
     from .. import autocode_discuss_job as discuss_job, autocode_stuck_job as stuck_job, autocode_failures as failures
-    from .. import autocode_providers
+    from .. import autocode_providers, autocode_verify as verify
 except ImportError:
+    import autocode_verify as verify
     import autocode_support as support
     import autocode_goals as goals
     import autocode_bug_job as bug_job
@@ -23,6 +24,8 @@ except ImportError:
     import autocode_failures as failures
 from . import autoplanner
 from .common import ModelRequest, capped_route, execution_request
+
+PROBE_TIMEOUT = 120  # seconds per discuss probe; a probe checks one claim, it is not a test suite
 
 
 def prepare_answer(state):
@@ -54,8 +57,13 @@ def apply_job(stage, state, value, record, workspace):
     """Autopilot hands a job stage's validated report here. The Analyst's answer completes
     the run. For the Investigator, a small reproduced bug becomes one Builder task at once;
     anything else continues where bug_job.apply sent it."""
-    if stage in (discuss_job.STAGE, stuck_job.STAGE):
-        return (discuss_job if stage == discuss_job.STAGE else stuck_job).apply(state, value, record, workspace)
+    if stage == discuss_job.STAGE:
+        # The runner, not the Analyst, runs each claim's probe, in a scratch copy of the code.
+        return discuss_job.apply(state, value, record, workspace, run_probe=lambda command: verify.scratch_run(
+            workspace, Path(record.get("output") or workspace).parent / "answer-probes", command=command,
+            timeout=PROBE_TIMEOUT))
+    if stage == stuck_job.STAGE:
+        return stuck_job.apply(state, value, record, workspace)
     bug_job.apply(state, value, record, workspace)
     if bug_job.small_correction(state):
         start_small_correction(state, workspace)

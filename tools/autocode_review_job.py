@@ -7,12 +7,19 @@ it needs in a scratch copy of its own, and returns findings. The runner then:
 
 - rejects the report if the stage changed anything in the workspace outside
   ``review/`` (a review is read-only; the before/after snapshot is the evidence),
+- proves each blocking finding: it states the defect as a plain-English example and
+  the Reviewer delivers a test named after it (F1 -> test_f1_...) under
+  ``review/tests/``. The runner applies the change under review (``change_patch``)
+  in a scratch copy and runs the delivered tests; each such finding's test must
+  FAIL there, or the report is rejected. A blocking finding a test cannot show (a
+  documented compatibility rule, a missing doc) says why in ``untestable``,
 - writes ``REPORT_PATH`` from the validated report, so the file always matches
   the schema and the saved report,
 - completes the run. No requirements, no plan approval, no Builder.
 
-This module is pure: prompt, schema, and the transition. It imports nothing
-from the runner. State keys written: ``review`` (verdict, counts, report path).
+This module is pure: prompt, schema, and the transition; the unit passes in the
+function that runs the tests. It imports nothing from the runner. State keys
+written: ``review`` (verdict, counts, report path, finding_tests).
 """
 from __future__ import annotations
 
@@ -22,8 +29,10 @@ from pathlib import Path
 
 try:
     from . import autocode_workflows as workflows
+    from .autocode_test_cases import match_cases
 except ImportError:
     import autocode_workflows as workflows
+    from autocode_test_cases import match_cases
 
 STAGE = workflows.REVIEW_STAGE
 REPORT_PATH = "review/findings.json"
@@ -32,9 +41,13 @@ SEVERITIES = ("blocking", "advisory")
 
 FINDING = {
     "type": "object", "additionalProperties": False,
-    "required": ["id", "severity", "file", "lines", "summary", "evidence"],
+    "required": ["id", "severity", "file", "lines", "summary", "evidence", "example", "untestable"],
     "properties": {
         "id": {"type": "string"},
+        # The defect as a concrete example: "Given ..., when ..., then ... (expected ...)".
+        "example": {"type": "string"},
+        # Why no test can show a blocking finding; "" when a delivered test shows it.
+        "untestable": {"type": "string"},
         "severity": {"type": "string", "enum": list(SEVERITIES)},
         "file": {"type": "string"},
         "lines": {"type": "array", "items": {"type": "integer"}, "maxItems": 2},
@@ -44,8 +57,12 @@ FINDING = {
 }
 SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["verdict", "summary", "change_under_review", "findings", "tests_run", "delivered_tests"],
+    "required": ["verdict", "summary", "change_under_review", "change_patch", "findings", "tests_run",
+                 "delivered_tests"],
     "properties": {
+        # The patch file in the repository that holds the change, applied by the runner; "" when the
+        # change is already in the workspace.
+        "change_patch": {"type": "string"},
         "verdict": {"type": "string", "enum": ["approve", "request_changes"]},
         "summary": {"type": "string"},
         "change_under_review": {"type": "string"},
@@ -82,7 +99,16 @@ What to do:
    - advisory: everything else. Style, naming, simplification, a suggestion.
    Point at the file and the line span in the file AS IT WOULD BE AFTER THE CHANGE, and give evidence:
    the rule that is broken, the command you ran and what it printed, the scenario that fails.
-5. Verdict: request_changes when there is at least one blocking finding, otherwise approve. Do not
+   Give every blocking finding an example: the defect as one concrete case in plain English, "Given
+   <exact starting data>, when <exact action>, then <what happens> (expected <what should happen>)".
+6. Prove every blocking finding with a test, unless no test can show it. Deliver it under review/tests/
+   as above, named after the finding's id (F1 -> test_f1_<what it shows>). The runner applies the change
+   in a scratch copy of its own and runs your delivered tests: each blocking finding's test must FAIL on
+   the changed code, or your report is rejected. Name the patch file in change_patch (for example
+   pr-184.patch), or "" when the change is already in the workspace. When a test really cannot show a
+   blocking finding (a documented compatibility rule, a missing document), say why in untestable;
+   otherwise untestable is "". Advisory findings need no test.
+7. Verdict: request_changes when there is at least one blocking finding, otherwise approve. Do not
    invent problems to look thorough: a correct change gets approve and, at most, advisory notes.
 
 Return JSON only, matching the schema the runner gives you. The runner saves your report as
@@ -124,12 +150,51 @@ def delivered_tests(value: dict, record: dict, workspace) -> list[str]:
     return sorted(set(declared) | set(written))
 
 
+def proven_blocking(value: dict) -> list[dict]:
+    """The blocking findings that must be shown by a failing test."""
+    return [f for f in value["findings"] if f["severity"] == "blocking" and not f.get("untestable", "").strip()]
+
+
+def prove(value: dict, delivered: list[str], run_tests) -> dict:
+    """Run the delivered tests on the changed code and require each proven finding's test to fail there.
+
+    ``run_tests(tests, patch)`` is the runner's scratch run (autocode_verify.scratch_run). Returns
+    {"finding_tests": {id: [failing tests]}, "command", "tail"}; raises ValueError naming what is unproven.
+    """
+    unexampled = [f["id"] for f in value["findings"] if f["severity"] == "blocking" and not f.get("example", "").strip()]
+    if unexampled:
+        raise ValueError(f"Every blocking finding needs an example of the defect in plain English: {unexampled}")
+    findings = proven_blocking(value)
+    if not findings:
+        return {"finding_tests": {}, "command": "", "tail": ""}
+    if not delivered:
+        raise ValueError("Blocking findings need a delivered test under review/tests/ that fails on the change "
+                         f"(or a reason in untestable): {[f['id'] for f in findings]}")
+    run = run_tests(delivered, value.get("change_patch", "").strip() or None)
+    if run.get("error"):
+        raise ValueError(f"The runner could not run the delivered tests on the change: {run['error']}")
+    results = run.get("results")
+    if results is None:
+        raise ValueError("The delivered tests reported no per-test results, so no finding can be matched to "
+                         "its test; deliver standard unittest or pytest tests")
+    failing = sorted(set(results["failed"]) - set(results.get("collection_errors") or []))
+    matched = match_cases([{"id": f["id"]} for f in findings], failing)
+    unproven = [f["id"] for f in findings if not matched[f["id"]]]
+    if unproven:
+        raise ValueError("These blocking findings have no delivered test, named after them, that fails on the "
+                         f"changed code: {unproven} (failing tests: {failing or 'none'})")
+    return {"finding_tests": matched, "command": run.get("command", ""), "tail": run.get("tail", "")[-1500:]}
+
+
 def owns(state: dict) -> bool:
     return workflows.kind(state) == "review"
 
 
-def apply(state: dict, value: dict, record: dict, workspace) -> None:
-    """Enforce read-only-ness, write the findings file, complete the run."""
+def apply(state: dict, value: dict, record: dict, workspace, run_tests=None) -> None:
+    """Enforce read-only-ness, prove blocking findings, write the findings file, complete the run.
+
+    ``run_tests(tests, patch)`` runs tests on the changed code in a scratch copy (the unit passes
+    autocode_verify.scratch_run); without it a blocking finding can only be marked untestable."""
     stray = stray_changes(record.get("changed_files"))
     if stray:
         raise ValueError("A review must not change the repository; this attempt changed: " + ", ".join(stray))
@@ -137,14 +202,18 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
     if value["verdict"] == "approve" and counts["blocking"]:
         raise ValueError("A review with blocking findings cannot approve")
     delivered = delivered_tests(value, record, workspace)
+    proof = prove(value, delivered, run_tests or (lambda tests, patch: {"error": "no test runner was given"}))
     report = {key: value[key] for key in ("verdict", "summary", "change_under_review", "findings", "tests_run")}
+    report["findings"] = [{**finding, "proven_by": proof["finding_tests"].get(finding["id"], [])}
+                          for finding in value["findings"]]
     report["delivered_tests"] = delivered
     target = Path(workspace) / REPORT_PATH
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(report, indent=2) + "\n")
     state["review"] = {**counts, "verdict": value["verdict"], "report_path": REPORT_PATH,
                        "output": record.get("output"), "change_under_review": value["change_under_review"],
-                       "delivered_tests": delivered}
+                       "delivered_tests": delivered, "finding_tests": proof["finding_tests"],
+                       "proof_command": proof["command"]}
     state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,
                  completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
 
@@ -158,6 +227,8 @@ def render(state: dict) -> str:
              "Findings: " + str(Path(state.get("workspace", "")) / review.get("report_path", REPORT_PATH))]
     for path in review.get("delivered_tests") or []:
         lines.append("Targeted test delivered: " + path)
+    for finding, tests in (review.get("finding_tests") or {}).items():
+        lines.append(f"Finding {finding} shown by the runner: {', '.join(tests)} fails on the change")
     if review.get("output"):
         lines.append("Reviewer report: " + str(review["output"]))
     return "\n".join(lines)

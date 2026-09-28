@@ -40,18 +40,113 @@ class ContractCasesTests(unittest.TestCase):
                          test_cases.contract_cases(state))
         self.assertEqual("C2: " + EXAMPLE["criterion"], test_cases.case_text(test_cases.contract_cases(state)[0]))
 
-    def test_a_plan_with_several_milestones_keeps_ordinary_criteria(self):
-        state = {"goal_contract": {"body": {"milestones": [{"id": "M1"}, {"id": "M2"}],
-                                            "acceptance_criteria": [EXAMPLE]}}}
-        self.assertEqual([], test_cases.contract_cases(state))
-        self.assertEqual("", test_cases.builder_note(state))
+    def test_no_plan_no_cases(self):
         self.assertEqual([], test_cases.contract_cases({}))
+        self.assertEqual("", test_cases.builder_note({}))
 
     def test_the_proof_is_required_only_when_the_plan_names_tests(self):
         project = type("Committed", (), {"base": "b"})()
         self.assertTrue(regression.required(feature_state(project, [ORDINARY, EXAMPLE])))
         self.assertFalse(regression.required(feature_state(project, [ORDINARY])))
-        self.assertFalse(regression.required(feature_state(project, [EXAMPLE], milestones=2)))
+        # A milestone whose tested criteria are all later ones runs no proof yet.
+        early = feature_state(project, [EXAMPLE], milestones=2)
+        early["goal_contract"]["body"]["milestones"][1]["acceptance_criteria"] = ["C2"]
+        early["current_task"] = {"milestone_id": "M1"}
+        self.assertFalse(regression.required(early))
+        self.assertEqual("", test_cases.builder_note(early))
+
+
+def planned(current, accepted=(), batch=None, hash_="h1"):
+    """A three-milestone plan: M1 has C1 (test), M2 has C2 (test) and C4 (ordinary), M3 has C3 (test);
+    C5 (test) belongs to no milestone."""
+    criteria = [{"id": cid, "criterion": f"example {cid}", "verification_method": f"test: test_{cid.lower()}_x"}
+                for cid in ("C1", "C2", "C3", "C5")] + [dict(ORDINARY, id="C4")]
+    milestones = [{"id": "M1", "acceptance_criteria": ["C1"]}, {"id": "M2", "acceptance_criteria": ["C2", "C4"]},
+                  {"id": "M3", "acceptance_criteria": ["C3"]}]
+    progress = {f"{hash_}:{mid}": {"id": mid, "accepted": True, "contract_hash": hash_} for mid in accepted}
+    task = {"milestone_ids": list(batch)} if batch else {"milestone_id": current}
+    return {"goal_contract": {"hash": "h1", "body": {"milestones": milestones, "acceptance_criteria": criteria}},
+            "current_task": task, "milestone_progress": progress}
+
+
+class MilestoneScopeTests(unittest.TestCase):
+    """A case is due once its milestone is current or accepted; unassigned ones at the end."""
+
+    def ids(self, state):
+        return [case["id"] for case in test_cases.contract_cases(state)]
+
+    def test_the_first_milestone_proves_only_its_own_tests(self):
+        self.assertEqual({"C1"}, test_cases.in_scope(planned("M1")))
+        self.assertEqual(["C1"], self.ids(planned("M1")))
+
+    def test_later_milestones_also_prove_the_accepted_ones(self):
+        self.assertEqual(["C1", "C2"], self.ids(planned("M2", accepted=["M1"])))
+
+    def test_acceptance_under_another_contract_does_not_count(self):
+        self.assertEqual(["C2"], self.ids(planned("M2", accepted=["M1"], hash_="old")))
+
+    def test_a_parallel_batch_proves_every_member(self):
+        self.assertEqual(["C1", "C3"], self.ids(planned(None, batch=["M1", "M3"])))
+
+    def test_everything_is_due_once_every_milestone_is_reached(self):
+        state = planned("M3", accepted=["M1", "M2"])
+        self.assertIsNone(test_cases.in_scope(state))
+        self.assertEqual(["C1", "C2", "C3", "C5"], self.ids(state))
+
+    def test_a_task_without_a_milestone_proves_everything(self):
+        state = planned("M1")
+        state["current_task"] = {"objective": "legacy task"}
+        self.assertEqual(["C1", "C2", "C3", "C5"], self.ids(state))
+
+    def test_a_proof_for_a_smaller_scope_is_not_reused(self):
+        state = planned("M2", accepted=["M1"])
+        state["regression_proof"] = {"verdict": "PASS", "source_revision": "rev", "case_scope": ["C1"]}
+        with patch.object(regression.support, "snapshot", return_value={"revision": "rev"}), \
+                patch.object(regression, "base_commit", return_value=None):
+            proof = regression.prove(state, Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()))
+        self.assertEqual(["C1", "C2"], proof["case_scope"])
+
+
+class TwoMilestoneProofTests(unittest.TestCase):
+    """Real repositories: M1 delivers sub (C1), M2 delivers mul (C2)."""
+    MUL = {"calc.py": FEATURE["calc.py"] + "\n\ndef mul(a, b):\n    return a * b\n",
+           "test_calc.py": FEATURE["test_calc.py"].replace("test_c2_subtracts", "test_c1_subtracts")
+           .replace("from calc import add, sub", "from calc import add, sub, mul")
+           + "\n    def test_c2_multiplies(self):\n        self.assertEqual(6, mul(2, 3))\n"}
+
+    def prove(self, files, current, accepted=()):
+        project = Project(SEED)
+        self.addCleanup(project.close)
+        project.write(files)
+        criteria = [{**EXAMPLE, "id": "C1", "verification_method": "test: test_c1_subtracts"},
+                    {**EXAMPLE, "id": "C2", "criterion": "Given calc.mul; when mul(2, 3) runs; then it returns 6",
+                     "verification_method": "test: test_c2_multiplies"}]
+        state = feature_state(project, criteria, milestones=2)
+        state["goal_contract"]["hash"] = "h"
+        state["goal_contract"]["body"]["milestones"] = [{"id": "M1", "acceptance_criteria": ["C1"]},
+                                                        {"id": "M2", "acceptance_criteria": ["C2"]}]
+        state["current_task"] = {"milestone_id": current}
+        state["milestone_progress"] = {f"h:{mid}": {"id": mid, "accepted": True, "contract_hash": "h"}
+                                       for mid in accepted}
+        return regression.prove(state, project.root, Path(tempfile.mkdtemp(prefix="milestone-proof-")))
+
+    def test_the_first_milestone_is_proven_without_the_second(self):
+        m1 = {"calc.py": FEATURE["calc.py"], "test_calc.py": FEATURE["test_calc.py"].replace("test_c2_", "test_c1_")}
+        proof = self.prove(m1, "M1")
+        self.assertEqual("PASS", proof["verdict"], proof["failures"] + proof["unverified"])
+        self.assertEqual(["C1"], sorted(proof["case_tests"]))
+
+    def test_the_second_milestone_proves_both(self):
+        proof = self.prove(self.MUL, "M2", accepted=["M1"])
+        self.assertEqual("PASS", proof["verdict"], proof["failures"] + proof["unverified"])
+        self.assertEqual({"C1": ["test_calc.CalcTests.test_c1_subtracts"],
+                          "C2": ["test_calc.CalcTests.test_c2_multiplies"]}, proof["case_tests"])
+
+    def test_losing_an_accepted_milestones_test_fails_the_later_checkpoint(self):
+        without_c1 = {**self.MUL, "test_calc.py": self.MUL["test_calc.py"].replace("test_c1_subtracts", "test_sub")}
+        proof = self.prove(without_c1, "M2", accepted=["M1"])
+        self.assertEqual("FAIL", proof["verdict"])
+        self.assertEqual([], proof["case_tests"]["C1"])
 
 
 class NewBehaviorVerifyTests(unittest.TestCase):

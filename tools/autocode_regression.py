@@ -13,10 +13,13 @@ When the Investigator wrote the regression tests in plain English (its
 after the case id, among the tests that fail on base and pass now
 (``case_tests``, from autocode_test_cases.match_cases).
 
-A small feature gets the same proof when its approved one-milestone plan marks
-acceptance criteria as tests (``verification_method: "test: test_c2_..."``,
+A feature gets the same proof when its approved plan marks acceptance criteria
+as tests (``verification_method: "test: test_c2_..."``,
 autocode_test_cases.contract_cases): each such test must pass with the change
-and must not have passed without it (verify's ``new_behavior``).
+and must not have passed without it (verify's ``new_behavior``). With several
+milestones, a checkpoint proves the criteria of its own milestone and of those
+already accepted (autocode_test_cases.in_scope); a milestone with none due runs
+no proof.
 """
 from __future__ import annotations
 
@@ -88,7 +91,9 @@ def prove(state, workspace, run_dir):
     workspace = Path(workspace)
     current = support.snapshot(workspace)["revision"]
     saved = state.get("regression_proof") or {}
-    if saved.get("source_revision") == current:
+    scope = sorted(case["id"] for case in cases(state))
+    # The cases due grow as milestones are accepted; a proof for a smaller scope is stale.
+    if saved.get("source_revision") == current and saved.get("case_scope", scope) == scope:
         return saved
     started = time.monotonic()
     base = base_commit(state, workspace)
@@ -120,7 +125,7 @@ def prove(state, workspace, run_dir):
         proof["checks"] = {label: {"command": receipt["command"], "exit_code": receipt["exit_code"],
                                    "timed_out": receipt["timed_out"], "output": receipt["output"]}
                            for label, receipt in result["checks"].items()}
-    proof.update(path=str(path) if path else None, proved_at=support.now(),
+    proof.update(case_scope=scope, path=str(path) if path else None, proved_at=support.now(),
                  duration_seconds=round(time.monotonic() - started, 1))
     state["regression_proof"] = proof
     state.setdefault("regression_proofs", []).append(

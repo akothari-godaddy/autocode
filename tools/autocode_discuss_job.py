@@ -10,10 +10,14 @@ content and the runner writes it. The runner then:
 - rejects the report if the stage changed anything in the workspace (the runner, not
   the model, writes the one requested note),
 - rejects evidence that cites a file which does not exist, so every claim is grounded,
+- runs each claim's ``probe``, when it has one: a command that exits 0 exactly when the
+  claim holds, run by the runner in a scratch copy of the code as it is. A probe that
+  fails rejects the answer. The claim's ``example`` states in plain English the concrete
+  case the probe checks. Claims without a probe stay grounded by their source file only,
 - writes the requested note (a ``.json`` note must parse), and completes the run.
 
-Pure module: prompt, schema, transition, rendering. Imports nothing from the runner.
-State key written: ``answer``.
+Pure module: prompt, schema, transition, rendering; the unit passes in the function
+that runs probes. Imports nothing from the runner. State key written: ``answer``.
 """
 from __future__ import annotations
 
@@ -32,8 +36,11 @@ NOTE_SUFFIXES = (".json", ".md", ".txt")
 MAX_QUESTIONS = 3
 TEXT = {"type": "string"}
 EVIDENCE = {
-    "type": "object", "additionalProperties": False, "required": ["claim", "source"],
-    "properties": {"claim": TEXT, "source": TEXT},
+    "type": "object", "additionalProperties": False, "required": ["claim", "source", "example", "probe"],
+    # example: the concrete case a probe checks ("Given ..., when ..., then ..."); probe: a shell
+    # command, run from the repository root, that exits 0 exactly when the claim holds. Both "" when
+    # the claim is shown by its source alone.
+    "properties": {"claim": TEXT, "source": TEXT, "example": TEXT, "probe": TEXT},
 }
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -62,6 +69,12 @@ tradeoff ("should we use A or B"). Either way:
    what would change it; do not just pick one.
 3. evidence: each claim your answer rests on, with source = the repository file (optionally
    "path:line") that shows it. The runner checks that every source file exists.
+   A claim about what the code DOES (a count, a result, what breaks) is stronger when shown by running
+   it. For such a claim give example, one concrete case in plain English ("Given ..., when ..., then
+   ..."), and probe, a shell command run from the repository root that exits 0 exactly when the claim
+   holds (for example: python3 -c "from cache import TTL; assert TTL == 3600"). The runner runs every
+   probe in a scratch copy of the code as it is now and rejects the answer if one fails, so only probe
+   what you have checked. A claim shown by its source alone has example and probe "".
 4. questions: only facts you could not find in the repository and that would change the answer; at
    most three. A fact the repository states is not a question.
 5. If the request asks for a written note (a file path and its format), put the path in note_path
@@ -122,8 +135,31 @@ def check(value: dict, changed_files, workspace) -> None:
         raise ValueError("note_content without a note_path")
 
 
-def apply(state: dict, value: dict, record: dict, workspace) -> None:
+def run_probes(value: dict, run_probe) -> list[dict]:
+    """Run every claim's probe (``run_probe(command)``, a scratch run); each must exit 0."""
+    shown, failed = [], []
+    for row in value["evidence"]:
+        probe = row.get("probe", "").strip()
+        if not probe:
+            continue
+        if not row.get("example", "").strip():
+            raise ValueError(f"A probed claim needs its example in plain English: {row['claim']!r}")
+        run = run_probe(probe)
+        receipt = {"claim": row["claim"], "probe": probe, "exit_code": run.get("exit_code"),
+                   "tail": (run.get("tail") or run.get("error") or "")[-600:]}
+        (shown if run.get("exit_code") == 0 and not run.get("error") else failed).append(receipt)
+    if failed:
+        raise ValueError("These claims' probes did not exit 0 on the code as it is, so the claims are not shown: "
+                         + "; ".join(f"{row['claim']!r} ({row['probe']}: exit {row['exit_code']}) {row['tail'][-200:]}"
+                                     for row in failed))
+    return shown
+
+
+def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> None:
+    """``run_probe(command)`` runs a probe in a scratch copy (the unit passes autocode_verify.scratch_run);
+    without it, an answer with probes is rejected rather than trusted."""
     check(value, record.get("changed_files"), workspace)
+    shown = run_probes(value, run_probe or (lambda command: {"error": "no probe runner was given"}))
     note = value["note_path"].strip()
     if note:
         target = Path(workspace) / note
@@ -133,7 +169,7 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
             content = json.dumps(json.loads(content), indent=2) + "\n"
         target.write_text(content)
     state["answer"] = {"answer": value["answer"], "evidence": value["evidence"], "questions": value["questions"],
-                       "note_path": note, "output": record.get("output")}
+                       "note_path": note, "output": record.get("output"), "probes": shown}
     state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,
                  completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
 
@@ -145,7 +181,10 @@ def owns(state: dict) -> bool:
 def render(state: dict) -> str:
     found = state.get("answer") or {}
     lines = ["ANSWER — nothing was changed", "", found.get("answer", ""), "", "Evidence:"]
-    lines += [f"  - {row['claim']} ({row['source']})" for row in found.get("evidence") or []]
+    probed = {row["claim"] for row in found.get("probes") or []}
+    lines += [f"  - {row['claim']} ({row['source']})" + ("; shown by running: " + row["probe"]
+                                                        if row["claim"] in probed else "")
+              for row in found.get("evidence") or []]
     lines += ["Question for you: " + question for question in found.get("questions") or []]
     if found.get("note_path"):
         lines.append("Note written: " + str(Path(state.get("workspace", "")) / found["note_path"]))

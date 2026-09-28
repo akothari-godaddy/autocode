@@ -1,10 +1,13 @@
 """Autoreview owns independent verification and evidence validation, the review
 workflow's Reviewer stage (autocode_review_job) and the design workflow's
 Architect stage (autocode_design_job)."""
+from pathlib import Path
+
 try:
     from .. import autocode_design_job as design_job, autocode_goals as goals, autocode_review_job as review_job
-    from .. import autocode_design_check_job as design_check_job
+    from .. import autocode_design_check_job as design_check_job, autocode_verify as verify
 except ImportError:
+    import autocode_verify as verify
     import autocode_design_check_job as design_check_job
     import autocode_design_job as design_job
     import autocode_goals as goals
@@ -65,6 +68,12 @@ def job_request(state, job, role, route):
 
 def apply_job(stage, state, value, record, workspace):
     """Autopilot hands a job stage's validated report here; the job decides how the run continues."""
+    if stage == review_job.STAGE:
+        # The runner, not the Reviewer, shows each blocking finding: its test must fail on the change.
+        review_job.apply(state, value, record, workspace, run_tests=lambda tests, patch: verify.scratch_run(
+            workspace, Path(record.get("output") or workspace).parent / "review-proof", patch=patch, tests=tests,
+            timeout=verify.DEFAULT_TIMEOUT))
+        return
     JOBS[stage].apply(state, value, record, workspace)
 
 
