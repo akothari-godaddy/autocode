@@ -9,7 +9,7 @@ PY=.venv/bin/python                               # AutoCode needs psutil from t
 $PY scenarios/run.py list                         # the catalog
 $PY scenarios/run.py check                        # prove every oracle (seconds; no AutoCode, no models)
 $PY scenarios/run.py run --fake                   # every scenario through AutoCode with a scripted model (under a minute, no spend)
-$PY scenarios/run.py run bugfix-iso-weeks --profile glm53-mimo --i-authorize-live-model-spend
+$PY scenarios/run.py run bugfix-iso-weeks --profile glm53-openai --i-authorize-live-model-spend
 $PY scenarios/run.py route --fake                 # which workflow AutoCode recognizes for each prompt in routing.toml
 $PY -m unittest scenarios/test_harness.py         # the harness's own tests (under a minute)
 ```

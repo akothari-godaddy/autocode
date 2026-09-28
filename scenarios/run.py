@@ -4,7 +4,7 @@
   python3 scenarios/run.py list
   python3 scenarios/run.py check [ID ...]    # prove each oracle: seed fails, reference passes, broken variants fail
   python3 scenarios/run.py run ID ... --fake  # full AutoCode run with a scripted model (no spend)
-  python3 scenarios/run.py run ID ... --profile glm53-mimo --i-authorize-live-model-spend
+  python3 scenarios/run.py run ID ... --profile glm53-openai --i-authorize-live-model-spend
   python3 scenarios/run.py route --fake      # which workflow AutoCode recognizes for each prompt in routing.toml
 
 Results go to .scenario-runs/<time>-<id>-<mode>/ (result.json, steps.jsonl,

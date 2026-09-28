@@ -20,6 +20,8 @@ CATALOGUE = [
     "mimo-token-plan/mimo-v2.6-pro",
     "opencode/mimo-v2.6-flash-free",
     "openai/gpt-5.6-sol",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-sol",
     "not a model",
 ]
 
@@ -28,8 +30,10 @@ class UsableTest(unittest.TestCase):
     def test_drops_free_flash_highspeed_and_dead_routes(self):
         kept = mc.usable(CATALOGUE)
         self.assertIn("zai-coding-plan/glm-5.3", kept)
-        self.assertIn("xiaomi-token-plan-sgp/mimo-v2.6-pro", kept)
+        # MiMo is never used (user 2026-09-27), even when the catalogue offers it.
+        self.assertNotIn("xiaomi-token-plan-sgp/mimo-v2.6-pro", kept)
         self.assertIn("openai/gpt-5.6-sol", kept)
+        self.assertIn("openai/gpt-6-sol", kept)
         self.assertNotIn("zai-coding-plan/glm-5.3-flash", kept)
         self.assertNotIn("zai-coding-plan/glm-5.2-highspeed", kept)
         self.assertNotIn("xiaomi-token-plan-sgp/mimo-v2.6-flash", kept)
@@ -41,7 +45,8 @@ class UsableTest(unittest.TestCase):
 class SuggestTest(unittest.TestCase):
     def test_prefers_subscription_pair_when_present(self):
         roles = mc.suggest(mc.usable(CATALOGUE))
-        self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", roles["builder"]["model"])
+        self.assertEqual("openai/gpt-6-sol", roles["builder"]["model"])
+        self.assertEqual("openai/gpt-6-astra", roles["reviewer"]["model"])
         self.assertEqual("medium", roles["builder"]["effort"])
         self.assertEqual("zai-coding-plan/glm-5.3", roles["validator"]["model"])
         self.assertEqual("zai-coding-plan/glm-5.3", roles["requirements"]["model"])
@@ -66,7 +71,8 @@ class RenderTest(unittest.TestCase):
     def test_render_lists_models_and_role_table(self):
         models = mc.usable(CATALOGUE)
         text = mc.render(models, mc.suggest(models))
-        self.assertIn("xiaomi-token-plan-sgp/mimo-v2.6-pro", text)
+        self.assertIn("openai/gpt-6-sol", text)
+        self.assertNotIn("mimo", text)
         self.assertIn("| builder |", text)
         self.assertIn("verifier", text.lower())
 

@@ -16,21 +16,19 @@ PROFILES = {
         "effort": {"planner": "max", "reviewer": "high", "completion": "high",
                    "builder": "low", "requirements": "low", "resolver": "high"},
     },
-    # Verifier differs from producer: MiMo checks GLM work and GLM checks MiMo work.
-    "glm53-mimo": {
+    # Verifier differs from producer: OpenAI GPT checks GLM work and GLM checks GPT work.
+    # MiMo is never used (user 2026-09-27): it twice spent its whole reasoning budget on
+    # a design review and returned nothing. OpenAI models go through the ChatGPT login.
+    "glm53-openai": {
         "provider": "opencode",
         "models": {
             "requirements": "zai-coding-plan/glm-5.3", "planner": "zai-coding-plan/glm-5.3",
-            "reviewer": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "builder": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+            "reviewer": "openai/gpt-6-astra", "builder": "openai/gpt-6-sol",
             "validator": "zai-coding-plan/glm-5.3", "completion": "zai-coding-plan/glm-5.3",
-            "resolver": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+            "resolver": "openai/gpt-6-astra",
         },
         "effort": {"requirements": "medium", "planner": "high", "reviewer": "high", "builder": "medium",
                    "validator": "high", "completion": "medium", "resolver": "high"},
-        # MiMo as reviewer repeatedly hit AutoCode's default 300s idle cutoff mid-response
-        # on architecture-two-services (2026-09-26 live runs); it is not stuck, just slower
-        # to start producing output than the default budget assumes.
-        "extra": ["--max-idle-seconds", "900"],
     },
 }
 

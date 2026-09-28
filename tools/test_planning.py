@@ -71,7 +71,7 @@ class PlanningTests(unittest.TestCase):
                     "transport_identity": {"engine": "opencode"}}
         runner.configure_joint(settings, args, fresh=True)
         state = {"settings": settings}
-        self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", settings["roles"]["plan_reviewer"]["model"])
+        self.assertEqual("openai/gpt-6-astra", settings["roles"]["plan_reviewer"]["model"])
         self.assertEqual("opencode", settings["roles"]["plan_reviewer"]["engine"])
         for stage in ("astra_challenge", "astra_finalize"):
             self.assertEqual("plan_reviewer", planning.route_for(state, stage))
@@ -83,7 +83,7 @@ class PlanningTests(unittest.TestCase):
         command, environment, _ = oc.launch("plan_reviewer", Path("/tmp/fixture"), Path("/tmp/run"),
                                             None, settings["roles"]["plan_reviewer"]["model"],
                                             None, False, planning=True)
-        self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", command[command.index("--model") + 1])
+        self.assertEqual("openai/gpt-6-astra", command[command.index("--model") + 1])
         agent = command[command.index("--agent") + 1]
         permissions = json.loads(environment["OPENCODE_CONFIG_CONTENT"])["agent"][agent]["permission"]
         self.assertEqual("deny", permissions["edit"])
@@ -327,8 +327,8 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual("opencode", settings["engine"])
         self.assertEqual("glm", planning.role_for({"settings": settings}, "astra_discovery"))
         self.assertEqual("zai-coding-plan/glm-5.3", settings["roles"]["glm"]["model"])
-        self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", settings["roles"]["terra"]["model"])
-        self.assertEqual({"engine": "opencode", "provider": None, "model": "xiaomi-token-plan-sgp/mimo-v2.6-pro"},
+        self.assertEqual("openai/gpt-6-sol", settings["roles"]["terra"]["model"])
+        self.assertEqual({"engine": "opencode", "provider": None, "model": "openai/gpt-6-astra"},
                          {key: settings["roles"]["astra"][key] for key in ("engine", "provider", "model")})
         self.assertEqual({"engine": "opencode", "provider": None, "model": "zai-coding-plan/glm-5.3"},
                          {key: settings["roles"]["sol"][key] for key in ("engine", "provider", "model")})

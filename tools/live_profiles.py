@@ -49,20 +49,20 @@ PROFILES = {
         "effort": {role: "none" for role in EFFORT_ROLES},
     },
     # Subscription-only. Two hard rules (user 2026-09-26):
-    # 1) Verifier ≠ producer — MiMo checks GLM work and GLM checks MiMo work.
+    # 1) Verifier ≠ producer — OpenAI GPT checks GLM work and GLM checks GPT work.
     # 2) Start at the ladder's medium rung where it says medium; shift to higher
     #    reasoning inside the stage when evidence shows struggle.
-    # Never free-tier or flash. `mimo-token-plan/` is dead (Invalid API key).
-    "glm53-mimo": {
+    # Never free-tier or flash. Never MiMo (user 2026-09-27); OpenAI via the ChatGPT login.
+    "glm53-openai": {
         "provider": "opencode",
         "role_models": {
             "requirements": "zai-coding-plan/glm-5.3",
             "planner": "zai-coding-plan/glm-5.3",
-            "reviewer": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
-            "builder": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+            "reviewer": "openai/gpt-6-astra",
+            "builder": "openai/gpt-6-sol",
             "validator": "zai-coding-plan/glm-5.3",
             "completion": "zai-coding-plan/glm-5.3",
-            "resolver": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+            "resolver": "openai/gpt-6-astra",
         },
         "effort": {
             "requirements": "medium",

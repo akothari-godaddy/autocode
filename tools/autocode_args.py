@@ -20,7 +20,7 @@ def build_parser(*, unit, units, role_models, joint_models):
     parser.add_argument("--in-place", action="store_true", help="Use this checkout directly; otherwise new tasks get independent worktrees from HEAD")
     parser.add_argument("--max-parallel-builders", type=int,
                         help="Orchestrator concurrency for independent milestones (new joint runs: 2; 1 dispatches serially)")
-    parser.add_argument('--builder-strong-model', help='New-run Builder escalation model after one ordinary retry (default xiaomi-token-plan-sgp/mimo-v2.6-pro, high); pinned routes never escalate')
+    parser.add_argument('--builder-strong-model', help='New-run Builder escalation model after one ordinary retry (default openai/gpt-6-astra, high); pinned routes never escalate')
     parser.add_argument("--retry-builder", action="append", default=[], metavar="MILESTONE_ID",
                         help="Explicitly retry a stopped Builder after inspecting its retained work; requires --resume-paused")
     parser.add_argument("--figma-file", help="Figma Design URL to implement using the connected Codex plugin")

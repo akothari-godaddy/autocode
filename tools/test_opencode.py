@@ -298,10 +298,10 @@ class OpenCodeFlow(unittest.TestCase):
         self.assertTrue(state["settings"]["joint_planning"])
         self.assertEqual("requirements", state["stages"][0]["role"])
         expected = {"requirements": "zai-coding-plan/glm-5.3", "glm": "zai-coding-plan/glm-5.3",
-                    "astra": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
-                    "terra": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "sol": "zai-coding-plan/glm-5.3",
+                    "astra": "openai/gpt-6-astra",
+                    "terra": "openai/gpt-6-sol", "sol": "zai-coding-plan/glm-5.3",
                     "completion": "zai-coding-plan/glm-5.3",
-                    "plan_reviewer": "xiaomi-token-plan-sgp/mimo-v2.6-pro"}
+                    "plan_reviewer": "openai/gpt-6-astra"}
         self.assertEqual(expected, {role: settings["model"] for role, settings in state["settings"]["roles"].items()})
         self.assertEqual("COMPLETE", state["phase"])
         self.assertNotEqual(state["sessions"]["terra"], state["sessions"]["sol"])

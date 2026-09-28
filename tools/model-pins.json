@@ -1,20 +1,41 @@
 {
   "version": 1,
-  "pinned_at": "2026-09-26",
+  "pinned_at": "2026-09-27",
   "source": "live opencode models search; user confirmed shortlist",
   "rules": [
-    "verifier != producer (MiMo checks GLM work and GLM checks MiMo work)",
+    "verifier != producer: OpenAI GPT checks GLM work and GLM checks OpenAI GPT work",
     "subscription routes only: no free, flash, or highspeed",
-    "dead route mimo-token-plan/ must never be selected",
+    "never MiMo (user 2026-09-27): no xiaomi-token-plan-sgp/ or mimo-token-plan/ route",
     "start on the ladder medium rung where docs say medium; escalate reasoning in-stage when needed"
   ],
   "roles": {
-    "requirements": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
-    "planner": {"model": "zai-coding-plan/glm-5.3", "effort": "high"},
-    "reviewer": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "high"},
-    "builder": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "medium"},
-    "validator": {"model": "zai-coding-plan/glm-5.3", "effort": "high"},
-    "completion": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
-    "resolver": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "high"}
+    "requirements": {
+      "model": "zai-coding-plan/glm-5.3",
+      "effort": "medium"
+    },
+    "planner": {
+      "model": "zai-coding-plan/glm-5.3",
+      "effort": "high"
+    },
+    "reviewer": {
+      "model": "openai/gpt-6-astra",
+      "effort": "high"
+    },
+    "builder": {
+      "model": "openai/gpt-6-sol",
+      "effort": "medium"
+    },
+    "validator": {
+      "model": "zai-coding-plan/glm-5.3",
+      "effort": "high"
+    },
+    "completion": {
+      "model": "zai-coding-plan/glm-5.3",
+      "effort": "medium"
+    },
+    "resolver": {
+      "model": "openai/gpt-6-astra",
+      "effort": "high"
+    }
   }
 }

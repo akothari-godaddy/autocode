@@ -61,15 +61,15 @@ class OpenCodeRoutingTests(unittest.TestCase):
     def test_new_defaults_and_bare_aliases_never_read_codex_login(self):
         for overrides, expected_sol in (
             ({}, "zai-coding-plan/glm-5.3"),
-            ({"astra_model": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
-              "sol_model": "xiaomi-token-plan-sgp/mimo-v2.6-pro"},
-             "xiaomi-token-plan-sgp/mimo-v2.6-pro"),
+            ({"astra_model": "openai/gpt-6-astra",
+              "sol_model": "openai/gpt-6-astra"},
+             "openai/gpt-6-astra"),
         ):
             args = test_planning.PlanningTests.configure_args(self, **overrides)
             with patch.object(support, "local_settings", side_effect=AssertionError("Codex must not be used")):
                 settings = runner.configure(args, {"workspace": str(self.run), "iteration": 0})
             self.assertEqual({"opencode"}, {c["engine"] for c in settings["roles"].values()})
-            self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", settings["roles"]["astra"]["model"])
+            self.assertEqual("openai/gpt-6-astra", settings["roles"]["astra"]["model"])
             self.assertEqual(expected_sol, settings["roles"]["sol"]["model"])
             self.assertEqual({"opencode"}, set(settings["transport_identities"]))
 

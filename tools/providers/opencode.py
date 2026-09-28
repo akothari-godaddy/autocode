@@ -16,15 +16,16 @@ DEFAULT_MODELS = {
     # Planning path (Z.ai): Requirements medium → Planner high.
     "requirements": "zai-coding-plan/glm-5.3",
     "glm": "zai-coding-plan/glm-5.3",
-    # Independent Plan Reviewer must not be the Planner's model.
-    "plan_reviewer": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
-    # Execution path: Builder on MiMo; Validator and Completion Owner verify on
-    # GLM so the verifier never grades its own work (docs/models.md independence).
-    "terra": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+    # Independent Plan Reviewer must not be the Planner's model (or family).
+    # No MiMo anywhere (user 2026-09-27): OpenAI GPT via the ChatGPT login instead.
+    "plan_reviewer": "openai/gpt-6-astra",
+    # Execution path: Builder on OpenAI GPT-6 Sol; Validator and Completion Owner verify
+    # on GLM so the verifier never grades its own work (docs/models.md independence).
+    "terra": "openai/gpt-6-sol",
     "sol": "zai-coding-plan/glm-5.3",
     "completion": "zai-coding-plan/glm-5.3",
     # Resolver/Astra is the strongest escalation rung and diagnosis session.
-    "astra": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+    "astra": "openai/gpt-6-astra",
 }
 
 # Ladder entry points (docs/models.md) — start medium where the ladder says so,

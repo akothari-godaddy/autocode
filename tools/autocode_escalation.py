@@ -5,26 +5,27 @@ import datetime as dt
 
 
 LADDERS = {
+    # No MiMo anywhere (user 2026-09-27): OpenAI GPT-6 via the ChatGPT login.
     "astra": (
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "high", "Mimo Pro High"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "xhigh", "Mimo Pro XHigh"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "max", "Mimo Pro Max"),
+        ("openai/gpt-6-astra", "high", "GPT-6 Astra High"),
+        ("openai/gpt-6-astra", "xhigh", "GPT-6 Astra XHigh"),
+        ("openai/gpt-6-astra", "max", "GPT-6 Astra Max"),
     ),
     "terra": (
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "medium", "Mimo Pro Medium"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "high", "Mimo Pro High"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "xhigh", "Mimo Pro XHigh"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "max", "Mimo Pro Max"),
+        ("openai/gpt-6-sol", "medium", "GPT-6 Sol Medium"),
+        ("openai/gpt-6-sol", "high", "GPT-6 Sol High"),
+        ("openai/gpt-6-sol", "xhigh", "GPT-6 Sol XHigh"),
+        ("openai/gpt-6-sol", "max", "GPT-6 Sol Max"),
     ),
     "sol": (
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "high", "Mimo Pro High"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "xhigh", "Mimo Pro XHigh"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "max", "Mimo Pro Max"),
+        ("openai/gpt-6-astra", "high", "GPT-6 Astra High"),
+        ("openai/gpt-6-astra", "xhigh", "GPT-6 Astra XHigh"),
+        ("openai/gpt-6-astra", "max", "GPT-6 Astra Max"),
     ),
     "completion": (
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "medium", "Mimo Pro Medium"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "high", "Mimo Pro High"),
-        ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "max", "Mimo Pro Max"),
+        ("openai/gpt-6-astra", "medium", "GPT-6 Astra Medium"),
+        ("openai/gpt-6-astra", "high", "GPT-6 Astra High"),
+        ("openai/gpt-6-astra", "max", "GPT-6 Astra Max"),
     ),
 }
 
