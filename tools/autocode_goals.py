@@ -999,6 +999,19 @@ def check_displayed(state, selected):
                          "with --review-token")
 
 
+def check_displayed_handoff(state, selected):
+    """Question actions bind to the displayed requirements handoff revision.
+
+    Delegation and assumption rejection never grant approval, so they do not
+    require the resolver-published goal display; they still refuse a stale
+    token or a handoff refreshed since it was displayed."""
+    contract = state.get("goal_contract")
+    if (not contract or not selected or selected != token(contract)
+            or state.get("displayed_handoff") != handoff_ref(state)):
+        raise ValueError("Act only on the current displayed revision; show the goal again and pass its token "
+                         "with --review-token")
+
+
 def present(state):
     public = human.current(state)
     state.pop("displayed_goal", None)
@@ -1015,6 +1028,9 @@ def present(state):
     # stops. Approval itself still requires the goal-approval status.
     if public and state.get("goal_contract"):
         state["displayed_goal"] = token(state["goal_contract"])
+    if state.get("goal_contract"):
+        # Question actions bind to the displayed handoff even without a
+        # published request; goal approval keeps its stricter display binding.
         state["displayed_handoff"] = handoff_ref(state)
     if public:
         state["displayed_review"] = review_token(state)
@@ -1214,7 +1230,7 @@ def delegate_all(state, selected):
     marked delegable=True, blocks the whole call rather than being silently
     skipped or silently delegated. Never grants approval; inherits answer()'s
     approval invalidation for each question it delegates."""
-    check_displayed(state, selected)
+    check_displayed_handoff(state, selected)
     pending = state.get("pending_questions", [])
     if not pending:
         raise ValueError("No pending questions to delegate")
@@ -1238,7 +1254,7 @@ def reject_assumption(state, assumption_id, selected):
     Never grants approval; invalidates any existing approval like answer() does."""
     if state["status"] not in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER", "PAUSED_PLANNING_BUDGET"):
         raise ValueError("Rejecting an assumption needs an open conversation checkpoint")
-    check_displayed(state, selected)
+    check_displayed_handoff(state, selected)
     handoff = (state.get("requirements_handoff") or {}).get("report") or {}
     rows = {row["id"]: row for row in
             (normalize_assumption(raw) for raw in handoff.get("proposed_assumptions", []))

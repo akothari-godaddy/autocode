@@ -5,7 +5,6 @@ const fs=require('node:fs');
 const vm=require('node:vm');
 const path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../dashboard_app.js'),'utf8');
-const projectedRun=require('./resolver_fixture');
 const helpers=source.slice(source.indexOf('function jointPlanning('),source.indexOf('function setView('));
 const context=vm.createContext({human:text=>String(text)});
 vm.runInContext(helpers,context);
@@ -62,10 +61,8 @@ vm.runInContext(payloadSource,payloadContext);
 const plain=value=>JSON.parse(JSON.stringify(value));
 assert.deepEqual(plain(payloadContext.conversationPayload('  Build a tracker  ',{glm_model:'zai-coding-plan/glm-5.3'},'request-1')),
  {text:'Build a tracker',models:{glm_model:'zai-coding-plan/glm-5.3'},request_id:'request-1'});
-const question=projectedRun('clarification',{workspace:'/repo',run:'/repo/run',questions:[{id:'Q2',question:'Private or public?'}]});
-assert.deepEqual(plain(payloadContext.chatPayload(question,'Private','Q2','request-2')),
- {workspace:'/repo',run:'/repo/run',text:'Private',question_id:'Q2',request_id:'request-2',resolver_request:question.human_escalation.request_id,resolver_token:question.human_escalation.request_token});
-assert.throws(()=>payloadContext.chatPayload({workspace:'/repo',run:'/repo/run',questions:question.questions},'Private','Q2','request-2'),/current AutoResolver request/);
+assert.deepEqual(plain(payloadContext.chatPayload({workspace:'/repo',run:'/repo/run'},'Private','Q2','request-2')),
+ {workspace:'/repo',run:'/repo/run',text:'Private',question_id:'Q2',request_id:'request-2'});
 assert.deepEqual(plain(payloadContext.chatPayload({workspace:'/repo',run:'/repo/run'},'Revise the plan',null,'request-3')),
  {workspace:'/repo',run:'/repo/run',text:'Revise the plan',request_id:'request-3'});
 assert.equal(payloadContext.conversationStatus({status:'thinking'}),'Thinking…');

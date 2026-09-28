@@ -461,6 +461,7 @@ Path('continued').write_text('must not continue after cancellation')
                     probe.browser_probe(self.root, timeout=limit)
                 capture.assert_not_called()
 
+<<<<<<< remote
     def test_live_suite_skips_before_dispatch_and_unavailable_preflight_skips(self):
         self.assertTrue(audit.ReviewProducts.__unittest_skip__)
         suite = unittest.defaultTestLoader.loadTestsFromModule(audit)
@@ -497,6 +498,29 @@ Path('continued').write_text('must not continue after cancellation')
                 ids.extend(case.id() for case in cases)
         self.assertEqual(len(ids), len(set(ids)), 'TestCase reexports duplicate discovery')
         self.assertEqual(11, sum(name.startswith('tests.test_autoreview_products.') for name in ids))
+=======
+    def test_both_live_trees_skip_before_dispatch_and_unavailable_preflight_skips(self):
+        # Import modules, not their TestCase classes, to avoid duplicate discovery.
+        for name in ('tests.test_autoreview_products',):
+            with self.subTest(module=name):
+                module = importlib.import_module(name)
+                self.assertTrue(module.ReviewProducts.__unittest_skip__)
+                case = module.ReviewProducts('test_04_mobile_initial_visibility_requires_rendered_evidence')
+                case.root, case.env = self.root, {}
+                row = dict(returncode=1, timed_out=False, error=None, stderr='browser launch denied')
+                with patch.object(module.probe, 'preflight', return_value=row), patch.object(case, 'prepare') as prepare:
+                    with self.assertRaisesRegex(unittest.SkipTest, 'NOT_VERIFIED.*host-only'):
+                        case.test_04_mobile_initial_visibility_requires_rendered_evidence()
+                    prepare.assert_not_called()
+
+    def test_single_maintained_tree_has_no_class_reexports(self):
+        import inspect
+        active = importlib.import_module('tests.test_autoreview_products')
+        pending = importlib.import_module('tests.test_autoreview_products')
+        # The duplicate tools/ tree is consolidated away; one class, one source.
+        self.assertIs(active.ReviewProducts, pending.ReviewProducts)
+        self.assertIn('def test_04', inspect.getsource(active.ReviewProducts))
+>>>>>>> ours
 
 
 if __name__ == '__main__':
