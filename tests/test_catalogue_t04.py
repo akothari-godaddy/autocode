@@ -41,6 +41,7 @@ class ReviewCase(t06.SolControllerCase):
         import autocode_goals as goals
         from goal_fixtures import body as fixture_body
         goals.install_draft(self.state, fixture_body(human=True), origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         first = self.decision("CONTINUE")
@@ -232,6 +233,7 @@ class ReviewCase(t06.SolControllerCase):
                    self.state["user_request"].get("criteria", []))
         # Recovery: the supported human action completes the run.
         current = support.snapshot(self.root)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve_review(self.state, "C1", goals.review_token(self.state), current)
         support.atomic_json(self.run / "complete-2.json", complete)
@@ -247,6 +249,7 @@ class ReviewCase(t06.SolControllerCase):
         report = self.sol_report()
         self.apply_sol(report)
         current = support.snapshot(self.root)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve_review(self.state, "C1", goals.review_token(self.state), current)
         (self.root / "greet.py").write_text("print('v2')\n")  # C2

@@ -87,6 +87,7 @@ class ApprovalCase(kit.CatalogueCase):
 
     def approve_now(self, **kwargs):
         self.draft(**kwargs)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
 
@@ -153,6 +154,7 @@ class ApprovalScenarios(ApprovalCase):
         # Recovery: answering and approving the exact plan starts the build path.
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
         self.draft()  # answered question incorporated; no open blockers remain
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("recovery_approval_opens_execution", goals.approved(self.state))
@@ -177,6 +179,7 @@ class ApprovalScenarios(ApprovalCase):
         self.check("no_source_mutation", True, self.source_clean())
         self.compare_with_oracle()
         # Recovery: authentic approval admits exactly one build path.
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         try:
@@ -189,6 +192,7 @@ class ApprovalScenarios(ApprovalCase):
     def test_app03_approve_exact_displayed_plan_once(self):
         """APP-03. Existing: test_goals.test_approval_requires_displayed_exact_revision."""
         self.draft()
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         selected = goals.token(self.state["goal_contract"])
         goals.approve(self.state, selected)
@@ -211,6 +215,7 @@ class ApprovalScenarios(ApprovalCase):
         revised = body()
         revised["required_behaviors"].append("Support Unicode names")
         goals.install_draft(self.state, revised, origin="user_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         self.expect_raises("stale_token_rejected", ValueError, goals.approve, self.state, stale)
         self.check("r2_remains_unapproved", False, goals.approved(self.state))
@@ -305,6 +310,7 @@ class ApprovalScenarios(ApprovalCase):
         self.check("old_approval_does_not_cover_r2", False, goals.approved(self.state))
         self.expect_raises("old_token_cannot_approve_r2", ValueError, goals.approve, self.state, old_token)
         self.check("history_explains_change", True, bool(self.state.get("contract_history")))
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("r2_approval_recovers", goals.approved(self.state))
@@ -319,10 +325,12 @@ class ApprovalScenarios(ApprovalCase):
                    "impact": "The exact test is excluded", "options": ["Repair", "Keep excluded"],
                    "discovered": "An assertion races navigation", "proposed_delta": "Only the fallback test"}
         goals.wait_for_user(self.state, request)
+        goals.human.evaluate(self.state)
         qid = self.state["pending_questions"][0]["id"]
         goals.resolve_permission(self.state, qid, "No, leave it excluded")  # denial
         self.check("denial_recorded", "No, leave it excluded", self.state["answers"][qid]["text"])
         goals.wait_for_user(self.state, copy.deepcopy(request))
+        goals.human.evaluate(self.state)
         self.check("denial_reused_not_escalated", "RUNNING", self.state["status"])
         self.check("denial_answer_bound", "No, leave it excluded",
                    self.state["permission_reuse_context"]["answer"])
@@ -330,6 +338,7 @@ class ApprovalScenarios(ApprovalCase):
         wider = copy.deepcopy(request)
         wider["proposed_delta"] = "Change production navigation too"
         goals.wait_for_user(self.state, wider)
+        goals.human.evaluate(self.state)
         self.check("wider_scope_not_authorized_by_qualification", "WAITING_FOR_USER", self.state["status"])
         self.check("contract_untouched_by_permission_flow", original_contract,
                    self.state["goal_contract"])

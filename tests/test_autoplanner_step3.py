@@ -74,6 +74,7 @@ class ObligationCase(unittest.TestCase):
         self.apply("requirements_gather", requirements([assumption(category=category)]))
         self.apply("astra_discovery", self.discovery(plan([decision_question("Q0")])))
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         obligation = goals.reject_assumption(self.state, "A1", goals.token(self.state["goal_contract"]))
         self.apply("requirements_gather", requirements())
@@ -249,6 +250,7 @@ class ApprovalGateTests(ObligationCase):
         goals.install_draft(self.state, body(), origin="user_cli_edit")
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
         self.state["deferred_obligations"] = [{"id": "obligation-1", "kind": "remediation", "status": "open"}]
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         with self.assertRaisesRegex(ValueError, "unresolved obligations"):
             goals.approve(self.state, goals.token(self.state["goal_contract"]))

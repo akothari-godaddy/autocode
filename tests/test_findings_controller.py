@@ -86,6 +86,7 @@ class ControllerFindingsTests(unittest.TestCase):
                                           "id": "C2", "criterion": "Reject empty names"})
         body["milestones"][0]["acceptance_criteria"].append("C2")
         runner.goals.install_draft(self.state, body, origin="test")
+        runner.goals.human.evaluate(self.state)
         runner.goals.present(self.state)
         runner.goals.approve(self.state, runner.goals.token(self.state["goal_contract"]))
         first = self.astra_decision("REWORK")

@@ -124,7 +124,7 @@ class WorkflowTests(unittest.TestCase):
         self.enable()
         # Use native draft/approval so no test relies on an unsealed contract.
         body=copy.deepcopy(self.state['goal_contract']['body']);body['acceptance_criteria'][0]['human_review']=True
-        goals.install_draft(self.state,body,origin='test');goals.present(self.state)
+        goals.install_draft(self.state,body,origin='test'); goals.human.evaluate(self.state); goals.present(self.state)
         goals.approve(self.state,goals.token(self.state['goal_contract']))
         self.state['settings'].pop('workflow');self.state['status']='PAUSED_REQUESTED'
         workflow.activate(self.state,approval_source='yes');self.state['status']='RUNNING'

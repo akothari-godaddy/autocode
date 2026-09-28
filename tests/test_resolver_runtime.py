@@ -100,6 +100,7 @@ class ResolverRuntimeTests(unittest.TestCase):
             request = {'kind': kind, 'decision_needed': 'Make a material decision', 'impact': 'Changes work',
                        'discovered': 'Needs decision', 'options': ['yes', 'no'], 'proposed_delta': ''}
             runner.goals.wait_for_user(self.state, request)
+            runner.goals.human.evaluate(self.state)
             before = copy.deepcopy(self.state)
             self.boundary()
             self.assertEqual('WAITING_FOR_USER', self.state['status'])

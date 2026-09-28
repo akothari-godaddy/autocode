@@ -279,6 +279,7 @@ class StaleAndDisagreementTests(TortureBase):
         replacement = body()
         replacement["required_behaviors"] = ["Print a shorter greeting"]
         goals.install_draft(self.state, replacement, origin="user_cli_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         decision = self.decision("CONTINUE")
@@ -433,6 +434,7 @@ class FindingsEvidenceAndUnverifiedTests(TortureBase):
              "human_review": False} for i in range(1, 22)]
         draft["milestones"][0]["acceptance_criteria"] = [row["id"] for row in draft["acceptance_criteria"]]
         goals.install_draft(self.state, draft, origin="user_cli_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         decision = self.decision("CONTINUE")
@@ -566,17 +568,21 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
                    "impact": "The exact test is excluded", "options": ["Repair", "Keep excluded"],
                    "discovered": "An assertion races navigation", "proposed_delta": "Only the fallback test"}
         goals.wait_for_user(self.state, request)
+        goals.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         question = self.state["pending_questions"][0]["id"]
         goals.resolve_permission(self.state, question, "No, leave it excluded")
         self.assertEqual("No, leave it excluded", self.state["answers"][question]["text"])
         goals.wait_for_user(self.state, copy.deepcopy(request))
+        goals.human.evaluate(self.state)
         self.assertEqual("No, leave it excluded", self.state["permission_reuse_context"]["answer"])
         with self.assertRaises(support.Paused):
             goals.wait_for_user(self.state, request)
+            goals.human.evaluate(self.state)
         wider = copy.deepcopy(request)
         wider["proposed_delta"] = "Also change production navigation"
         goals.wait_for_user(self.state, wider)
+        goals.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         old = goals.token(self.state["goal_contract"])
         replacement = body()
@@ -596,6 +602,7 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
             {"id": "M2", "objective": "Farewell", "acceptance_criteria": ["C2"], "depends_on": [], "affected_paths": ["src/farewell.py"]},
             {"id": "M3", "objective": "Shared", "acceptance_criteria": ["C2"], "depends_on": ["M1"], "affected_paths": ["src/greeting.py"]}]
         goals.install_draft(self.state, draft, origin="user_cli_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         decision = self.decision("CONTINUE")
@@ -614,6 +621,7 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
         overlapped["milestones"][1]["affected_paths"] = ["src/greeting.py"]
         overlapped["milestones"][1]["acceptance_criteria"] = ["C1"]
         goals.install_draft(self.state, overlapped, origin="user_cli_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         overlap_decision = self.decision("CONTINUE")
@@ -658,6 +666,7 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
         replacement = body()
         replacement["required_behaviors"] = ["Print Hello only"]
         goals.install_draft(self.state, replacement, origin="user_cli_edit")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.assertNotEqual(old_hash, self.state["goal_contract"]["hash"])

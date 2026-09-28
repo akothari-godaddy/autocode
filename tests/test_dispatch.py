@@ -34,6 +34,7 @@ class DispatchTests(unittest.TestCase):
             {"id": "M3", "objective": "Combine outputs", "depends_on": ["M1", "M2"], "acceptance_criteria": ["C3"],
              "affected_paths": ["combined.txt"]}]
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.state["settings"].update(orchestration=copy.deepcopy(d.DEFAULTS),
@@ -244,6 +245,7 @@ class DispatchTests(unittest.TestCase):
         d.run_workers(self.state, self.run, old)
         draft["constraints"].append("Updated requirement")
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.advance("M1")

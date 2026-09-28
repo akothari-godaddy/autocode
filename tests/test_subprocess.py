@@ -9,6 +9,20 @@ import tempfile
 import unittest
 
 
+def with_resolver_token(args):
+    """Answer the way a user does: with the token AutoResolver published for the current request.
+
+    Tests that exercise a stale or wrong token pass --resolver-token themselves.
+    """
+    args = list(args)
+    if "--resolver-token" in args or "--run-dir" not in args or not any(
+            flag in args for flag in ("--answer", "--delegate", "--delegate-all")):
+        return args
+    state = json.loads((Path(args[args.index("--run-dir") + 1]) / "state.json").read_text())
+    token = (state.get("resolver_human_request") or {}).get("request_token")
+    return [*args, "--resolver-token", token] if token else args
+
+
 class SubprocessFlow(unittest.TestCase):
     new_run_engine_args = ("--engine", "codex")
 
@@ -44,6 +58,7 @@ class SubprocessFlow(unittest.TestCase):
             args = [*self.new_run_engine_args, *args]
         if "--run-dir" not in args and "--in-place" not in args:
             args = [*args, "--in-place"]
+        args = with_resolver_token(args)
         result = subprocess.run([*self.entry, "--workspace", str(self.project), *args], cwd=self.root, env=self.env,
                                 input=answers, capture_output=True, text=True, timeout=60)
         self.assertEqual(expected, result.returncode, result.stdout + result.stderr)

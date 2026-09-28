@@ -61,6 +61,7 @@ class GoalTests(unittest.TestCase):
 
     def approve(self, **kwargs):
         self.draft(**kwargs)
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, g.token(self.state["goal_contract"]))
 
@@ -250,6 +251,7 @@ class GoalTests(unittest.TestCase):
     def answer_permission(self, text="Repair only that test"):
         request = self.permission_request()
         g.wait_for_user(self.state, request)
+        g.human.evaluate(self.state)
         qid = self.state["pending_questions"][0]["id"]
         g.resolve_permission(self.state, qid, text)
         return request, qid
@@ -261,6 +263,7 @@ class GoalTests(unittest.TestCase):
                 request, qid = self.answer_permission(answer)
                 original_contract = copy.deepcopy(self.state["goal_contract"])
                 g.wait_for_user(self.state, copy.deepcopy(request))
+                g.human.evaluate(self.state)
                 self.assertEqual("RUNNING", self.state["status"])
                 self.assertEqual("astra_review", self.state["next_stage"])
                 self.assertEqual([], self.state["pending_questions"])
@@ -269,6 +272,7 @@ class GoalTests(unittest.TestCase):
                 self.assertEqual(original_contract, self.state["goal_contract"])
                 with self.assertRaises(s.Paused) as caught:
                     g.wait_for_user(self.state, request)
+                    g.human.evaluate(self.state)
                 self.assertEqual("PAUSED_PERMISSION_RECONCILIATION", caught.exception.status)
 
     def test_permission_reuse_never_expands_scope_or_trusts_missing_provenance(self):
@@ -286,6 +290,7 @@ class GoalTests(unittest.TestCase):
                 else:
                     answer.pop("request")
                 g.wait_for_user(self.state, request)
+                g.human.evaluate(self.state)
                 self.assertEqual("WAITING_FOR_USER", self.state["status"])
                 self.assertNotEqual(qid, self.state["pending_questions"][0]["id"])
 
@@ -321,6 +326,7 @@ class GoalTests(unittest.TestCase):
             "verification_method": "Execute CLI cases", "human_review": False})
         draft["milestones"][0]["acceptance_criteria"].append("C2")
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
@@ -337,6 +343,7 @@ class GoalTests(unittest.TestCase):
         self.assertTrue(s.completion_ready(self.state, decision, current, require_human_reviews=False))
         runner.apply_result(self.state, "astra_review", decision, {"output": "review"}, self.root, self.run)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertTrue(s.completion_ready(self.state, decision, current))
@@ -361,6 +368,7 @@ class GoalTests(unittest.TestCase):
             "verification_method": "Execute CLI cases", "human_review": False})
         draft["milestones"][0]["acceptance_criteria"] += ["C2", "C3"]
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
@@ -381,6 +389,7 @@ class GoalTests(unittest.TestCase):
                         "a two-human contract reaches the artifact review like a one-human contract")
         runner.apply_result(self.state, "astra_review", decision, {"output": "review"}, self.root, self.run)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertFalse(s.completion_ready(self.state, decision, current),
@@ -399,6 +408,7 @@ class GoalTests(unittest.TestCase):
         draft["milestones"].append({"id": "M2", "objective": "server", "acceptance_criteria": ["C2"],
                                     "depends_on": ["M1"], "affected_paths": ["server/"]})
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
@@ -427,6 +437,7 @@ class GoalTests(unittest.TestCase):
         self.state["settings"]["figma_file"] = "https://www.figma.com/design/Example123/Task"
         request, qid = self.answer_permission()
         g.wait_for_user(self.state, request)
+        g.human.evaluate(self.state)
         g.assign_task(self.state, self.decision(), s.snapshot(self.root))
         prompt, _ = s.context_packet(self.state, "terra", self.run / "state.json")
         self.assertIn('bounded test, parser, or harness repair', prompt)
@@ -454,6 +465,7 @@ class GoalTests(unittest.TestCase):
         for mutate in mutations:
             self.state = copy.deepcopy(original)
             mutate(self.state["validation"])
+            g.human.evaluate(self.state)
             g.present(self.state)
             with self.assertRaises(ValueError):
                 g.approve_review(self.state, "C1", g.review_token(self.state), current)
@@ -473,10 +485,12 @@ class GoalTests(unittest.TestCase):
         self.draft()
         selected = g.token(self.state["goal_contract"])
         with self.assertRaises(ValueError): g.approve(self.state, selected)
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, selected)
         self.assertTrue(g.approved(self.state))
         self.draft()
+        g.human.evaluate(self.state)
         g.present(self.state)
         with self.assertRaises(ValueError): g.approve(self.state, selected)
         self.assertFalse(g.approved(self.state))
@@ -484,6 +498,7 @@ class GoalTests(unittest.TestCase):
     def test_edit_invalidates_approval_validation_and_human_review(self):
         self.approve(human=True)
         current = self.validation()
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         old_token = g.token(self.state["goal_contract"])
@@ -560,6 +575,7 @@ class GoalTests(unittest.TestCase):
         self.approve(human=True)
         current = self.validation()
         self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
@@ -613,6 +629,7 @@ class GoalTests(unittest.TestCase):
 
     def test_changed_evidence_blocks_human_review(self):
         self.approve(human=True); current = self.validation()
+        g.human.evaluate(self.state)
         g.present(self.state)
         selected = g.review_token(self.state)
         (self.run / "sol.jsonl").write_text("changed")
@@ -846,6 +863,7 @@ class GoalTests(unittest.TestCase):
         for field in ("active_stage", "uncertain_artifacts", "pending_report_repair"):
             with self.subTest(field=field):
                 self.draft()
+                g.human.evaluate(self.state)
                 g.present(self.state)
                 selected = g.token(self.state["goal_contract"])
                 self.state.update(status="PAUSED_GOAL_UNAPPROVED", **{field: {"pending": True}})
@@ -853,6 +871,7 @@ class GoalTests(unittest.TestCase):
                     g.approve(self.state, selected)
                 self.state.pop(field)
         self.draft()
+        g.human.evaluate(self.state)
         g.present(self.state)
         self.state.update(status="PAUSED_GOAL_UNAPPROVED")
         with self.assertRaises(ValueError):
@@ -885,6 +904,7 @@ class GoalTests(unittest.TestCase):
             del contract["body"][field]
         contract["hash"] = s.digest({k: contract[k] for k in ("task_id", "revision", "body")})
         original = copy.deepcopy(contract["body"])
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, g.token(contract))
         self.assertTrue(g.approved(self.state))
@@ -905,6 +925,7 @@ class GoalTests(unittest.TestCase):
 
     def test_brief_feedback_is_saved_as_input_and_requires_a_new_approval(self):
         self.draft()
+        g.human.evaluate(self.state)
         g.present(self.state)
         old = g.token(self.state["goal_contract"])
         self.assertEqual(0, self.invoke("--feedback", "Keep Unicode names in the first milestone"))
@@ -975,7 +996,9 @@ class GoalTests(unittest.TestCase):
                    "impact": "C1 needs human acceptance", "options": ["Approve", "Reject"],
                    "proposed_delta": ""}
         g.wait_for_user(self.state, request)
+        g.human.evaluate(self.state)
         question = copy.deepcopy(self.state["pending_questions"][0])
+        g.human.evaluate(self.state)
         g.present(self.state)
         selected = g.review_token(self.state)
         self.assertEqual(["C1"], question["review_criteria"])
@@ -1011,6 +1034,7 @@ class GoalTests(unittest.TestCase):
         self.state.update(status="WAITING_FOR_USER", phase="WAITING_FOR_USER",
                           next_stage="astra_review", user_request=request,
                           pending_questions=[{"id": "runner-reconcile", "question": request["decision_needed"]}])
+        g.human.evaluate(self.state)
         g.present(self.state)
         return current, original_id
 
@@ -1056,10 +1080,12 @@ class GoalTests(unittest.TestCase):
                    "impact": "M5V cannot advance without human review.",
                    "options": ["Approve C1", "Reject C1"], "proposed_delta": ""}
         g.wait_for_user(self.state, request)
+        g.human.evaluate(self.state)
         # This is how the SQL question was saved before review bindings existed.
         question = self.state["pending_questions"][0]
         question.pop("review_criteria")
         question.pop("review_token")
+        g.human.evaluate(self.state)
         g.present(self.state)
         selected = g.review_token(self.state)
         g.approve_review(self.state, "C1", selected, current)
@@ -1077,9 +1103,11 @@ class GoalTests(unittest.TestCase):
                    "impact": "C1 needs human acceptance", "options": ["Approve", "Reject"],
                    "proposed_delta": ""}
         g.wait_for_user(self.state, request)
+        g.human.evaluate(self.state)
         unrelated = {"id": "other", "question": "Choose a project name", "why": "Needed later",
                      "options": [], "proposed_default": ""}
         self.state["pending_questions"].append(unrelated)
+        g.human.evaluate(self.state)
         g.present(self.state)
         selected = g.review_token(self.state)
         with self.assertRaises(ValueError):
@@ -1095,6 +1123,7 @@ class GoalTests(unittest.TestCase):
             "verification_method": "Inspect the saved flow", "human_review": True})
         draft["milestones"][0]["acceptance_criteria"].append("C2")
         g.install_draft(self.state, draft, origin="test")
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve(self.state, self.state["displayed_goal"])
         current = self.validation()
@@ -1102,6 +1131,7 @@ class GoalTests(unittest.TestCase):
             "decision_needed": "Review both criteria.", "impact": "Both need human acceptance",
             "options": ["Approve", "Reject"], "proposed_delta": ""})
         question_id = self.state["pending_questions"][0]["id"]
+        g.human.evaluate(self.state)
         g.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertEqual([], self.state["pending_questions"])
@@ -1118,6 +1148,7 @@ class GoalTests(unittest.TestCase):
             g.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1"],
                 "decision_needed": "Review C1 on the current artifact.", "impact": "Approval required",
                 "options": ["Approve", "Reject"], "proposed_delta": ""})
+            g.human.evaluate(self.state)
             g.present(self.state)
             selected = g.review_token(self.state)
             question_id = self.state["pending_questions"][0]["id"]

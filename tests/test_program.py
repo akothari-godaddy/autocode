@@ -169,6 +169,7 @@ class DeriveTests(unittest.TestCase):
 
     def test_approved_milestones_become_workstreams_plus_integration(self):
         goals.install_draft(self.state, self.two_milestones(), origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         value = program.derive_manifest(self.state, source_run=self.root / "run")
@@ -188,6 +189,7 @@ class DeriveTests(unittest.TestCase):
     def test_every_child_receives_the_complete_approved_contract(self):
         body = goal_fixtures.body(human=True)
         goals.install_draft(self.state, body, origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         value = program.derive_manifest(self.state)
@@ -206,6 +208,7 @@ class DeriveTests(unittest.TestCase):
         body = goal_fixtures.body()
         body["milestones"][0]["id"] = "integration"
         goals.install_draft(self.state, body, origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         value = program.derive_manifest(self.state)

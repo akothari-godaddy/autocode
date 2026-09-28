@@ -504,6 +504,7 @@ class ControllerFindingCases(FindingCase):
         other = body()
         other["intended_outcome"] = "Provide a different fixture CLI for project B"
         goals.install_draft(b_state, other, origin="fixture")
+        goals.human.evaluate(b_state)
         goals.present(b_state)
         goals.approve(b_state, goals.token(b_state["goal_contract"]))
         b_state.update(next_stage="terra", phase="EXECUTING")

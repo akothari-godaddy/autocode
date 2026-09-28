@@ -177,6 +177,7 @@ class InterventionOrderingTests(unittest.TestCase):
 
     def test_cli_goal_approval_cannot_commit_feedback_accepted_during_validation(self):
         self.fixture.draft()
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         original = goals.approve
         def approve_then_submit(state, token):
@@ -201,6 +202,7 @@ class InterventionOrderingTests(unittest.TestCase):
 
     def test_approval_committed_first_allows_later_submission_without_losing_it(self):
         self.fixture.draft()
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         self.persist()
         candidate = copy.deepcopy(self.state)
@@ -235,6 +237,7 @@ class InterventionOrderingTests(unittest.TestCase):
         self.fixture.approve(human=True)
         self.fixture.validation()
         runner.apply_result(self.state, 'astra_review', self.fixture.decision('COMPLETE'), {'output': 'review'}, self.workspace, self.run)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         self.persist()
         candidate = copy.deepcopy(self.state)

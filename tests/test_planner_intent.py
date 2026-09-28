@@ -56,6 +56,7 @@ class PlannerIntentTests(unittest.TestCase):
         current = state("Monitoring only; no controls")
         current["settings"]["joint_planning"] = False
         goals.install_draft(current, body(), origin="fixture")
+        goals.human.evaluate(current)
         goals.present(current)
         goals.approve(current, goals.token(current["goal_contract"]))
         self.assertTrue(goals.approved(current))

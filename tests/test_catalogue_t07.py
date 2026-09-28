@@ -263,6 +263,7 @@ class RepairScenarios(RepairCase):
                       "acceptance_criteria": [], "settings": dict(self.state["settings"])}
         goals.migrate(case_state)
         goals.install_draft(case_state, body(), origin="test")
+        goals.human.evaluate(case_state)
         goals.present(case_state)
         goals.approve(case_state, goals.token(case_state["goal_contract"]))
         case_state["settings"]["limits"] = {"iteration_ceiling": 5, "max_seconds": None,

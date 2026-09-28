@@ -43,6 +43,7 @@ class PreviewCase(unittest.TestCase):
 class PlanPreviewTests(PreviewCase):
     def test_preview_shows_known_assumed_and_undecided_at_a_clarification_stop(self):
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        goals.human.evaluate(self.state)
         text = goals.present(self.state)
         self.assertIn("PLAN PREVIEW for " + goals.token(self.state["goal_contract"]), text)
         handoff = support.digest(self.state["requirements_handoff"]["report"])[:12]
@@ -71,6 +72,7 @@ class PlanPreviewTests(PreviewCase):
     def test_late_revision_preview_has_no_answered_question_or_rejected_assumption(self):
         goals.answer(self.state, "Q1", "CLI")
         self.state["status"] = "WAITING_FOR_USER"
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.reject_assumption(self.state, "A2", goals.token(self.state["goal_contract"]))
         contract = body()

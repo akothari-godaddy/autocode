@@ -11,6 +11,7 @@ from .test_autoplanner_step3 import ObligationCase, decision_question, plan
 
 
 def shown(state):
+    goals.human.evaluate(state)
     goals.present(state)
     return goals.token(state["goal_contract"])
 

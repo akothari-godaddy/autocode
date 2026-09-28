@@ -101,6 +101,7 @@ class M02Detector(unittest.TestCase):
                  "sessions": {}, "stages": [], "history": [], "settings": {}}
         goals.migrate(state)
         goals.install_draft(state, body(), origin="test")
+        goals.human.evaluate(state)
         goals.present(state)
         goals.approve(state, goals.token(state["goal_contract"]))
         state["goal_contract"]["body"]["open_blocking_questions"] = [

@@ -117,6 +117,7 @@ class RequirementPreservationTests(unittest.TestCase):
 
 def shown(state):
     state.setdefault("status", "WAITING_FOR_USER")  # hand-built fixtures; rendering needs a status
+    goals.human.evaluate(state)
     goals.present(state)
     return goals.token(state["goal_contract"])
 

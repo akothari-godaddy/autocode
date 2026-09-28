@@ -184,6 +184,7 @@ class PlanningTests(unittest.TestCase):
     def test_draft_cannot_be_approved_before_both_partners_finish(self):
         state = self.state()
         self.assertEqual("astra_challenge", state["next_stage"])
+        goals.human.evaluate(state)
         goals.present(state)
         with self.assertRaises(ValueError):
             goals.approve(state, state["displayed_goal"])

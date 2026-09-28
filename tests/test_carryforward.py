@@ -54,6 +54,7 @@ class CarryForwardTests(unittest.TestCase):
         self.assertEqual(set(), m.accepted_ids(self.state))
         self.assertEqual([], cf.carry(self.state, s.snapshot(self.root)))
         if approve:
+            goals.human.evaluate(self.state)
             goals.present(self.state)
             goals.approve(self.state, self.state['displayed_goal'])
 
@@ -62,6 +63,7 @@ class CarryForwardTests(unittest.TestCase):
         old = self.accept_fixture()
         self.revise(approve=False)
         self.assertNotIn('validation', self.state)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, self.state['displayed_goal'])
         self.assertEqual({'M1'}, m.accepted_ids(self.state))
@@ -210,7 +212,7 @@ class CarryForwardTests(unittest.TestCase):
         # Make the dependency part of an actually approved source contract.
         draft = copy.deepcopy(self.state['goal_contract']['body'])
         draft['milestones'][1]['depends_on'] = ['M1']
-        goals.install_draft(self.state, draft, origin='test'); goals.present(self.state)
+        goals.install_draft(self.state, draft, origin='test'); goals.human.evaluate(self.state); goals.present(self.state)
         goals.approve(self.state, self.state['displayed_goal']); self.assign()
         self.accept_fixture(); self.assign('M2'); self.accept_fixture('M2')
         baseline = copy.deepcopy(self.state)
@@ -250,6 +252,7 @@ class CarryForwardTests(unittest.TestCase):
                    'validation_plan': ['Run tests']}
         self.revise(lambda body: body.update(initial_task=initial), approve=False)
         self.state['settings']['joint_planning'] = True
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         self.state['planning'] = {'final_token': self.state['displayed_goal']}
         goals.approve(self.state, self.state['displayed_goal'])
