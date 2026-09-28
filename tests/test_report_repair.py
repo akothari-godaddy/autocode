@@ -127,6 +127,19 @@ class RepairTests(unittest.TestCase):
         launch.assert_called_once()
         return launch.call_args.kwargs
 
+    def test_requirements_repair_receives_authoritative_user_sources(self):
+        self.state['task'] = 'Build a planner.'
+        self.state['brief_feedback'] = [{'text': 'Declare the test file in M2.'}]
+        self.state['current_task'] = {'requirements': ['Fix an existing test race.']}
+        self.state['settings']['roles']['requirements'] = {'model': 'requirements-model'}
+        self.state['next_stage'] = 'requirements_gather'
+        self.queue(stage='requirements_gather', role='requirements')
+        prompt = self.repair_request()['prompt']
+        data = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(['Build a planner.', 'Declare the test file in M2.'], data['source_texts'])
+        self.assertNotIn('Fix an existing test race.', data['source_texts'])
+        self.assertIn('current Builder task and approved contract are inherited obligations', prompt)
+
     def assert_repair_blocked(self, status='PAUSED_REPORT_REPAIR_INPUT'):
         attempts = self.state['pending_report_repair']['attempts']
         with patch.object(runner, 'run_role') as launch, self.assertRaises(support.Paused) as error:

@@ -295,6 +295,11 @@ When previous_requirements_handoff exists, retain its still-relevant requirement
 unanswered questions with stable IDs. A scope correction does not answer unrelated
 questions (for example where the real backend lives). Prioritize those blockers over
 new optional choices; do not silently replace them when refreshing the handoff.
+The approved contract and current Builder task are inherited obligations, not new user
+statements. Do not create a new requirement by quoting their milestone objectives,
+Builder instructions, or test descriptions. Keep those obligations in the approved
+contract. New requirements must quote the original task or an exact saved user event;
+use requirement_coverage_checklist for the statements that need fresh coverage.
 Preserve the user's literal requested outcome, even if infeasible. Never translate an
 absolute guarantee into a weaker measurable promise without asking whether the user
 accepts that change. Keep the original in requirements/required_behaviors; put each

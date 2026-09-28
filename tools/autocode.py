@@ -995,6 +995,12 @@ def execute_report_repair(state, run_dir, workspace):
               'implementation, rerun tests, modify files, restart discovery or change the approved goal. '
               'The complete rejected_report and exact validation error are in CURRENT HANDOFF DATA. '
               'Repair that supplied draft directly; do not search raw JSONL or old prompts for its text. '
+              'For a requirements_gather repair, the current Builder task and approved contract are '
+              'inherited obligations, not sources of new requirements. Keep prior handoff requirements '
+              'with their exact IDs and user quotes. Add a new requirement only when its source_quote '
+              'appears verbatim in source_texts in CURRENT HANDOFF DATA. If a draft row instead quotes '
+              'an internal task or milestone, remove that duplicate row while keeping the approved '
+              'obligation in the existing contract. Cover every requirement_coverage_checklist entry. '
               'Its path is an archived, hash-pinned copy, not a request to reconstruct a missing file. '
               'Use archived_paths to update citations to artifacts that moved during archival; '
               'never invent a replacement for missing evidence. '
@@ -1045,6 +1051,12 @@ def execute_report_repair(state, run_dir, workspace):
                                                 **pending.get('latest_rejected', {}).get('archived_paths', {})},
                             'open_findings': findings_ledger.handoff(state),
                             'acceptance_criteria': support.criteria_definition(state.get('acceptance_criteria', [])),
+                            'source_texts': goals.source_texts(state) if original['stage'] == 'requirements_gather' else None,
+                            'requirement_coverage_checklist': [sentence for source in goals.source_texts(state)
+                                                               for sentence in goals.cue_sentences(source)]
+                            if original['stage'] == 'requirements_gather' else None,
+                            'previous_requirements': ((state.get('requirements_handoff') or {}).get('report') or {}).get('requirements', [])
+                            if original['stage'] == 'requirements_gather' else None,
                             'protected_contract': (goals.protected_contract_snapshot(state)
                                 if original['stage'] in ('glm_revise', 'astra_finalize') else None),
                             'report_identity': {

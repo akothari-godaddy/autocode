@@ -510,7 +510,10 @@ def check_requirement_handoff(state, report):
         seen.add(row["id"])
         quote = str(row.get("source_quote", "")).strip()
         if not quote or not any(quote in text for text in sources):
-            raise ValueError(f"Requirement {row['id']} source_quote is not in the task or a saved user event")
+            raise ValueError(f"Requirement {row['id']} source_quote is not in the task or a saved user event. "
+                             "If this text came from the current Builder task or approved contract, "
+                             "keep that existing obligation there instead of adding a new requirement; "
+                             "cite only verbatim task/user-event text for genuinely new requirements")
         quotes.append(quote)
         quote_by_id[row["id"]] = quote
     ignored = report.get("ignored_statements", [])
