@@ -9,26 +9,52 @@ one test per case named after its id, and the runner's proof
 (autocode_regression) checks by name, with no model, that each case has a
 test that passes with the change and did not before (``match_cases``).
 
-Pure functions over saved state. Imports nothing from the runner.
+In a plan with several milestones, a case is due once its milestone is: the
+proof at a milestone checkpoint covers the current milestone (every member of a
+parallel batch) and the milestones already accepted, never a later one
+(``in_scope``). Criteria that belong to no milestone are due once every
+milestone is, that is at final completion.
+
+Pure functions over saved state. Imports nothing from the runner; milestone
+progress is read from ``milestone_progress`` as autocode_milestones saves it.
 """
 from __future__ import annotations
 
 import re
 
 MARK = "test:"
-# Planner-written cases only in a one-milestone plan: a later milestone's tests cannot
-# pass at an earlier milestone's checkpoint, so larger plans keep ordinary criteria.
-MAX_MILESTONES = 1
 
 
 def contract_cases(state: dict) -> list[dict]:
-    """The approved plan's criteria marked ``test:``, as cases (id, text), in a one-milestone plan."""
+    """The approved plan's criteria marked ``test:`` that are due now, as cases (id, text)."""
     body = (state.get("goal_contract") or {}).get("body") or {}
-    if len(body.get("milestones") or []) > MAX_MILESTONES:
-        return []
+    due = in_scope(state)
     return [{"id": row["id"], "text": row.get("criterion", "")} for row in body.get("acceptance_criteria") or []
-            if isinstance(row, dict) and row.get("id")
+            if isinstance(row, dict) and row.get("id") and (due is None or row["id"] in due)
             and str(row.get("verification_method", "")).strip().lower().startswith(MARK)]
+
+
+def in_scope(state: dict) -> set[str] | None:
+    """Criterion ids due at this point of a multi-milestone plan, or None when all are due.
+
+    Due: the criteria of the current task's milestone (or batch members) and of milestones
+    already accepted under this contract. All are due in a one-milestone plan, when the
+    current task names no milestone, and once every milestone is current or accepted.
+    """
+    contract = state.get("goal_contract") or {}
+    milestones = (contract.get("body") or {}).get("milestones") or []
+    task = state.get("current_task") or {}
+    current = set(task.get("milestone_ids") or []) or ({task["milestone_id"]} if task.get("milestone_id") else set())
+    if len(milestones) <= 1 or not current:
+        return None
+    accepted = {mid for row in (state.get("milestone_progress") or {}).values()
+                if row.get("accepted") and row.get("contract_hash") == contract.get("hash")
+                for mid in row.get("milestone_ids") or [row.get("id")]}
+    reached = current | accepted
+    if {milestone.get("id") for milestone in milestones} <= reached:
+        return None
+    return {criterion for milestone in milestones if milestone.get("id") in reached
+            for criterion in milestone.get("acceptance_criteria") or []}
 
 
 def case_text(case: dict) -> str:
@@ -66,11 +92,11 @@ def match_cases(cases: list[dict], test_ids: list[str]) -> dict[str, list[str]]:
 
 
 BUILDER_NOTE = """
-TESTS NAMED IN THE PLAN: every acceptance criterion whose verification_method starts with "test:" is a
-concrete example you must write as its own test, named with that criterion's id (C2 -> test_c2_<what it
-checks>) and asserting exactly the criterion's example. Before completion the runner runs these tests itself:
-each must pass with your change and must not have passed without it. Criteria without "test:" are checked
-by the Validator as usual.
+TESTS NAMED IN THE PLAN: every acceptance criterion of your milestone whose verification_method starts with
+"test:" is a concrete example you must write as its own test, named with that criterion's id (C2 ->
+test_c2_<what it checks>) and asserting exactly the criterion's example. Before the Validator runs, the runner
+runs these tests itself, with those of milestones already accepted: each must pass with the change and must
+not have passed before the run began. Criteria without "test:" are checked by the Validator as usual.
 """
 
 

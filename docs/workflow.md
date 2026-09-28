@@ -342,12 +342,11 @@ approval, orchestrator, Builder, Validator and Completion Owner.
   - **Compatibility.** Runs whose diagnosis has no cases, including bug fixes
     planned without an Investigator and older saved runs, behave as before.
 
-### Small features: tests in plain English
+### Features: tests in plain English
 
-A small feature gets the same kind of proof from its plan. Here "small" means
-a plan with one milestone. The Planner writes every acceptance criterion a test
-can check as one concrete example, and sets its `verification_method` to name
-the test:
+A feature gets the same kind of proof from its plan. The Planner writes every
+acceptance criterion a test can check as one concrete example, and sets its
+`verification_method` to name the test:
 
 > C2: Given calc.py with add(); when sub(5, 3) runs; then it returns 2
 > Verify: test: test_c2_subtracts
@@ -366,9 +365,17 @@ the test:
   revision, because the code didn't exist yet. A bug fix still needs a test that
   runs and fails. As for bug fixes, no test that passed before may fail now.
 - **Completion.** It is refused until every marked criterion has its test.
-- **Several milestones keep ordinary criteria.** A later milestone's tests
-  cannot pass at an earlier milestone's checkpoint, so plans with more than one
-  milestone are not proven this way.
+- **Several milestones.** A test criterion is listed under the milestone that
+  delivers it. At each milestone checkpoint the runner proves:
+  - the tests of that milestone, or of every member of a parallel batch
+  - the tests of milestones already accepted under the approved plan
+
+  It never proves a later milestone's tests, so a milestone's tests must not
+  depend on a later one. A test criterion that belongs to no milestone is
+  proven once every milestone is current or accepted, which is at final
+  completion. A milestone with no test criteria due runs no proof step. A
+  proof made for a smaller set of due tests is never reused after the set
+  grows.
 
 The matching and the rules are in `tools/autocode_test_cases.py`.
 
