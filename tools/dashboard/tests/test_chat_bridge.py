@@ -13,7 +13,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_console import Console, Handler, ThreadingHTTPServer
+from agent_console import Console, Handler, LoopbackHTTPServer
 from dashboard_chat import planning_messages
 
 
@@ -571,7 +571,7 @@ class ChatBridgeTests(ChatFixture, unittest.TestCase):
 class ChatHttpTests(ChatFixture, unittest.TestCase):
     def setUp(self):
         super().setUp()
-        self.server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        self.server = LoopbackHTTPServer(('127.0.0.1', 0), Handler)
         self.server.console = self.console
         self.host = '127.0.0.1:' + str(self.server.server_port)
         self.server.hosts = {self.host, 'localhost:' + str(self.server.server_port)}

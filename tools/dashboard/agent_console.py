@@ -4,6 +4,7 @@ import argparse,json,os,re,selectors,signal,subprocess,sys,threading,time,tomlli
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import parse_qs,urlparse
 sys.dont_write_bytecode=True
 CODEX_DEFAULT_MODELS={'astra':'gpt-5.6-sol','terra':'gpt-5.6-terra','sol':'gpt-5.6-sol','completion':'gpt-5.6-sol'}
@@ -535,6 +536,11 @@ INDEX = Path(__file__).with_name('dashboard.html').read_text()
 STYLE = Path(__file__).with_name('dashboard.css').read_text()
 APP = Path(__file__).with_name('dashboard_app.js').read_text()
 
+class LoopbackHTTPServer(ThreadingHTTPServer):
+ def server_bind(self):
+  # Skip HTTPServer's reverse-DNS getfqdn() of the numeric loopback address: ~35s per bind on some hosts (#92).
+  TCPServer.server_bind(self);self.server_name,self.server_port=self.server_address[:2]
+
 class Handler(BaseHTTPRequestHandler):
  server_version='agent-console';protocol_version='HTTP/1.1'
  def log_message(self,*x):pass
@@ -624,5 +630,5 @@ def main():
   try:
    registry=provider_registry();run_provider=a.provider or registry.default_name();registry.resolve(run_provider)
   except (RuntimeError,ValueError) as error:p.error(str(error))
-  c=Console(a.workspace,a.runner,watch_roots=a.watch_root,watch_depth=a.watch_depth,run_provider=run_provider);c._discovered();s=ThreadingHTTPServer(('127.0.0.1',a.port),Handler);s.console=c;s.hosts={'127.0.0.1:'+str(s.server_port),'localhost:'+str(s.server_port)};print('http://127.0.0.1:'+str(s.server_port),flush=True);s.serve_forever()
+  c=Console(a.workspace,a.runner,watch_roots=a.watch_root,watch_depth=a.watch_depth,run_provider=run_provider);c._discovered();s=LoopbackHTTPServer(('127.0.0.1',a.port),Handler);s.console=c;s.hosts={'127.0.0.1:'+str(s.server_port),'localhost:'+str(s.server_port)};print('http://127.0.0.1:'+str(s.server_port),flush=True);s.serve_forever()
 if __name__=='__main__':main()
