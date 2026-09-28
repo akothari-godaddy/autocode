@@ -54,6 +54,33 @@ The active batch is saved in
 and displays saved batch/worker statuses and worktree/log locations. Those statuses
 are checkpoint reports, not proof that worker processes are currently alive.
 
+## Report-only repair
+
+A completed provider response can fail JSON, schema, or evidence validation without
+requiring implementation to run again. The runner saves OpenCode's selected terminal
+assistant text as `.response.txt` before parsing and the parsed report as `.json`
+before schema/evidence validation. These are rejected artifacts, not accepted results.
+Tool output and earlier assistant messages are not substitutes for the terminal report.
+
+The rejected artifacts are archived and hash-pinned. Repair receives the complete
+report/text inline, its stable path and hash, the exact validation error, and mappings
+for artifact paths moved by archival. It must not reconstruct the report by searching
+raw JSONL or old prompts. A second repair receives the latest rejected draft paired
+with its latest error; the original report and execution receipts remain the immutable
+baseline for commands, failures, evidence, and user decisions.
+
+Report sources are limited to 128 KiB each and the runner-supplied repair prompt to
+256 KiB, including provider-added schema/instructions. Missing, empty, or oversized
+inputs pause as `PAUSED_REPORT_REPAIR_INPUT` before another provider call, without
+charging a repair attempt. Full originals remain available for inspection; report
+content is never silently truncated to satisfy the limit. Old pending OpenCode
+checkpoints with missing report files can materialize their terminal response locally
+from intact, pinned events instead of making the model search the log.
+
+Repairs remain read-only, use the existing attempt limit and role/model routing, and
+cannot approve plans, rerun tests, replace original execution evidence, or convert
+unsupported observations into passing validation.
+
 ## Milestone checkpoints and acceptance
 
 New runs enforce a milestone checkpoint in the runner. Each task names an outcome,

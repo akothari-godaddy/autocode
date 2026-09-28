@@ -6,6 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 import unittest
+from unittest.mock import patch
 import autocode_status as status, autocode_support as s, autocode_context as context
 import autocode_process as processes
 
@@ -122,11 +123,11 @@ class StaleCheckpointTests(unittest.TestCase):
                              'output': str(self.run / 'iterations' / '001' / 'astra_challenge-02.json'),
                              'events': str(self.run / 'iterations' / '001' / 'astra_challenge-02.jsonl')}}, indent=2))
 
-    def run_status(self):
+    def run_status(self, *, env=None):
         return subprocess.run(
             [sys.executable, str((Path(__file__).resolve().parents[1] / "tools" / ('autocode.py'))),
              '--workspace', str(self.workspace), '--run-dir', str(self.run), '--status'],
-            capture_output=True, text=True, check=False)
+            capture_output=True, text=True, check=False, env=env)
 
     def test_recorded_worker_state_distinguishes_live_dead_and_unknown(self):
         live = processes.identity(processes.process_table({os.getpid()})[os.getpid()])
@@ -165,3 +166,25 @@ class StaleCheckpointTests(unittest.TestCase):
         self.assertIsNone(payload['next_action'])
         self.assertTrue(payload['active_stage_workers']['alive'])
         self.assertNotIn('STALE CHECKPOINT', result.stderr)
+
+    def test_status_live_worker_survives_child_timezone_change(self):
+        self.write_state(processes.identity(processes.process_table({os.getpid()})[os.getpid()]))
+        for zone in ('UTC0', 'EST5'):
+            with self.subTest(zone=zone):
+                result = self.run_status(env={**os.environ, 'TZ': zone})
+                self.assertEqual(0, result.returncode, result.stderr)
+                payload = json.loads(result.stdout)
+                self.assertFalse(payload['stale'])
+                self.assertEqual([os.getpid()], payload['active_stage_workers']['live_pids'])
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'macOS psutil clock adjustment')
+    def test_status_live_worker_survives_parent_clock_snapshot_drift(self):
+        backend = processes.psutil._psplatform
+        if not hasattr(backend, 'INIT_BOOT_TIME'):
+            self.skipTest('psutil version has no import-time clock adjustment')
+        # Only the parent sees the old boot-clock snapshot. The real --status
+        # subprocess imports psutil afresh, as after a long-running test suite.
+        for drift in (-2, 2):
+            with self.subTest(drift=drift), patch.object(
+                    backend, 'INIT_BOOT_TIME', backend.boot_time() + drift):
+                self.test_status_reports_a_live_worker_as_current()

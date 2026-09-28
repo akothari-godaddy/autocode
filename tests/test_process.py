@@ -25,6 +25,7 @@ class ProcessTests(unittest.TestCase):
     def test_native_process_table_uses_birth_identity_without_shell_commands(self):
         process = MagicMock()
         process.create_time.return_value = 1790019574.123
+        process._ident = (101, 1790019574.123)
         process.ppid.return_value = 90
         process.status.return_value = 'sleeping'
         process._proc.name.return_value = 'mcp-server-darw'
@@ -38,9 +39,58 @@ class ProcessTests(unittest.TestCase):
         self.assertTrue(ActivityMonitor._mcp_helper(row))
         self.assertEqual(1790019574.123, processes.identity(row)['birth_time'])
         self.assertTrue(processes.matches(processes.identity(row), row))
-        self.assertFalse(processes.matches({**processes.identity(row), 'birth_time': 0}, row))
-        legacy = {key: value for key, value in processes.identity(row).items() if key != 'birth_time'}
+        self.assertEqual(1790019574.123, processes.identity(row)['birth_identity'])
+        self.assertFalse(processes.matches({**processes.identity(row), 'birth_identity': 0}, row))
+        legacy = {key: value for key, value in processes.identity(row).items() if key != 'birth_identity'}
         self.assertTrue(processes.matches(legacy, row))
+        self.assertFalse(processes.matches({**legacy, 'birth_time': 0}, row))
+        legacy.pop('birth_time')
+        self.assertTrue(processes.matches(legacy, row))
+
+    def test_stable_identity_ignores_display_time_but_never_falls_back_on_mismatch(self):
+        row = {'pid': 101, 'started': 'local display', 'group': 101,
+               'birth_time': 1790019574.123, 'birth_identity': 1790019574.123}
+        saved = processes.identity(row)
+        shifted = {**row, 'started': 'different timezone', 'birth_time': row['birth_time'] + 2}
+        self.assertTrue(processes.matches(saved, shifted))
+        for changed in ({'pid': 102}, {'birth_identity': row['birth_identity'] + .001},
+                        {'birth_identity': None}):
+            with self.subTest(changed=changed):
+                self.assertFalse(processes.matches(saved, {**row, **changed}))
+        legacy = {key: value for key, value in saved.items() if key != 'birth_identity'}
+        self.assertFalse(processes.matches(saved, legacy))
+        self.assertFalse(processes.matches(legacy, shifted))
+        self.assertFalse(processes.matches({**saved, 'birth_identity': None},
+                                           {**row, 'birth_identity': None}))
+
+    def test_non_macos_identity_keeps_epoch_time_to_distinguish_reboots(self):
+        process = MagicMock()
+        process._ident = (101, 123.456)
+        process.create_time.return_value = 1790019574.123
+        with patch.object(processes.psutil, 'OSX', False):
+            before = processes._birth_identity(process)
+            process.create_time.return_value += 86400
+            after = processes._birth_identity(process)
+        self.assertEqual(1790019574.123, before)
+        self.assertNotEqual(before, after)
+        row = {'pid': 101, 'birth_identity': before}
+        self.assertFalse(processes.matches(row, {**row, 'birth_identity': after}))
+
+    def test_signal_rechecks_stable_identity_before_killing(self):
+        pid = 2 ** 22 - 2
+        row = {'pid': pid, 'started': 'same display', 'birth_time': 1790019574.123,
+               'birth_identity': 1790019574.123}
+        tree = processes.ProcessTree(pid, lambda _rows: None)
+        with patch.object(processes, 'process_table', return_value={
+                pid: {**row, 'birth_identity': row['birth_identity'] + .001}}), \
+             patch.object(processes.os, 'kill') as kill:
+            tree.signal([row], signal.SIGTERM)
+            kill.assert_not_called()
+        with patch.object(processes, 'process_table', return_value={
+                pid: {**row, 'started': 'changed display', 'birth_time': row['birth_time'] + 2}}), \
+             patch.object(processes.os, 'kill') as kill:
+            tree.signal([row], signal.SIGTERM)
+            kill.assert_called_once_with(pid, signal.SIGTERM)
 
     def test_owned_access_denial_fails_closed_and_a_vanished_pid_is_safe(self):
         with patch.object(processes.psutil, 'Process', side_effect=processes.psutil.AccessDenied(101)):
@@ -55,6 +105,7 @@ class ProcessTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__):
                 process = MagicMock()
                 process.create_time.return_value = 1790019574.123
+                process._ident = (101, 1790019574.123)
                 process.ppid.return_value = 90
                 process.status.return_value = 'sleeping'
                 process._proc.name.side_effect = error
@@ -301,10 +352,19 @@ emit({'type':'tool_use','sessionID':'one','part':{'id':'part1','tool':'bash','st
         self.assertTrue(snapshots)
 
     def test_startup_grace_allows_a_brief_unreported_launch(self):
-        code, expired, _, _ = self.activity_child('time.sleep(.7)\n', idle=.2, tool=2,
-                                                  startup_grace=1)
+        # The quiet interval must exceed idle, with enough grace for CI scheduling.
+        # A near-boundary exit tests host load rather than startup-grace behavior.
+        code, expired, _, reason = self.activity_child('time.sleep(.5)\n', idle=.1, tool=2,
+                                                       startup_grace=3, total=10)
         self.assertEqual(0, code)
-        self.assertFalse(expired)
+        self.assertFalse(expired, reason)
+
+    def test_startup_grace_still_expires_for_a_silent_worker(self):
+        code, expired, _, reason = self.activity_child('time.sleep(30)\n', idle=.1, tool=2,
+                                                       startup_grace=.5, total=10)
+        self.assertNotEqual(0, code)
+        self.assertTrue(expired)
+        self.assertEqual('idle', reason['kind'])
 
     def test_idle_mcp_helper_does_not_delay_provider_inactivity_timeout(self):
         body = """helper = Path('mcp-server-fixture')
@@ -454,7 +514,10 @@ time.sleep(30)
 
     def test_reused_pid_is_not_a_live_owned_process(self):
         row = processes.process_table()[os.getpid()]
-        self.assertEqual([], processes.live_processes([{**processes.identity(row), 'started':'old process'}]))
+        self.assertEqual([], processes.live_processes([
+            {**processes.identity(row), 'birth_identity': row['birth_identity'] - 1}]))
+        legacy = {key: value for key, value in processes.identity(row).items() if key != 'birth_identity'}
+        self.assertEqual([], processes.live_processes([{**legacy, 'started': 'old process'}]))
 
     def test_sigterm_cleans_up_before_interrupt_propagates(self):
         child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], start_new_session=True)

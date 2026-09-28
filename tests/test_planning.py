@@ -33,6 +33,9 @@ class PlanningTests(unittest.TestCase):
         previous_provider = os.environ.pop("AUTOCODE_PROVIDER", None)
         if previous_provider is not None:
             self.addCleanup(os.environ.__setitem__, "AUTOCODE_PROVIDER", previous_provider)
+        no_cli = patch("subprocess.run", side_effect=AssertionError("Pure planning tests must not invoke a CLI"))
+        no_cli.start()
+        self.addCleanup(no_cli.stop)
 
     def test_planner_dependencies_are_validated_and_rendered(self):
         draft = body()
@@ -337,9 +340,10 @@ class PlanningTests(unittest.TestCase):
 
     def test_new_run_uses_joint_planning_without_the_flag(self):
         # Removing implicit joint for a flagless OpenCode new run must fail this test.
+        # main() can rebind runner.opencode; patch the actual consumer, not the compatibility wrapper.
         state = {"workspace": "/tmp/fixture", "iteration": 0}
         with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}), \
-             patch.object(oc, "local_settings", return_value={"engine": "opencode"}):
+             patch.object(runner.opencode, "local_settings", return_value={"engine": "opencode"}):
             settings = runner.configure(self.configure_args(), state)
         self.assertTrue(settings["joint_planning"])
         self.assertEqual("opencode", settings["engine"])
@@ -396,8 +400,8 @@ class PlanningTests(unittest.TestCase):
         runner.configure_joint(settings, self.configure_args(), fresh=False)
         self.assertEqual(saved, settings)
         with patch.object(support, 'local_settings', return_value={'auth_mode': 'ChatGPT'}), \
-             patch.object(oc, 'local_settings', side_effect=AssertionError('No OpenCode transport')), \
-             patch.object(oc, 'check_subscription_routes', side_effect=AssertionError('No OpenCode auth')):
+             patch.object(runner.opencode, 'local_settings', side_effect=AssertionError('No OpenCode transport')), \
+             patch.object(runner.opencode, 'check_subscription_routes', side_effect=AssertionError('No OpenCode auth')):
             runner.check_joint_transports({'settings': settings}, Path('/tmp/fixture'))
         for override in ({'plan_reviewer_model': 'xiaomi-token-plan-sgp/mimo-v2.6-pro'}, {'requirements_model': 'external-model'}):
             with self.assertRaisesRegex(ValueError, 'bare GPT'):
@@ -423,7 +427,7 @@ class PlanningTests(unittest.TestCase):
     def test_new_openai_terra_keeps_opencode_and_existing_discovery_routes(self):
         for effort in (None, "high"):
             with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}), \
-                 patch.object(oc, "local_settings", return_value={"engine": "opencode"}):
+                 patch.object(runner.opencode, "local_settings", return_value={"engine": "opencode"}):
                 settings = runner.configure(self.configure_args(terra_model="xiaomi-token-plan-sgp/mimo-v2.6-pro",
                     terra_reasoning_effort=effort), {"workspace": "/tmp/fixture", "iteration": 0})
             self.assertEqual({"engine": "opencode", "provider": None, "model": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
@@ -442,7 +446,7 @@ class PlanningTests(unittest.TestCase):
 
     def test_existing_glm_terra_cannot_be_silently_rerouted(self):
         with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}), \
-             patch.object(oc, "local_settings", return_value={"engine": "opencode"}):
+             patch.object(runner.opencode, "local_settings", return_value={"engine": "opencode"}):
             settings = runner.configure(self.configure_args(), {"workspace": "/tmp/fixture", "iteration": 28})
         state = {"settings": settings, "sessions": {"terra": "opencode-existing-session"}}
         before = copy.deepcopy(state)

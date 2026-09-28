@@ -84,6 +84,33 @@ Transport/report-format recovery and safety pauses remain runner-owned. Existing
 explicit alternate workflows retain their configured routing; this does not override
 their final-audit-only policy or automatically retry failed integration operations.
 
+## Operational diagnosis
+
+An operator can request the separate read-only `astra_diagnose` stage after a
+recorded repeated Builder report failure:
+
+```sh
+autocode --workspace /path/to/project --run-dir /path/to/run --resume-paused --diagnose-failed-stage
+```
+
+This is an alternative to `--retry-failed-stage`, not an automatic handler for every
+pause. Admission requires the approved task, stopped workers, current source and
+intact pinned evidence; unresolved user decisions and hard budgets still stop it.
+Repetition may stop a repair path before its configured repair allowance is exhausted.
+
+Each fresh diagnostic provider attempt receives a durable reservation at final launch
+admission. Timeout replacements, invalid-output retries, new blockers and new iterations
+consume new reservations. Reloading the same attempt does not consume another, and an
+ambiguous launch is not refunded. The default run-level diagnostic allowance is two;
+explicit resume does not reset it. Report-only format repair has its separate existing
+allowance and remains subject to the parent's time/token limits. The diagnostic limit
+is not a count of every internal model/tool step or separately budgeted report repair.
+
+The model can recommend a bounded retry or escalation, not grant permissions, change
+approved requirements, implement a repair, or declare completion. The controller records
+the policy outcome before applying it. Escalation remains a durable pause; an admitted
+retry returns to the original owner and normal independent validation/review.
+
 ## Joint requirements planning and review
 
 This is the new-run default. Older mixed-CLI OpenCode runs move their Codex roles

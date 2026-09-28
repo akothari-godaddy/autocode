@@ -6,9 +6,11 @@ network and a temporary workspace.
 """
 import json
 import os
+import platform
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import unittest
@@ -23,7 +25,7 @@ from . import test_catalogue_t01 as t01
 from goal_fixtures import approve_fixture, body
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-INSTALLED = Path.home() / ".local" / "bin" / "autocode"
+INSTALLED = Path(sysconfig.get_path("scripts")) / "autocode"
 
 
 def rerun(test_name, timeout=180):
@@ -150,10 +152,8 @@ class CompatScenarios(CompatCase):
 
     def test_cfg09_installed_cli_runs_outside_the_repository(self):
         """CFG-09. New: the real installed entry point, offline, outside the repo."""
-        if not INSTALLED.exists():
-            self.bundle.log("environment_limitation", note="installed CLI not found")
-            self.finish(status=kit.BLOCKED_ENV, summary="installed CLI absent")
-            return
+        self.assertTrue(INSTALLED.is_file(),
+                        f"Install the package with {sys.executable} -m pip install -e .; missing {INSTALLED}")
         with tempfile.TemporaryDirectory() as outside:
             helped = subprocess.run([str(INSTALLED), "--help"], cwd=outside,
                                     capture_output=True, text=True, timeout=60)
@@ -174,11 +174,11 @@ class CompatScenarios(CompatCase):
 
     def test_cfg10_entry_point_aliases_consistent(self):
         """CFG-10. Documented aliases: autocode units + installed scripts."""
-        if not INSTALLED.exists():
-            self.bundle.log("environment_limitation", note="installed CLI not found")
-            self.finish(status=kit.BLOCKED_ENV, summary="installed CLI absent")
-            return
-        units = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True).stdout
+        self.assertTrue(INSTALLED.is_file(),
+                        f"Install the package with {sys.executable} -m pip install -e .; missing {INSTALLED}")
+        helped = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True, timeout=60)
+        self.check("installed_help_exit", 0, helped.returncode)
+        units = helped.stdout
         self.check("unit_aliases_documented", True,
                    all(u in units for u in ("autoplanner", "autocode", "autoreview", "autoresolver")))
         source_aliases = sorted((REPO_ROOT / "tools" / "units").glob("*.py"))
@@ -192,14 +192,18 @@ class CompatScenarios(CompatCase):
 
     def test_cfg11_platform_matrix_reported_honestly(self):
         """CFG-11. Explicit matrix: tested cells distinguished from untested."""
+        current = f"{sys.platform}/{platform.machine()} python {platform.python_version()} (this environment)"
         matrix = {
-            "darwin/arm64 python 3.14 (this environment)": "TESTED",
-            "darwin/x86_64": "UNTESTED",
-            "linux x86_64": "UNTESTED",
+            "darwin/arm64 (other configurations)": "UNTESTED",
+            "darwin/x86_64 (other configurations)": "UNTESTED",
+            "linux/x86_64 (other configurations)": "UNTESTED",
             "windows native": "UNSUPPORTED (posix process assumptions; not claimed)",
             "WSL": "UNTESTED",
+            current: "TESTED",
         }
-        self.check("platform_recorded", True, "darwin" in sys.platform or "Darwin" in os.uname().sysname)
+        self.check("platform_recorded", True, bool(sys.platform and platform.machine()))
+        self.check("only_current_configuration_tested", [current],
+                   [cell for cell, value in matrix.items() if value == "TESTED"])
         for cell, status_value in matrix.items():
             self.bundle.log("platform_cell", platform=cell, status=status_value)
         self.check("untested_cells_not_claimed", True,

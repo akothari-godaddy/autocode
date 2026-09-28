@@ -7,6 +7,7 @@ from dataclasses import fields, is_dataclass
 from collections.abc import Mapping
 from pathlib import Path
 import time
+import uuid
 
 try:
     from . import autocode_resolver as policy, autocode_support as support
@@ -205,9 +206,8 @@ def reset_for_resume(state):
     The per-blocker attempt count is a current-cycle allowance, not a lifetime
     cap: --resume-paused clears it so an operator can retry after fixing the
     underlying cause. That clearing must not be silent. Each reset records how
-    many attempts it erased and folds them into a lifetime total that this
-    function itself never resets, so a future run-level diagnostic cap has a
-    real number to check instead of restarting at zero on every resume.
+    many policy evaluations it erased and folds them into a lifetime total.
+    Provider diagnostic reservations are separate and are never reset here.
     """
     saved = state.get('resolver')
     if not isinstance(saved, dict):
@@ -234,10 +234,11 @@ def reset_for_resume(state):
 # exhausted": whether repair is exhausted is only checked by reject_completed_
 # stage at the moment PAUSED_REPEATED_FAILURE first fires, and that check
 # reads pending_report_repair['attempts'], which --resume-paused's own
-# reset_report_repair_for_resume zeroes on every explicit resume, before this
-# route's own admission check runs. There is currently no marker of exhaustion
-# that survives that reset, so admission enforces repetition count only; do
-# not describe or rely on it as an exhaustion check until one exists. A
+# reset_report_repair_for_resume zeroes on every explicit resume (after this
+# route's admission check, but admission does not read it). There is currently
+# no marker of exhaustion that survives that reset, so admission enforces
+# repetition count only; do not describe or rely on it as an exhaustion check
+# until one exists. A
 # reviewer's own REWORK verdict keeps using the existing, unrelated
 # astra_resolve route.
 DIAGNOSIS_BOUNDARIES = policy.Boundaries(frozenset({'retry', 'escalate'}), frozenset())
@@ -252,54 +253,80 @@ def diagnostic_call_limit(state):
     return limit
 
 
-def charge_diagnostic_dispatch(runner, state, run_dir, workspace):
-    """Durably charge the run-level diagnostic cap once per genuine provider
-    launch of astra_diagnose, not once per admitted attempt.
+def diagnostic_calls_used(state):
+    """Preserve old reservations, including concrete attempts the old counter missed."""
+    saved = state.get('resolver', {})
+    _require(isinstance(saved, Mapping), 'invalid diagnostic ledger')
+    calls = saved.get('diagnostic_calls', 0)
+    _require(type(calls) is int and calls >= 0, 'invalid diagnostic call count')
+    if 'diagnostic_reservations' in saved:
+        reservations = saved['diagnostic_reservations']
+        legacy = saved.get('diagnostic_legacy_calls')
+        _require(type(legacy) is int and legacy >= 0, 'invalid legacy diagnostic call count')
+        _require(isinstance(reservations, list) and all(isinstance(value, str) and value for value in reservations)
+                 and len(reservations) == len(set(reservations)), 'invalid diagnostic reservations')
+        return max(calls, legacy + len(reservations))
+    watermark = saved.get('diagnostic_dispatch_charged_through', 0)
+    _require(type(watermark) is int and watermark >= 0, 'invalid legacy diagnostic watermark')
+    # The shipped watermark was iteration-local and can undercount. Existing
+    # rows establish a lower bound, not an identity for any future dispatch.
+    records = [row for row in state.get('stages', [])
+               if row.get('stage') == 'astra_diagnose' and not row.get('dry_run')]
+    active = state.get('active_stage')
+    if (active and active.get('stage') == 'astra_diagnose'
+            and not any(row.get('output') == active.get('output') for row in records)):
+        records.append(active)
+    return max(calls, watermark, len(records))
 
-    A blocker id is stable across a whole admitted attempt, but a timeout
-    retry archives the timed-out record into state['stages'] and dispatches
-    a brand new provider request (timeout_recovery_route routes astra_diagnose
-    back to itself precisely so that relaunch happens) -- a genuinely new
-    paid call, not a replay of the first one. So the reservation here is NOT
-    keyed by blocker id; it is keyed by how many astra_diagnose stage records
-    (completed or timeout-archived) already exist for the current iteration.
-    Each time that count is about to increase by dispatching a new one, this
-    charges exactly one more call. A crash-then-reconcile that has not yet
-    produced a new stages row sees the same count as before and is a no-op,
-    so this remains idempotent across a restart without undercounting a
-    genuine relaunch.
 
-    Runs before any charge: the same staleness check astra_diagnose's own
-    guard performs at prepare(), so a dispatch that can never actually reach
-    the provider (stale source or contract) pauses without spending budget.
+def check_diagnostic_capacity(runner, state, run_dir):
+    """Refuse a known budget hold before creating provider-request artifacts."""
+    limit = diagnostic_call_limit(state)
+    used = diagnostic_calls_used(state)
+    if used >= limit:
+        reason = f'Operational diagnostic budget exhausted for this run ({used}/{limit})'
+        state.setdefault('resolver', {})['diagnostic_calls'] = used
+        state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=reason)
+        runner.write_json(Path(run_dir) / 'state.json', state)
+        raise support.Paused('PAUSED_REPEATED_FAILURE', reason)
+    return used
+
+
+def charge_diagnostic_dispatch(runner, state, run_dir, workspace, record):
+    """Reserve one provider attempt at run_role's final admission boundary.
+
+    The caller persists this mutation AND active_stage in one checkpoint before
+    Popen. A crash after that checkpoint is uncertain, never refunded or replayed:
+    existing active-stage reconciliation owns it. Rechecking the same saved
+    record is idempotent; a replacement gets a new UUID, regardless of iteration,
+    blocker, or archive length. This helper must not persist a charge on its own.
+
+    Report-only formatting repair is a separate existing bounded allowance,
+    not a fresh diagnostic stage. Its calls still consume time/token budgets.
     """
-    request = state.get('diagnosis_request')
-    if not request or state.get('next_stage') != 'astra_diagnose':
+    if record.get('stage') != 'astra_diagnose' or record.get('report_only') or record.get('dry_run'):
         return
+    request = state.get('diagnosis_request') or {}
     if (request.get('contract_hash') != state['goal_contract']['hash']
             or request.get('source_revision') != support.snapshot(workspace)['revision']):
         raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis needs the current source and approved contract')
     for path, digest in request.get('evidence_hashes', {}).items():
         if not Path(path).is_file() or support.file_hash(path) != digest:
             raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis evidence changed; reconcile before diagnosing')
-    iteration = state.get('iteration')
-    existing_attempts = sum(1 for row in state.get('stages', [])
-                            if row.get('stage') == 'astra_diagnose' and row.get('iteration') == iteration)
-    upcoming_attempt = existing_attempts + 1
     saved = state.setdefault('resolver', {})
-    charged_through = saved.get('diagnostic_dispatch_charged_through', 0)
-    if upcoming_attempt <= charged_through:
+    diagnostic_call_limit(state)
+    diagnostic_calls_used(state)
+    reservation = record.get('diagnostic_reservation_id')
+    if reservation and reservation in saved.get('diagnostic_reservations', []):
         return
-    limit = diagnostic_call_limit(state)
-    diagnostic_calls = saved.get('diagnostic_calls', 0)
-    if diagnostic_calls >= limit:
-        reason = f'Operational diagnostic budget exhausted for this run ({diagnostic_calls}/{limit})'
-        state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=reason)
-        runner.write_json(Path(run_dir) / 'state.json', state)
-        raise support.Paused('PAUSED_REPEATED_FAILURE', reason)
+    diagnostic_calls = check_diagnostic_capacity(runner, state, run_dir)
+    if 'diagnostic_reservations' not in saved:
+        saved['diagnostic_legacy_calls'] = diagnostic_calls
+        saved['diagnostic_reservations'] = []
+    reservation = uuid.uuid4().hex
+    record['diagnostic_reservation_id'] = reservation
+    saved['diagnostic_reservations'].append(reservation)
     saved['diagnostic_calls'] = diagnostic_calls + 1
-    saved['diagnostic_dispatch_charged_through'] = upcoming_attempt
-    runner.write_json(Path(run_dir) / 'state.json', state)
 
 
 def admit_operational_diagnosis(runner, state, run_dir, workspace):
@@ -314,11 +341,8 @@ def admit_operational_diagnosis(runner, state, run_dir, workspace):
     since a later step in the same explicit-resume pass could still raise.
 
     This does NOT itself verify that report-repair's own attempt budget is
-    exhausted (see the module-level note above): the repeated-failure count
-    is the enforced gate. In the common path PAUSED_REPEATED_FAILURE already
-    implies repair was exhausted (reject_completed_stage checked it before
-    pausing), but that fact is not durable across an explicit resume, so it
-    is not re-checked here.
+    exhausted: the repeated-failure count is the enforced gate. Repetition
+    can stop the repair path while that path still has attempts remaining.
     """
     if state.get('status') != 'PAUSED_REPEATED_FAILURE':
         raise ValueError('Diagnosis requires a run paused for repeated failure')
@@ -335,7 +359,7 @@ def admit_operational_diagnosis(runner, state, run_dir, workspace):
     blocker_id = support.digest(selected)
     description = repeated.get('last_error') or 'Repeated Builder report rejection'
     evidence = [record[key] for key in ('output', 'events') if record.get(key)]
-    diagnostic_calls = state.get('resolver', {}).get('diagnostic_calls', 0)
+    diagnostic_calls = diagnostic_calls_used(state)
     limit = diagnostic_call_limit(state)
     if diagnostic_calls >= limit:
         proposal = policy.Proposal('escalate', {'reason': f'Operational diagnostic budget exhausted for this run ({diagnostic_calls}/{limit})'},
@@ -360,7 +384,7 @@ def admit_operational_diagnosis(runner, state, run_dir, workspace):
         'contract_hash': state['goal_contract']['hash'], 'source_revision': record.get('source_revision'),
         'original_stage': record['stage'], 'failure_key': selected['failure_key'], 'blocker_id': blocker_id,
         'description': description, 'repeated_count': repeated['count'], 'evidence': evidence, 'evidence_hashes': pins}
-    # The exhausted report-repair pointer is superseded by the diagnosis; leaving
+    # The stopped report-repair pointer is superseded by the diagnosis; leaving
     # it would make the next dispatch's before_code_stage hook try to execute it
     # against next_stage='astra_diagnose' and pause with PAUSED_STALE_REPORT_ROUTE.
     state.setdefault('report_repair_archive', []).append({

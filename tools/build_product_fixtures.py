@@ -2,6 +2,17 @@
 import textwrap
 
 
+LOOPBACK_HTTP_SERVER = textwrap.dedent('''\
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from socketserver import TCPServer
+    class LoopbackHTTPServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # The fixture binds a numeric loopback address; no reverse DNS is needed.
+            TCPServer.server_bind(self)
+            self.server_name, self.server_port = self.server_address
+    ''')
+
+
 def dashboard(make_plan):
     html='''<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Lifecycle fixture</title>
 <style>body{font:18px system-ui;margin:24px;max-width:700px}button{font:inherit;padding:12px;margin:4px}#status{overflow:visible;white-space:normal}</style>
@@ -19,9 +30,8 @@ def dashboard(make_plan):
 def client_server(make_plan):
     files = {
         'M1': {'shared.py': "USER_PATH = '/users/'\n"},
-        'M2': {'server.py': textwrap.dedent('''\
+        'M2': {'server.py': LOOPBACK_HTTP_SERVER + textwrap.dedent('''\
             import json
-            from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
             from shared import USER_PATH
             class Handler(BaseHTTPRequestHandler):
                 def do_GET(self):
@@ -30,9 +40,17 @@ def client_server(make_plan):
                     raw=json.dumps({'id':self.path[len(USER_PATH):]}).encode()
                     self.send_response(200); self.end_headers(); self.wfile.write(raw)
                 def log_message(self,*args): pass
-            def create(): return ThreadingHTTPServer(('127.0.0.1',0),Handler)
+            def create(): return LoopbackHTTPServer(('127.0.0.1',0),Handler)
             ''')},
-        'M3': {'client.py': "import json\nfrom urllib.request import urlopen\nfrom shared import USER_PATH\ndef fetch(base,uid): return json.load(urlopen(base+USER_PATH+uid))\n"},
+        'M3': {'client.py': textwrap.dedent('''\
+            import json
+            from urllib.request import build_opener, ProxyHandler
+            from shared import USER_PATH
+            urlopen = build_opener(ProxyHandler({})).open
+            def fetch(base,uid):
+                with urlopen(base+USER_PATH+uid,timeout=5) as response:
+                    return json.load(response)
+            ''')},
         'M4': {'integration.py': textwrap.dedent('''\
             from threading import Thread
             from server import create
@@ -54,9 +72,8 @@ def client_server(make_plan):
 
 
 def duplicate_api(make_plan):
-    server=textwrap.dedent('''\
+    server=LOOPBACK_HTTP_SERVER + textwrap.dedent('''\
         import json, threading
-        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
         def create():
             records={}; lock=threading.Lock()
             class Handler(BaseHTTPRequestHandler):
@@ -71,22 +88,26 @@ def duplicate_api(make_plan):
                         value={'id':records[key][1],'count':len(records)}
                     self.send_response(200); self.end_headers(); self.wfile.write(json.dumps(value).encode())
                 def log_message(self,*args): pass
-            return ThreadingHTTPServer(('127.0.0.1',0),Handler)
+            return LoopbackHTTPServer(('127.0.0.1',0),Handler)
         ''')
     oracle=textwrap.dedent('''\
         import concurrent.futures, json, threading
-        from urllib.request import Request,urlopen
+        from urllib.request import Request,build_opener,ProxyHandler
         from urllib.error import HTTPError
         from api import create
         server=create(); t=threading.Thread(target=server.serve_forever,daemon=True); t.start()
         base='http://127.0.0.1:'+str(server.server_port)
+        opener=build_opener(ProxyHandler({}))
         def send(i):
-            return json.load(urlopen(Request(base,data=b'same',headers={'Idempotency-Key':'k'})))
+            with opener.open(Request(base,data=b'same',headers={'Idempotency-Key':'k'}),timeout=5) as response:
+                return json.load(response)
         try:
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool: results=list(pool.map(send,range(20)))
             assert all(r=={'id':1,'count':1} for r in results),results
-            try: urlopen(Request(base,data=b'changed',headers={'Idempotency-Key':'k'}))
-            except HTTPError as e: assert e.code==409
+            try:
+                with opener.open(Request(base,data=b'changed',headers={'Idempotency-Key':'k'}),timeout=5): pass
+            except HTTPError as e:
+                e.close(); assert e.code==409
             else: raise AssertionError('Conflicting payload accepted')
         finally: server.shutdown(); server.server_close(); t.join()
         ''')

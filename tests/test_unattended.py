@@ -25,6 +25,7 @@ class RefusalTests(unittest.TestCase):
 
     def test_operator_subcommands_are_refused(self):
         self.assertIn("intervention", unattended.refused(["intervention", "submit"]))
+        self.assertIn("program", unattended.refused(["program", "run"]))
 
     def test_run_and_status_arguments_are_allowed(self):
         for argv in (["Build a CLI", "--workspace", "/w", "--engine", "gocode"],
