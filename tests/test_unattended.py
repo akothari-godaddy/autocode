@@ -121,7 +121,12 @@ class AnalyzeTests(unittest.TestCase):
                 "human_reviews": {"C1": {"actor": "user_cli", "criterion": "C1"}},
                 "findings_ledger": [{"id": "F1", "status": "resolved", "severity": "high", "source": "validator",
                                      "finding": "Missing comma"}],
-                "stages": [{"stage": "terra", "iteration": 1, "output": "terra-01.json"}]}))
+                "stages": [{"stage": "terra", "iteration": 1, "output": "terra-01.json"},
+                           {"stage": "orchestrator", "iteration": 1},
+                           {"stage": "sol", "role": "sol", "duration_seconds": 30.0,
+                            "metrics": {"provider_tokens": {"input_tokens": 900, "output_tokens": 90}}},
+                           {"stage": "sol_report_repair", "role": "sol", "duration_seconds": 5.0,
+                            "metrics": {"provider_tokens": {"input_tokens": 100, "output_tokens": 10}}}]}))
             out_dir = workspace.parent / (workspace.name + "-analysis")
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -130,7 +135,9 @@ class AnalyzeTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             for expected in ("TASK_COMPLETE", "Greets the world", "**C1** [verified, human-reviewed]: Prints a greeting",
                              "Verification: run app.py", "Evidence: ran it", "F1 [resolved, high, validator",
-                             "| terra |", "`terra-01.json`", "app.py", "Untracked files (new, not committed): `new.py`", "Builder change"):
+                             "| terra |", "`terra-01.json`", "app.py", "Untracked files (new, not committed): `new.py`", "Builder change",
+                             "| sol | 2 | 35.0 | 1000/100 |", "| **total** | 3 | 35.0 | 1000/100 |",
+                             "Report-format repair calls: 1."):
                 self.assertIn(expected, report)
             self.assertNotIn(".autocode/", report.split("Untracked files (new, not committed):")[1].splitlines()[0])
             diff = (out_dir / "changes.diff").read_text()

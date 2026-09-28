@@ -77,9 +77,16 @@ the progressive testing plan.
 The driver also registers the [task-type scenarios](scenarios.md) (bug fix,
 feature, architecture, multi-service program, design-reference UI). Their oracles
 have offline positive and targeted negative controls in `tests/test_scenario_oracles.py`; `--score-only PATH` scores a
-workspace delivered by any route, and `--mode program` drives a scenario through
-[`autocode program`](program.md). Every task-type baseline is `NOT_RUN` until a live
-result is recorded.
+workspace delivered by any route, `--mode program` drives a scenario through
+[`autocode program`](program.md), and `--mode fix` drives a bug-fix scenario through
+[`autocode fix`](fix.md) and records its model calls, seconds and tokens. Every
+task-type baseline is `NOT_RUN` until a live result is recorded.
+
+`autocode fix` has its own offline coverage: `tests/test_fix_verify.py` runs the
+verifier's positive control and its negative controls (no test, a test that passes on
+the unfixed code, removed or deleted tests, a broken suite, pre-existing failures), and
+`tests/test_fix_flow.py` drives the CLI end to end with the scripted
+`tools/fake_fix_agent.py`, including the one-call cost guard for a clear bug.
 
 In program mode, `--i-authorize-live-model-spend` authorizes model calls only.
 `--authorize-deployment` is a separate opt-in for deployment workstreams and is never
