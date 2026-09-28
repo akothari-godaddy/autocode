@@ -10,12 +10,13 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
-# Modules caught in one import cycle with autocode.py on 2026-09-26, plus the four
-# master brought in with it on 2026-09-28 (d0b0ce9). Taking a module out of the
+# Modules caught in one import cycle with autocode.py on 2026-09-26, plus those master
+# brought in with it on 2026-09-28 (d0b0ce9, 332c318). Taking a module out of the
 # cycle is progress (remove it here); adding one fails.
 TANGLED = frozenset({
     "autocode", "autocode_baseline", "autocode_builder_policy", "autocode_carryforward",
-    "autocode_fix", "autocode_planning_graph", "autocode_program", "autocode_verify",
+    "autocode_planning_graph", "autocode_program", "autocode_verify",
+    "autocode_planning_artifacts", "autocode_regression", "autocode_resolver_human", "autocode_reviewer_fallback",
     "autocode_context", "autocode_dispatch", "autocode_failures", "autocode_figma",
     "autocode_findings", "autocode_goals", "autocode_interventions", "autocode_milestones",
     "autocode_orchestrator", "autocode_planning", "autocode_registry", "autocode_resolver_runtime",
@@ -23,8 +24,8 @@ TANGLED = frozenset({
     "autopilot", "units.autocode", "units.autoplanner", "units.autoresolver", "units.autoreview", "units.common",
 })
 
-# Line counts on 2026-09-28, after merging master at d0b0ce9. Lower these when a module shrinks.
-MAX_LINES = {"autocode.py": 2896, "autocode_goals.py": 1672, "autocode_support.py": 1038, "autopilot.py": 1004}
+# Line counts on 2026-09-28, after merging master at 332c318. Lower these when a module shrinks.
+MAX_LINES = {"autocode.py": 3843, "autocode_goals.py": 1882, "autocode_support.py": 1077, "autopilot.py": 1135}
 
 
 def source_modules() -> dict[str, Path]:

@@ -200,7 +200,8 @@ def run_checks(run: dict | None, *, workflow: str, no_build: bool = False, no_re
         asked = len(run.get("answers") or [])
         checks.append(Check("question_budget", asked <= max_questions, f"asked {asked}, allowed {max_questions}"))
     if max_model_stages is not None:
-        count = len([stage for stage in stages if stage != "orchestrator"])
+        model = run.get("model_stages")
+        count = len(model) if model is not None else len([stage for stage in stages if stage != "orchestrator"])
         checks.append(Check("stage_budget", count <= max_model_stages, f"{count} model stages, allowed {max_model_stages}"))
     return checks
 

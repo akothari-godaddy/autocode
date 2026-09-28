@@ -173,7 +173,11 @@ class InvestigationPassTests(EpisodeCase):
                                   "requirements": [], "acceptance_criteria": [], "validation_plan": []}}
         self.apply("astra_finalize", {"contract": final, "summary": "Needs a decision", "decisions": [],
                                       "contract_changes": [], "requirement_trace": []})
+        # The question is queued; the runner's writer boundary publishes it to the user.
+        self.assertEqual("RESOLVER_PENDING", self.state["status"])
+        goals.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
+        self.assertEqual("clarification", self.state["resolver_human_request"]["scope"])
         self.assertEqual("decision", self.state["pending_questions"][0]["kind"])
         self.assertNotIn("investigation_request", self.state)
 
@@ -190,6 +194,7 @@ class EpisodeBudgetTests(EpisodeCase):
 
     def test_non_delegated_answer_starts_a_new_episode_with_one_new_pass(self):
         goals.install_draft(self.state, body(questions=True), origin="glm_draft")
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         first = goals.clarification_episode(self.state)
         first["investigation_used"] = True
         goals.answer(self.state, "Q1", "CLI")
@@ -200,6 +205,7 @@ class EpisodeBudgetTests(EpisodeCase):
 
     def test_delegation_resumes_without_replenishing_the_pass(self):
         goals.install_draft(self.state, body(questions=True), origin="glm_draft")
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         episode = goals.clarification_episode(self.state)
         episode["investigation_used"] = True
         goals.answer(self.state, "Q1", "accept default", delegated=True)
@@ -209,6 +215,7 @@ class EpisodeBudgetTests(EpisodeCase):
 
     def test_feedback_and_edited_goal_start_new_episodes(self):
         goals.install_draft(self.state, body(questions=True), origin="glm_draft")
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         first = goals.clarification_episode(self.state)["id"]
         goals.feedback(self.state, "Also support a web page")
         second = self.state["clarification_episode"]

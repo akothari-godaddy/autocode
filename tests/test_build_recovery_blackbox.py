@@ -178,7 +178,9 @@ class RecoveryBlackbox(unittest.TestCase):
         state = self.state()
         self.assertEqual('WAITING_FOR_USER', state['status'])
         qid = state['pending_questions'][0]['id']
-        self.invoke('autocode_build', ['--run-dir', str(self.run), '--answer', qid + '=No. Do not access any external account.', '--no-chat'])
+        token = state['resolver_human_request']['request_token']  # answers name the published request
+        self.invoke('autocode_build', ['--run-dir', str(self.run), '--answer', qid + '=No. Do not access any external account.',
+                                       '--resolver-token', token, '--no-chat'])
         self.assertIn('No. Do not access', json.dumps(self.state()['answers']))
         self.assertEqual(self.original_contract, self.state()['goal_contract'])
         self.assertFalse((self.project / 'server/health.py').exists())

@@ -116,34 +116,55 @@ class RequirementPreservationTests(unittest.TestCase):
 
 
 def shown(state):
-    state.setdefault("status", "WAITING_FOR_USER")  # hand-built fixtures; rendering needs a status
+    """The runner's writer boundary publishes the queued request, then the user sees the goal."""
+    goals.human.evaluate(state)
     goals.present(state)
     return goals.token(state["goal_contract"])
 
 
 def _contract(**overrides):
-    contract = {"task_id": "t", "revision": 1, "body": {"open_blocking_questions": []}, "hash": "h",
-               "approval_status": "draft", "approval_event": None}
+    contract = {"task_id": "task-1", "revision": 1, "body": {"open_blocking_questions": []},
+                "approval_status": "draft", "approval_event": None}
     contract.update(overrides)
+    # AutoResolver only publishes against a sealed contract.
+    contract["hash"] = goals.s.digest({key: contract[key] for key in ("task_id", "revision", "body")})
     return contract
+
+
+def ask(current, questions):
+    """A clarification stop: the draft declares the questions and the runner queues them."""
+    current["goal_contract"] = _contract(**{**current.get("goal_contract", {}),
+                                            "body": {"open_blocking_questions": list(questions)}})
+    goals.human.queue(current, "clarification", {"stage": "astra_discovery"}, questions=questions)
+
+
+def ask_permission(current):
+    """A post-approval WAITING_FOR_USER stop: the runner queues a scoped permission request."""
+    goals.human.queue(current, "permission", {"stage": "terra"}, request={
+        "kind": "permission", "discovered": "A write outside the workspace is needed",
+        "impact": "The build cannot finish without it", "decision_needed": "Allow the write?",
+        "options": ["Allow", "Deny"], "proposed_delta": ""})
+
+
+def await_approval(current):
+    """The goal-approval stop (non-joint planning, so no final-plan evidence is required)."""
+    current["settings"]["joint_planning"] = False
+    goals.human.queue(current, "goal_approval", {"stage": "astra_discovery"}, status="AWAITING_GOAL_APPROVAL")
 
 
 class DelegateAllTests(unittest.TestCase):
     def test_blocks_atomically_when_any_pending_question_cannot_be_bulk_delegated(self):
         current = state()
-        current["goal_contract"] = _contract()
-        current["pending_questions"] = [
+        ask(current, [
             {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes", "delegable": True},
-            {"id": "Q2", "question": "q2", "why": "w", "options": [], "proposed_default": "", "delegable": True}]
+            {"id": "Q2", "question": "q2", "why": "w", "options": [], "proposed_default": "", "delegable": True}])
         with self.assertRaisesRegex(ValueError, "Q2"):
             goals.delegate_all(current, shown(current))
         self.assertEqual({}, current.get("answers", {}))
 
     def test_blocks_when_delegable_is_absent_even_with_a_default(self):
         current = state()
-        current["goal_contract"] = _contract()
-        current["pending_questions"] = [
-            {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes"}]
+        ask(current, [{"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes"}])
         with self.assertRaisesRegex(ValueError, "Q1"):
             goals.delegate_all(current, shown(current))
 
@@ -151,9 +172,8 @@ class DelegateAllTests(unittest.TestCase):
         current = state()
         question = {"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": "yes",
                     "delegable": True, "category": "technical"}
-        current["goal_contract"] = _contract(body={"open_blocking_questions": [question]},
-                                             approval_status="approved", approval_event={"kind": "goal_approval"})
-        current["pending_questions"] = [question]
+        current["goal_contract"] = _contract(approval_status="approved", approval_event={"kind": "goal_approval"})
+        ask(current, [question])
         goals.delegate_all(current, shown(current))
         self.assertEqual("yes", current["answers"]["Q1"]["text"])
         self.assertEqual("delegated", current["answers"]["Q1"]["kind"])
@@ -165,39 +185,42 @@ class DelegateAllTests(unittest.TestCase):
 class RejectAssumptionTests(unittest.TestCase):
     def test_cost_category_becomes_a_human_decision_obligation(self):
         current = state()
-        current["status"] = "WAITING_FOR_USER"
         current["goal_contract"] = _contract(approval_status="approved", approval_event={"kind": "goal_approval"})
         current["requirements_handoff"] = {"report": {"proposed_assumptions": [
             {"id": "A1", "text": "Use the cheaper model", "kind": "inferable", "category": "cost",
              "convention_ref": "", "rationale": "", "supports": ["R1"]}]}, "output": "x.json"}
-        obligation = goals.reject_assumption(current, "A1", shown(current))
+        ask_permission(current)
+        displayed = shown(current)
+        self.assertEqual("WAITING_FOR_USER", current["status"])
+        obligation = goals.reject_assumption(current, "A1", displayed)
         self.assertEqual("human_decision", obligation["kind"])
         self.assertEqual(["R1"], obligation["supports"])
         self.assertEqual("reject_assumption", current["user_events"][-1]["kind"])
         self.assertEqual("draft", current["goal_contract"]["approval_status"])
         self.assertIsNone(current["goal_contract"]["approval_event"])
-        # Rejection moved status to RUNNING; simulate reaching a later checkpoint
-        # with the same handoff still current, and confirm the duplicate is caught.
-        current["status"] = "WAITING_FOR_USER"
+        # Rejection moved status to RUNNING; reach a later published checkpoint with
+        # the same handoff still current, and confirm the duplicate is caught.
+        self.assertEqual("RUNNING", current["status"])
+        ask(current, [{"id": "Q1", "question": "q1", "why": "w", "options": [], "proposed_default": ""}])
         with self.assertRaisesRegex(ValueError, "already has an open rejection"):
             goals.reject_assumption(current, "A1", shown(current))
 
     def test_technical_category_becomes_a_remediation_obligation(self):
         current = state()
-        current["status"] = "AWAITING_GOAL_APPROVAL"
         current["goal_contract"] = _contract()
         current["requirements_handoff"] = {"report": {"proposed_assumptions": [
             {"id": "A2", "text": "A CLI is sufficient", "kind": "inferable", "category": "technical",
              "convention_ref": "tools/x.py:1", "rationale": "existing pattern", "supports": []}]}, "output": "x.json"}
+        await_approval(current)
         obligation = goals.reject_assumption(current, "A2", shown(current))
         self.assertEqual("remediation", obligation["kind"])
         self.assertEqual([], obligation["supports"])
 
     def test_legacy_or_unknown_assumption_id_cannot_be_rejected(self):
         current = state()
-        current["status"] = "WAITING_FOR_USER"
         current["goal_contract"] = _contract()
         current["requirements_handoff"] = {"report": {"proposed_assumptions": ["Use a local CLI"]}, "output": "x.json"}
+        await_approval(current)
         with self.assertRaisesRegex(ValueError, "Unknown or legacy"):
             goals.reject_assumption(current, "A1", shown(current))
 

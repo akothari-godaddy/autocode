@@ -31,7 +31,6 @@ except ImportError:
     import autocode_workflows as workflows
 
 STAGE = workflows.INVESTIGATE_STAGE
-PLANNER_STAGE = "astra_discovery"
 NOTES_PREFIX = "docs/bugs/"
 OUTCOMES = ("reproduced", "not_reproduced")
 TEXT = {"type": "string"}
@@ -156,7 +155,7 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
         return
     # A large fix is planned from the diagnosis: the bug report already is the requirements,
     # so the run skips requirements gathering. Plan review and the user's approval still apply.
-    state.update(status="RUNNING", phase="PLANNING", next_stage=PLANNER_STAGE)
+    state.update(status="RUNNING", phase="PLANNING", next_stage=workflows.planner_stage(state))
 
 
 def large_correction(state: dict) -> dict | None:
@@ -194,6 +193,8 @@ def correction_contract(state: dict) -> dict:
     return {
         "intended_outcome": "The reported misbehavior no longer happens: " + found["observed"],
         "intended_user": "The person who reported the bug",
+        # The runner then proves the regression test itself (autocode_regression).
+        "task_kind": "bugfix",
         "deliverables": owned,
         "required_behaviors": [found["invariant"]],
         "important_failure_cases": [found["observed"]],

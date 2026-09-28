@@ -164,7 +164,9 @@ def _freeze(value: Any) -> Any:
 
 
 def _validate_body(body: Any) -> bool:
-    if not isinstance(body, Mapping) or set(body) not in (_REQUIRED, _KNOWN):
+    if not isinstance(body, Mapping) or set(body) - {"task_kind"} not in (_REQUIRED, _KNOWN):
+        return False
+    if body.get("task_kind", "build") not in ("build", "bugfix"):  # optional job type (autocode_goals.TASK_KINDS)
         return False
     if not all(isinstance(body.get(key), str) and body[key].strip() for key in ("intended_outcome", "intended_user")):
         return False

@@ -113,6 +113,18 @@ class RunChecksTests(unittest.TestCase):
         self.assertEqual({"plan_reviewed", "plan_approved_by_user"}, failed)
 
 
+    def test_the_stage_budget_counts_only_model_stages(self):
+        run_record = {"view": {"workflow": "bugfix"}, "cli_calls": ["start"], "answers": [],
+                      "stages": ["recognize_workflow", "investigate_bug", "orchestrator", "terra", "regression_proof",
+                                 "sol", "astra_review"],
+                      "model_stages": ["recognize_workflow", "investigate_bug", "terra", "sol", "astra_review"]}
+        check, = [c for c in oracle.run_checks(run_record, workflow="bugfix", max_model_stages=5) if c.name == "stage_budget"]
+        self.assertTrue(check.ok, check.detail)
+        del run_record["model_stages"]  # older records: everything but orchestration counts
+        check, = [c for c in oracle.run_checks(run_record, workflow="bugfix", max_model_stages=5) if c.name == "stage_budget"]
+        self.assertFalse(check.ok)
+
+
 class FakeSchemaTests(unittest.TestCase):
     """The scripted model answers "none" for any required field its script does not know yet."""
 

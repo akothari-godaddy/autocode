@@ -149,6 +149,7 @@ def run_record(driver: Driver, state: dict) -> dict:
         except DriveError:
             view = {}
     return {"status": state.get("status", ""), "view": view, "stages": metrics(state)["stage_names"],
+            "model_stages": metrics(state)["model_stage_names"],
             "answers": driver.answers, "cli_calls": [step["kind"] for step in driver.steps]}
 
 

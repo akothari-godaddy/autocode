@@ -11,13 +11,14 @@ import json
 from pathlib import Path
 try:
     from .. import autocode_support as support, autocode_goals as goals, autocode_bug_job as bug_job
-    from .. import autocode_discuss_job as discuss_job, autocode_stuck_job as stuck_job
+    from .. import autocode_discuss_job as discuss_job, autocode_stuck_job as stuck_job, autocode_failures as failures
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
     import autocode_bug_job as bug_job
     import autocode_discuss_job as discuss_job
     import autocode_stuck_job as stuck_job
+    import autocode_failures as failures
 from . import autoplanner
 from .common import ModelRequest, capped_route, execution_request
 
@@ -66,7 +67,8 @@ def start_small_correction(state, workspace):
     except ImportError:
         import autocode_dispatch as dispatch
     body = bug_job.correction_contract(state)
-    goals.install_draft(state, body, origin=bug_job.ORIGIN)
+    # Approved here under the recorded policy, so no approval request is queued for the user.
+    goals.install_draft(state, body, origin=bug_job.ORIGIN, queue_human=False)
     goals.validate_body(state, body, ready=True)
     contract = state["goal_contract"]
     event = {"kind": "goal_approval", "actor": "workflow_policy", "policy": bug_job.SMALL_FIX_POLICY,
@@ -85,10 +87,17 @@ def start_small_correction(state, workspace):
 def guard(state, workspace):
     goals.execution_guard(state)
     request = state.get('resolution_request') or {}
-    if (request.get('contract_hash') != state['goal_contract']['hash']
+    output = request.get('source_output', request.get('review_output'))
+    if (not state.get('current_task', {}).get('id')
+            or request.get('contract_hash') != state['goal_contract']['hash']
             or request.get('task_id') != state.get('current_task', {}).get('id')
+            or not output or output not in request.get('evidence_hashes', {})
             or request.get('source_revision') != support.snapshot(workspace)['revision']):
         raise support.Paused('PAUSED_STALE_HANDOFF', 'Repair diagnosis needs the current reviewed source and task')
+    if request.get('diagnosis_output'):
+        raise support.Paused('PAUSED_RESOLVER', 'The saved blocker already has a diagnosis; reconcile it before another resolver call')
+    if failures.repeated(state, {'stage': 'astra_resolve', 'source_revision': request['source_revision']}):
+        raise support.Paused('PAUSED_REPEATED_FAILURE', 'Resolver failure limit reached for this source; no additional diagnosis authorized')
     for path, digest in request.get('evidence_hashes', {}).items():
         if not Path(path).is_file() or support.file_hash(path) != digest:
             raise support.Paused('PAUSED_STALE_HANDOFF', 'Repair evidence changed; review again before resolving')
@@ -132,13 +141,19 @@ def prepare(state, stage, state_path, schema_dir):
     schema['properties']['diagnosis'] = goals.STRING
     schema['required'].append('diagnosis')
     prompt = ('You are AUTORESOLVER, a read-only failure diagnostician, not a Builder or completion owner. '
-              'Inspect the rejected build, review findings and exact evidence. Return a nonempty diagnosis '
+              'Inspect the source report, rejected build, review findings and exact evidence. '
+              'When resolution_request.provenance is source_report_not_accepted_review, its source_report '
+              'is a Builder or Validator proposal, not accepted independent validation. Do not promote '
+              'its checks, criterion statuses, or claims into accepted review evidence. Return a nonempty diagnosis '
               'and one bounded REWORK next_task with defect evidence and concrete validation_plan retests. '
               'The runner exports this task as a one-node repair DAG. Preserve the whole integrated batch. '
               'Return the complete unchanged acceptance_criteria list from the handoff; select the repair subset only in next_task.acceptance_criteria. '
               'Criterion statuses and evidence remain owned by the reviewer, not the resolver. '
               'Do not approve work, change requirements, weaken tests, or modify source. '
-              'If scope or permission must change, return BLOCKED with a structured user_request; never grant it yourself.\n'
+              'Resolve ordinary technical blockers within the approved scope before asking. If no safe '
+              'bounded repair is available, explain the investigated evidence and remaining smallest '
+              'decision in BLOCKED with a structured user_request. If scope or permission must change, '
+              'return BLOCKED; never grant it yourself. This only proposes a human question, not execution authority.\n'
               + instruction + '\nResolver constraint overrides completion choices: only REWORK or BLOCKED.\n'
               + 'CURRENT HANDOFF DATA\n' + json.dumps(data, indent=2))
     metrics = {**request.metrics, 'estimated_prompt_tokens': (len(prompt) + 3) // 4}
@@ -149,6 +164,8 @@ def validate(state, value, record, workspace):
     guard(state, workspace)
     if record.get('changed_files') or record['source_revision'] != state['resolution_request']['source_revision']:
         raise support.Paused('PAUSED_STALE_HANDOFF', 'Resolver must leave the reviewed source unchanged')
+    if record.get('rejected') or record.get('exit_code', 0) != 0 or not Path(record.get('output') or '').is_file():
+        raise support.Paused('PAUSED_STALE_HANDOFF', 'Resolver diagnosis requires its saved successful read-only output')
     if value.get('status') not in ('REWORK', 'BLOCKED') or not value.get('diagnosis', '').strip():
         raise ValueError('Resolver requires a diagnosis and a REWORK or BLOCKED decision')
     if value['status'] == 'REWORK' and (not value.get('evidence') or value.get('next_task', {}).get('kind') != 'implement'):

@@ -6,6 +6,8 @@ profile fields match, or when the profile is the variable under test. Keep the
 """
 from __future__ import annotations
 
+import copy
+
 # Effort keys are semantic roles, not stage ids: the driver maps stages to these
 # so a profile stays valid when internal stage names change.
 EFFORT_ROLES = ("requirements", "planner", "reviewer", "builder", "validator",
@@ -74,7 +76,30 @@ PROFILES = {
             "resolver": "high",
         },
     },
+    # User-authorized OpenAI-only campaign route (2026-09-28). Distinct model
+    # families keep plan and implementation verification independent.
+    "openai-independent": {
+        "provider": "opencode",
+        "role_models": {
+            "requirements": "openai/gpt-5.6-sol",
+            "planner": "openai/gpt-5.6-sol",
+            "reviewer": "openai/gpt-6-astra",
+            "builder": "openai/gpt-5.6-terra",
+            "validator": "openai/gpt-5.6-sol",
+            "completion": "openai/gpt-5.6-sol",
+            "resolver": "openai/gpt-6-astra",
+        },
+        "effort": {
+            "requirements": "medium", "planner": "medium", "reviewer": "high",
+            "builder": "medium", "validator": "high", "completion": "high", "resolver": "high",
+        },
+        "note": "OpenAI-only campaign: Sol plans/verifies, Astra reviews/resolves, Terra builds.",
+    },
 }
+
+
+# Master's 2026-09-26 effort-campaign profiles (glm53-mimo-*) derived from glm53-mimo;
+# removed with every MiMo route (user 2026-09-27). VALIDATION.md keeps their results.
 
 
 def resolve(name: str) -> dict:

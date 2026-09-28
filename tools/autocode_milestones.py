@@ -302,7 +302,7 @@ def dispatch_guard(state, stage):
             raise s.Paused("PAUSED_MILESTONE_REPLAN", "The Plan Reviewer must reassess repeated failed checks before another writer attempt")
 
 
-def handle_gate(state, error, current):
+def handle_gate(state, error, current, *, origin=None):
     """Keep a rejected advancement in the review loop; never replay the Builder."""
     if error.status in ("PAUSED_MILESTONE_STALLED", "PAUSED_MILESTONE_BUDGET"):
         state.update(status=error.status, phase="PAUSED_OR_BLOCKED", next_stage="astra_review", stop_reason=str(error))
@@ -316,9 +316,13 @@ def handle_gate(state, error, current):
         except ImportError:
             import autocode_goals as goals
         required = set(scope(state)["acceptance_criteria"])
-        state.update(status="WAITING_FOR_USER", phase="WAITING_FOR_USER", next_stage="astra_review",
-                     user_request={"kind": "human_review", "criteria": sorted(required.intersection(goals.missing_human_reviews(state))),
-                                   "decision_needed": "Review the current milestone artifact before advancing"})
+        goals.wait_for_user(state,
+            {"kind": "human_review", "criteria": sorted(required.intersection(goals.missing_human_reviews(state))),
+             "decision_needed": "Review the current milestone artifact before advancing",
+             "impact": "Advancement requires the declared human acceptance of this validated milestone",
+             "options": [], "discovered": str(error), "proposed_delta": ""},
+            origin=origin or {'stage': 'milestone_gate', 'source_revision': current['revision']},
+            next_stage='astra_review')
         return
     row = progress(state)
     row["rejected_advances"] = row.get("rejected_advances", 0) + 1

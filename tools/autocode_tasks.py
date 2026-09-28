@@ -12,13 +12,14 @@ import sys
 
 try:
     from . import autocode_support as support, autocode_workspaces as workspaces
+    from . import autocode_resolver_human as human
 except ImportError:
     import autocode_support as support
     import autocode_workspaces as workspaces
+    import autocode_resolver_human as human
 
 
 TERMINAL_CODE = {'TASK_COMPLETE'}
-WAITING_CODE = {'WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL'}
 TERMINAL_UI = {'COMPLETE'}
 
 
@@ -79,6 +80,11 @@ def new_state(source, manifest, project):
 
 
 def refresh_task(record):
+    # Cached flow status is not authority to ask on behalf of a child.
+    record.update(human_request_authorized=False, human_escalation=None,
+                  pending_questions=[], user_request=None)
+    if record['status'] == 'WAITING':
+        record['status'] = 'PAUSED'
     run = record.get('run_dir')
     if not run:
         return
@@ -86,13 +92,17 @@ def refresh_task(record):
     if not path.is_file():
         return
     saved = json.loads(path.read_text())
+    saved['run_dir'] = str(Path(run).resolve())
+    public = human.projection(saved)
     status = saved.get('status')
     record['run_status'] = status
+    record.update({key: public[key] for key in (
+        'human_request_authorized', 'human_escalation', 'pending_questions', 'user_request')})
     if status in (TERMINAL_UI if record['mode'] == 'ui' else TERMINAL_CODE):
         record.update(status='COMPLETE', finished_at=support.now())
         if record['mode'] == 'ui':
             record['figma_file'] = saved.get('figma_file')
-    elif status in WAITING_CODE:
+    elif public['human_request_authorized']:
         record['status'] = 'WAITING'
     elif status not in ('RUNNING', None):
         record['status'] = 'PAUSED'
@@ -148,7 +158,7 @@ def launch_task(project, flow_dir, lane, task, record, lane_state):
     record.update(exit_code=result.returncode, finished_at=support.now())
     refresh_task(record)
     if record['status'] == 'RUNNING':
-        record['status'] = 'FAILED' if result.returncode not in (0, 2) or not record.get('run_dir') else 'WAITING'
+        record['status'] = 'FAILED' if result.returncode not in (0, 2) or not record.get('run_dir') else 'PAUSED'
     return record
 
 
@@ -156,12 +166,15 @@ def summarize(manifest, state, state_path):
     lanes = []
     for lane in manifest['lanes']:
         saved = state['lanes'][lane['id']]
+        for task in lane['tasks']:
+            refresh_task(saved['tasks'][task['id']])
         tasks = [{**task, **saved['tasks'][task['id']]} for task in lane['tasks']]
         lanes.append({'id': lane['id'], 'workspace': saved['workspace'], 'tasks': tasks})
     statuses = [task['status'] for lane in lanes for task in lane['tasks']]
     state['status'] = ('COMPLETE' if all(value == 'COMPLETE' for value in statuses) else
                        'BLOCKED' if any(value == 'FAILED' for value in statuses) else
-                       'WAITING' if any(value in ('WAITING', 'PAUSED') for value in statuses) else 'RUNNING')
+                       'WAITING' if 'WAITING' in statuses else
+                       'PAUSED' if 'PAUSED' in statuses else 'RUNNING')
     return {'flow': state['name'], 'status': state['status'], 'state_file': str(state_path), 'lanes': lanes}
 
 

@@ -33,7 +33,7 @@ were archived at tag `archive/pre-restructure-2026-09-26`
    `autocode_support.py` and `autopilot.py` have line limits recorded in
    `tests/test_architecture.py`. New behavior goes in a new module with one
    purpose. Lower the recorded limit when you shrink one.
-2. **Do not join the import cycle.** 31 modules currently import each other
+2. **Do not join the import cycle.** 34 modules currently import each other
    through `autocode.py` (listed in `tests/test_architecture.py`). A new module
    must depend only on lower-level modules, never on `autocode`, `autopilot` or
    anything that imports them. Pass what you need as arguments instead.
@@ -52,8 +52,7 @@ were archived at tag `archive/pre-restructure-2026-09-26`
    the status view in `autocode_run_view`. It must not import `autocode.py`
    internals or read `state.json`.
 6. **The status view is a contract.** Add fields to `autocode_run_view.view`;
-   never rename or remove one. Command-line flags are defined in
-   `autocode_args.py`, not in `autocode.py`.
+   never rename or remove one.
 
 ## Names
 

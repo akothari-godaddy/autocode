@@ -27,7 +27,6 @@ except ImportError:
     import autocode_workflows as workflows
 
 STAGE = workflows.DESIGN_CHECK_STAGE
-PLANNER_STAGE = "astra_discovery"
 STOP_STATUS = "PAUSED_DESIGN_CONFLICT"
 TEXT = {"type": "string"}
 TEXTS = {"type": "array", "items": TEXT}
@@ -120,7 +119,7 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
         return
     state["design_constraint"] = {"design_document": design, "summary": value["summary"],
                                   "constraints": value["constraints"]}
-    state.update(status="RUNNING", phase="PLANNING", next_stage=PLANNER_STAGE)
+    state.update(status="RUNNING", phase="PLANNING", next_stage=workflows.planner_stage(state))
 
 
 def owns(state: dict) -> bool:

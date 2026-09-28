@@ -19,9 +19,12 @@ def compact_run(row):
                   'exit_code', 'rejected', 'interrupted', 'timed_out')
     keep = ('workspace', 'project_workspace', 'task_branch', 'run', 'created_at', 'task', 'phase',
             'status', 'stage', 'iteration', 'state_error', 'error', 'stop_reason', 'goal_token',
-            'questions', 'user_request', 'review_token', 'review_criteria', 'human_reviews',
+            'questions', 'user_request', 'human_request_authorized', 'human_escalation',
+            'review_token', 'review_criteria', 'human_reviews',
             'model_settings', 'monitor')
     result = {key: row.get(key) for key in keep if key in row}
+    if row.get('human_request_authorized') is not True:
+        result.update(human_request_authorized=False, human_escalation=None, questions=[], user_request=None)
     result['goal'] = {key: goal.get(key) for key in ('origin', 'revision', 'approval_status') if key in goal}
     if 'intended_outcome' in body:
         result['goal']['body'] = {'intended_outcome': body['intended_outcome']}

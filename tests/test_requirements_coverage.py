@@ -27,6 +27,21 @@ class CoverageTests(unittest.TestCase):
             goals.check_requirement_handoff({'task': '- The Validator must inspect images.'},
                                             self.report('The Validator must approve images.'))
 
+    def test_builder_task_cannot_be_cited_as_new_user_requirement(self):
+        inherited = 'Fix the scheduling-dependent race in the conversation test.'
+        state = {'task': 'Build a planner.',
+                 'current_task': {'requirements': [inherited]},
+                 'brief_feedback': [{'text': 'Declare the test file in M2.'}]}
+        report = {'requirements': [
+            {'id': 'R1', 'text': 'Declare the test file',
+             'source_quote': 'Declare the test file in M2.'},
+            {'id': 'R2', 'text': inherited, 'source_quote': inherited}],
+            'ignored_statements': []}
+        with self.assertRaisesRegex(ValueError, 'keep that existing obligation'):
+            goals.check_requirement_handoff(state, report)
+        report['requirements'].pop()
+        goals.check_requirement_handoff(state, report)
+
     def test_all_missing_sentences_are_reported_without_truncation(self):
         sentences = ['You must preserve the reference.', 'You must inspect ' + 'every image pair ' * 12 + '.']
         with self.assertRaises(ValueError) as caught:

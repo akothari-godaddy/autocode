@@ -1,6 +1,7 @@
 // Current checkpoint authority and chronological history, exercised with saved-state scenarios.
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),path=require('node:path');
 const source=fs.readFileSync(path.join(__dirname,'../dashboard_app.js'),'utf8');
+const projectedRun=require('./resolver_fixture');
 const context=vm.createContext({URL,URLSearchParams});
 vm.runInContext(source.slice(source.indexOf('const basename ='),source.indexOf("document.addEventListener('focusin'"))+source.slice(source.indexOf('function concise('),source.indexOf('function badge('))+source.slice(source.indexOf('function jointPlanning('),source.indexOf('function setView('))+source.slice(source.indexOf('function interruptedAttempt('),source.indexOf('function renderPrimaryAction('))+source.slice(source.indexOf('function messageTime('),source.indexOf('function icon('))+source.slice(source.indexOf('function taskMessages('),source.indexOf('function settleThreadScroll(')),context);
 const approved={run:'/fixture/current',status:'PAUSED_REQUESTED',stage:'terra',iteration:16,goal:{revision:4,approval_status:'approved'},stages:[{stage:'terra'}],model_settings:{roles:{terra:'zai-coding-plan/glm-5.3'}},monitor:{next_stage:'terra',limits_known:true,iteration_limit:18,live:{state:'none'}},planning_messages:[{text:'Older draft needs approval',created_at:'2026-09-19T08:00:00Z'}]};
@@ -14,20 +15,20 @@ const running={...approved,status:'RUNNING',active_stage:{stage:'terra'},monitor
 assert.equal(context.taskDecision(running).required,false);
 assert.equal(context.taskDecision(running).action.kind,'pause');
 assert.equal(context.taskDecision(running).action.label,'Pause after current step');
-const ready={status:'AWAITING_GOAL_APPROVAL',goal_token:'r5:current',goal:{revision:5,origin:'astra_finalize',approval_status:'draft'},model_settings:{joint_planning:true}};
+const ready=projectedRun('goal_approval',{goal:{revision:5,origin:'astra_finalize',approval_status:'draft'},model_settings:{joint_planning:true}});
 assert.equal(context.taskDecision(ready).title,'Approve plan revision 5');
 assert.equal(context.taskDecision(ready).required,true);
 assert.match(context.taskDecision(ready).after,/records approval; Start building or Resume task/);
 assert.equal(context.taskPhase(ready),'approval');
 assert.equal(context.taskDecision({...ready,status:'RUNNING',stage:'glm_revise',active_stage:{stage:'glm_revise'},monitor:{live:{state:'alive'}},goal:{...ready.goal,origin:'glm_revise'}}).required,false);
 assert.equal(context.taskDecision({...ready,status:'PAUSED_REQUESTED'}).required,false);
-const question={...ready,status:'WAITING_FOR_USER',questions:[{id:'q1',question:'Which scope?'}]};
+const question=projectedRun('clarification',{...ready,questions:[{id:'q1',question:'Which scope?'}]});
 assert.equal(context.taskDecision(question).title,'Answer 1 question');
 assert.equal(context.taskDecision(question).action.kind,'answer');
 assert.equal(context.taskDecision({...ready},true).required,false);
-const review={...approved,status:'WAITING_FOR_USER',user_request:{kind:'human_review'},review_token:'new-result',review_criteria:[{id:'R1',criterion:'Inspect output'}],human_reviews:{R1:{token:'old-result'}}};
+const review=projectedRun('human_review',{...approved,user_request:{kind:'human_review'},review_token:'new-result',review_criteria:[{id:'R1',criterion:'Inspect output'}],human_reviews:{R1:{token:'old-result'}}});
 assert.equal(context.taskDecision(review).title,'Review the finished work');
-assert.equal(context.taskDecision({...review,human_reviews:{R1:{token:'new-result'}}}).title,'Your review is saved');
+assert.equal(context.taskDecision({...review,status:'RUNNING',human_request_authorized:false,human_escalation:null,human_reviews:{R1:{token:'new-result'}}}).title,'Your review is saved');
 assert.equal(context.taskDecision({...approved,status:'TASK_COMPLETE'}).required,false);
 // Runner-owned orchestration has no provider PID or active_stage. A retained
 // batch reports activity, while a bare next_stage is only a saved checkpoint.
@@ -80,9 +81,10 @@ workflow=now.children.find(row=>row.tag==='ol');
 assert.equal(workflow.children.length,5);
 assert.equal(workflow.children.find(row=>row['aria-current']==='step').textContent,'Build');
 const messages=context.taskMessages({draft_messages:[{text:'Initial idea',created_at:'2026-09-19T01:00:00Z'}],planning_messages:[{text:'Draft',created_at:'2026-09-19T02:00:00Z'},{text:'Revision',created_at:'2026-09-19T04:00:00Z'}],answers:{q1:{text:'Saved answer',at:'2026-09-19T03:00:00Z',question:{question:'Which scope?'}},q2:{text:'Duplicate receipt',at:'2026-09-19T05:00:00Z'}},chat_messages:[{text:'Latest answer',question_id:'q2',created_at:'2026-09-19T05:00:00Z'}]});
-assert.deepEqual(Array.from(messages,m=>m.text),['Initial idea','Draft','Saved answer','Revision','Latest answer']);
-assert.equal(messages[2].question_text,'Which scope?');
-assert.equal(messages[1].planning_history,true);
+assert.deepEqual(Array.from(messages,m=>m.text),['Initial idea','Saved answer','Latest answer']);
+assert.equal(messages[1].question_text,'Which scope?');
+assert.equal(messages.some(message=>message.planning_history),false,'Internal planning drafts are inspected separately, not published as questions');
+assert.match(source,/Internal planning reports \(not human requests\)/);
 assert.match(source,/Review recovery/,'interrupted work starts with explicit review');
 assert.match(source,/Inspect interrupted attempt/);
 assert.match(source,/Recover saved work/);
@@ -90,8 +92,8 @@ assert.match(source,/Resume separately/);
 console.log('Current approval authority, resume decisions, workflow phase, model identity, and conversation ordering passed.');
 
 const progress=context.taskMessages({planning_messages:[{text:'Plan',created_at:'2026-09-19T01:00:00Z'}],progress_messages:[{id:'progress-1',role:'assistant',speaker:'Builder',text:'Fix routing',created_at:'2026-09-19T02:00:00Z'},{id:'progress-2',role:'assistant',speaker:'Validator',text:'Blocked: test failed',created_at:'2026-09-19T03:00:00Z'}]});
-assert.deepEqual(Array.from(progress,m=>m.text),['Plan','Fix routing','Blocked: test failed']);
-assert.equal(progress[2].speaker,'Validator');
+assert.deepEqual(Array.from(progress,m=>m.text),['Fix routing','Blocked: test failed']);
+assert.equal(progress[1].speaker,'Validator');
 assert.match(source.slice(source.indexOf('function renderConversation('),source.indexOf('function renderConversation(')+500),/progress_messages/);
 
 const failedReport={...approved,status:'PAUSED_REPORT_REPAIR_LIMIT',stop_reason:'Bounded report-only repair attempts exhausted',questions:[{id:'old',question:'Old approval?'}]};

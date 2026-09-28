@@ -8,10 +8,11 @@ from pathlib import Path
 import re
 
 try:
-    from .. import autocode_goals as goals, autocode_support as s, autocode_workflows as workflows
-    from .. import autocode_bug_job as bug_job
+    from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
+    from .. import autocode_bug_job as bug_job, autocode_workflows as workflows
 except ImportError:
     import autocode_goals as goals
+    import autocode_planning_artifacts as artifacts
     import autocode_support as s
     import autocode_bug_job as bug_job
     import autocode_workflows as workflows
@@ -52,6 +53,14 @@ missing prerequisite or ask the user to authorize it.
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
 RECOGNIZE = workflows.STAGE
+V2_STAGES = ("requirements", "plan", "plan_review", "plan_revise", "plan_finalize")
+V2_STAGE_ROLES = {
+    "requirements": "requirements",
+    "plan": "glm",
+    "plan_revise": "glm",
+    "plan_review": "plan_reviewer",
+    "plan_finalize": "plan_reviewer",
+}
 S, SS, obj = goals.STRING, goals.STRINGS, goals.obj
 CONCERN = obj({"id": S, "concern": S, "evidence_refs": SS, "requested_change": S,
                "acceptance_test": S, "blocking": {"type": "boolean"}})
@@ -106,6 +115,15 @@ SCHEMAS = {
                            "conflict_resolutions": {"type": "array", "items": CONFLICT_RESOLUTION},
                            "requirement_trace": {"type": "array", "items": TRACE}}),
 }
+SCHEMAS.update({
+    "requirements": obj({"requirements": goals.REQUIREMENTS_BODY_SCHEMA, "summary": S}),
+    "plan": obj({"contract": goals.PLANNING_BODY_SCHEMA, "summary": S}),
+    "plan_review": obj({"summary": S, "concerns": {"type": "array", "items": CONCERN}}),
+    "plan_revise": obj({"contract": goals.PLANNING_BODY_SCHEMA, "summary": S,
+                         "responses": {"type": "array", "items": RESPONSE}}),
+    "plan_finalize": obj({"contract": goals.PLANNING_BODY_SCHEMA, "summary": S,
+                           "decisions": {"type": "array", "items": DECISION}}),
+})
 # Optional for old saved reports; new prompts require this whenever intent must change.
 SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
     "type": "array", "items": obj({"requirement_id": S, "proposal": S, "question_id": S})}
@@ -138,18 +156,38 @@ for _stage in ("astra_challenge", "astra_finalize"):
     SCHEMAS[_stage]["properties"]["obligation_decisions"] = {"type": "array", "items": OBLIGATION_DECISION}
 
 
+# The job type travels requirements -> contract -> approval. Every planning stage still runs;
+# for a bug fix they plan and review a small, defect-shaped plan instead of a feature.
+SCHEMAS["requirements_gather"]["properties"]["task_kind"] = goals.TASK_KIND
+JOB_TYPE_POLICY = goals.JOB_TYPE_POLICY
+
+
 def enabled(state):
     return bool(state.get("settings", {}).get("joint_planning"))
 
 
 def is_planning(state, stage):
+    stages = V2_STAGES if state.get("settings", {}).get("planning_flow") == "v2" else STAGES
     # Recognition is a read-only planning stage on every run, joint or not.
-    return stage == RECOGNIZE or (enabled(state) and stage in STAGES)
+    return stage == RECOGNIZE or (enabled(state) and stage in stages)
+
+
+def entry_stage(state):
+    return "requirements" if state.get("settings", {}).get("planning_flow") == "v2" else "requirements_gather"
+
+
+def next_after(state, stage):
+    if state.get("settings", {}).get("planning_flow") == "v2":
+        return dict(zip(V2_STAGES, V2_STAGES[1:])).get(stage)
+    return {"requirements_gather": "astra_discovery", "astra_discovery": "astra_challenge",
+            "astra_challenge": "glm_revise", "glm_revise": "astra_finalize"}.get(stage)
 
 
 def role_for(state, stage):
     if stage == RECOGNIZE:
         return "requirements" if "requirements" in state.get("settings", {}).get("roles", {}) else "astra"
+    if state.get("settings", {}).get("planning_flow") == "v2" and stage in V2_STAGE_ROLES:
+        return V2_STAGE_ROLES[stage]
     if is_planning(state, stage) and stage == "requirements_gather":
         return "requirements"
     if is_planning(state, stage) and stage in ("astra_discovery", "glm_revise"):
@@ -170,6 +208,11 @@ def route_for(state, stage, role=None):
         return "requirements"
     if stage == RECOGNIZE:
         return role_for(state, stage)
+    if state.get("settings", {}).get("planning_flow") == "v2" and stage in V2_STAGE_ROLES:
+        route = V2_STAGE_ROLES[stage]
+        if route not in state.get("settings", {}).get("roles", {}):
+            raise s.Paused("PAUSED_PLANNING_ROUTE", f"v2 planning requires the configured {route} role")
+        return route
     role = role or role_for(state, stage)
     roles = state.get("settings", {}).get("roles", {})
     if stage in ("astra_challenge", "astra_finalize") and "plan_reviewer" in roles:
@@ -197,41 +240,74 @@ def start(state):
 
 
 def review_call_limit(state):
-    limit = state.get("planning", {}).get("review_call_limit", 2)
-    if type(limit) is not int or limit < 2:
-        raise ValueError("Planning review call limit must be an integer of at least 2")
+    limit = state.get("planning", {}).get("review_call_limit",
+                state.get("settings", {}).get("planning_review_call_limit", 2))
+    if type(limit) is not int or (limit != 0 and limit < 2):
+        raise ValueError("Planning review call limit must be 0 (unlimited) or an integer of at least 2")
     return limit
 
 
 def set_review_call_limit(state, limit):
-    """An explicit current-cycle allowance, not a refund or approval."""
+    """An explicit allowance, preserving usage and approval boundaries."""
+    try:
+        from .. import autocode_resolver_human as human
+    except ImportError:
+        import autocode_resolver_human as human
+    published = human.current(state)
+    issued_pause = None
+    if published and published['scope'] == 'operational_exhaustion':
+        issued_pause = state['resolver']['human_escalations'][published['request_id']]['identity']['proposal']['origin'].get('pause_status')
+    unlimited_checkpoint = (type(limit) is int and limit == 0
+                            and state.get('status') in ('PAUSED_STAGE_ABANDONED', 'PAUSED_REQUESTED'))
     if (not enabled(state) or not state.get("planning")
-            or state.get("status") != "PAUSED_PLANNING_BUDGET"
-            or state.get("next_stage") not in ("astra_challenge", "astra_finalize")
+            or (not unlimited_checkpoint and (
+                (state.get("status") != "PAUSED_PLANNING_BUDGET" and issued_pause != 'PAUSED_PLANNING_BUDGET')
+                or state.get("next_stage") not in ("astra_challenge", "astra_finalize")))
             or any(state.get(key) for key in ("active_stage", "pending_report_repair", "uncertain_artifacts"))):
         raise ValueError("Planning allowance requires a reconciled PAUSED_PLANNING_BUDGET checkpoint")
     previous = review_call_limit(state)
-    if type(limit) is not int or limit < previous or limit < state["planning"]["astra_calls"]:
-        raise ValueError("Planning review call limit must be a finite integer no smaller than the current limit and usage")
-    if limit == previous:
+    if type(limit) is not int or (limit != 0 and (limit < 2 or limit < previous or limit < state["planning"]["astra_calls"])):
+        raise ValueError("Planning review call limit must be 0 (unlimited) or an integer no smaller than the current limit and usage")
+    if limit == previous and state['planning'].get('review_call_limit_origin') == 'user_explicit':
         return
     state["planning"]["review_call_limit"] = limit
+    state['planning']['review_call_limit_origin'] = 'user_explicit'
+    if limit == 0:
+        state['settings']['planning_review_call_limit'] = 0
+    human.supersede_operational(state, 'Operator explicitly selected the planning review allowance')
     state.setdefault("user_events", []).append({
         "kind": "planning_budget_change", "actor": "user_cli", "at": s.now(),
         "previous_limit": previous, "limit": limit, "calls_used": state["planning"]["astra_calls"],
         "stage": state["next_stage"], "contract_token": goals.token(state["goal_contract"])})
 
 
-def charge(state, stage):
-    if stage not in ("astra_challenge", "astra_finalize"):
+def charge(state, stage, record=None, workspace=None):
+    if stage not in ("astra_challenge", "astra_finalize", "plan_review", "plan_finalize"):
         return
     planning = state["planning"]
     limit = review_call_limit(state)
-    if planning["astra_calls"] >= limit:
+    if limit and planning["astra_calls"] >= limit:
+        if planning.get('recovery_review_grants'):
+            try:
+                from .. import autocode_resolver_runtime as resolver
+            except ImportError:
+                import autocode_resolver_runtime as resolver
+            grant = resolver.validate_operational_grant(state, stage, workspace)
+            if (not record or not record.get('output') or record.get('stage') != stage
+                    or planning.get('recovery_review_calls_used', 0) >= resolver.MAX_PLANNING_RECOVERY_GRANTS
+                    or planning['astra_calls'] >= limit + resolver.MAX_PLANNING_RECOVERY_GRANTS):
+                raise s.Paused('PAUSED_RESOLVER_OPERATIONAL', 'Planning recovery admission is exhausted or unbound')
+            grant.update(consumed=True, consuming_output=record['output'],
+                         consuming_iteration=record.get('iteration'), consumed_at=s.now())
+            record['planning_recovery_grant'] = grant['id']
+            record['resolver_receipt_id'] = grant['id']
+            planning['recovery_review_calls_used'] = planning.get('recovery_review_calls_used', 0) + 1
+            planning['astra_calls'] += 1
+            return
         raise s.Paused("PAUSED_PLANNING_BUDGET", f"{planning['astra_calls']}/{limit} plan-review calls used. "
-                       "Inspect the saved exchange; use --planning-review-call-limit N to explicitly increase "
-                       "this cycle's total allowance, then --resume-paused; or --feedback for a new cycle. "
-                       "No automatic budget extension or approval.")
+                       "AutoResolver could not authorize another safe operational call. "
+                       "Retained requirements and review evidence are unchanged; no approval is implied. "
+                       "User feedback is needed only if the plan or requirements must change.")
     planning["astra_calls"] += 1
 
 
@@ -244,13 +320,13 @@ def _coverage(rows, concerns):
             raise ValueError("Planning responses and decisions must be substantive")
 
 
-def apply(state, stage, value, record):
+def apply(state, stage, value, record, *, run_dir=None):
     """Compatibility entry; planning transitions belong to Autopilot."""
     try:
         from .. import autopilot
     except ImportError:
         import autopilot
-    return autopilot.apply_planning(state, stage, value, record)
+    return autopilot.apply_planning(state, stage, value, record, run_dir=run_dir)
 
 
 PROMPTS = {
@@ -264,6 +340,11 @@ When previous_requirements_handoff exists, retain its still-relevant requirement
 unanswered questions with stable IDs. A scope correction does not answer unrelated
 questions (for example where the real backend lives). Prioritize those blockers over
 new optional choices; do not silently replace them when refreshing the handoff.
+The approved contract and current Builder task are inherited obligations, not new user
+statements. Do not create a new requirement by quoting their milestone objectives,
+Builder instructions, or test descriptions. Keep those obligations in the approved
+contract. New requirements must quote the original task or an exact saved user event;
+use requirement_coverage_checklist for the statements that need fresh coverage.
 Preserve the user's literal requested outcome, even if infeasible. Never translate an
 absolute guarantee into a weaker measurable promise without asking whether the user
 accepts that change. Keep the original in requirements/required_behaviors; put each
@@ -360,6 +441,25 @@ Unresolved decisions MUST appear in open_blocking_questions, never silently beco
 There is no further debate round. The user must approve this exact plan before implementation.
 """,
 }
+PROMPTS.update({
+    "requirements": """You are the independently configured Requirements Planner. Return only the strict
+requirements artifact. Do not create a technical approach, milestones, dependency graph, or implementation.
+Blocking human questions are proposals for AutoResolver adjudication; never claim they were issued or answered.
+""",
+    "plan": """You are the independently configured Technical Planner. Read the exact verified requirements
+artifact and delta. Return a complete technical plan with declared dependencies and affected_paths. Do not implement.
+""",
+    "plan_review": """You are the independently configured Plan Reviewer. Read the exact verified plan artifact
+and delta. Return concise evidence-based concerns. Do not ask the human directly and do not implement.
+""",
+    "plan_revise": """You are the Technical Planner. Read the exact verified review artifact and delta, respond
+to every concern, and return the revised complete plan. Do not implement.
+""",
+    "plan_finalize": """You are the independent Plan Reviewer. Read the exact verified revision artifact and
+delta, settle every concern, and return the final plan. Blocking questions remain private proposals for AutoResolver.
+Do not implement.
+""",
+})
 
 
 QUESTION_POLICY = """
@@ -453,6 +553,9 @@ def capture_command():
 
 
 def context(state, stage, state_path):
+    predecessor = None
+    if stage in V2_STAGES:
+        predecessor = artifacts.verify_predecessor(state, stage, Path(state_path).parent)
     exchange = copy.deepcopy(state.get("planning", {}))
     for entry in exchange.get("reports", {}).values():
         # Current contract is included once. Older full drafts stay retrievable
@@ -480,10 +583,32 @@ def context(state, stage, state_path):
                   if (entry.get("report") or {}).get("conflicts")],
               "saved_answers": state.get("answers", {}), "brief_feedback": state.get("brief_feedback", []),
                "planning": exchange,
-               "budget": f"{review_call_limit(state)} plan-review calls in this cycle, including failed attempts; "
-                         "only an explicit operator action can extend the allowance"}
+               "budget": f"{review_call_limit(state) or 'Unlimited'} plan-review calls in this cycle, including failed attempts; "
+                         "only an explicit operator action can extend the allowance; "
+                         "separate one-use AutoResolver operational recovery grants do not reset this allowance",
+                "recovery_context": state.get('recovery_context')}
+    if predecessor:
+        packet["predecessor_artifact"] = predecessor["artifact"]["path"]
+        packet["predecessor_delta"] = predecessor["delta"]["path"]
+    recovery_instruction = ''
+    grants = [grant for grant in exchange.get('recovery_review_grants', [])
+              if not grant.get('consumed') and grant.get('binding', {}).get('stage') == stage]
+    recovery = packet['recovery_context'] or {}
+    if grants or (stage in ('astra_challenge', 'astra_finalize') and recovery.get('stage') == stage):
+        try:
+            from ..autocode_resolver_runtime import OPERATIONAL_INSTRUCTION
+        except ImportError:
+            from autocode_resolver_runtime import OPERATIONAL_INSTRUCTION
+        packet['resolver_remediation'] = {'receipt_id': grants[0]['id'] if grants else None,
+                                           'instruction': OPERATIONAL_INSTRUCTION}
+        recovery_instruction = '\n' + OPERATIONAL_INSTRUCTION + '\n'
+    if stage in ('astra_challenge', 'astra_finalize') and (grants or packet['recovery_context']):
+        packet['workspace_inventory'] = workspace_inventory(state['workspace'], state['task'], limit=20)
     if stage == "requirements_gather":
-        packet["requirement_coverage_checklist"] = goals.cue_sentences(state.get("task"))
+        packet["requirement_coverage_checklist"] = [
+            sentence for source in goals.source_texts(state)
+            for sentence in goals.cue_sentences(source)
+        ]
     if state["settings"].get("figma_file"):
         packet["figma_file"] = state["settings"]["figma_file"]
     packet['user_events'] = state.get('user_events', [])
@@ -518,7 +643,7 @@ def context(state, stage, state_path):
         packet["investigation_request"] = request
         clarification_policy += INVESTIGATION_POLICY
     design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
-    prompt = (PROMPTS[stage] + design_rule + figma_instruction + planning_policy + clarification_policy + s.COMMON
+    prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
@@ -534,11 +659,16 @@ def prepare(state, stage, state_path, schema_dir):
                                           state["settings"].get("context_soft_tokens", 10000),
                                           engine_for(state["settings"], route_for(state, stage, role)))
         return ModelRequest(role, route_for(state, stage, role), prompt, metrics, workflows.SCHEMA, False)
-    if stage not in STAGES:
+    if stage not in STAGES + V2_STAGES:
         raise ValueError(f"Autoplanner cannot run {stage}")
     joint = is_planning(state, stage)
     state["phase"] = "PLANNING" if joint else "DISCOVERING"
-    prompt, metrics = context(state, stage, state_path) if joint else s.context_packet(state, stage, state_path)
+    try:
+        prompt, metrics = context(state, stage, state_path) if joint else s.context_packet(state, stage, state_path)
+    except ValueError as error:
+        if stage in V2_STAGES:
+            raise s.Paused("PAUSED_INVALID_PREDECESSOR", str(error)) from error
+        raise
     role = role_for(state, stage)
     return ModelRequest(role, route_for(state, stage, role), prompt, metrics,
                         SCHEMAS[stage] if joint else goals.DISCOVERY_SCHEMA, False)

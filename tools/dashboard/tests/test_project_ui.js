@@ -16,7 +16,8 @@ function harness() {
   document:{activeElement:new Element('button')},basename:p=>p.split('/').pop(),
   api:(url,options)=>{requests.push({url,payload:JSON.parse(options.body)});return new Promise((resolve,reject)=>pending.push({resolve,reject}));},
   renderTasks(){},renderConversations(){},renderLiveControls(){},setView(){},refresh(){},
- });
+  });
+ vm.runInContext(source.slice(source.indexOf('function concise('),source.indexOf('function taskStarted(')),context);
  vm.runInContext(`let seq=0,projectRemoval=null,projectNoticeState=null,latestRun=null,projectFilter='',activeConversation=null,latestConversation=null,currentView='task-detail';
  const projectPending=new Map();let chosen={workspace:'/a/shared',run:'/a/shared/run'};
  let latestData={workspaces:['/a/shared','/b/shared'],runs:[{workspace:'/a/shared',run:'/a/shared/run'},{workspace:'/b/shared',run:'/b/shared/run'}],conversations:[{id:'a',attachment:{workspace:'/a/shared'}},{id:'free'}],removed_projects:[]};

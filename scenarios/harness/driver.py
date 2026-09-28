@@ -168,5 +168,8 @@ def metrics(state: dict) -> dict:
         tokens["input"] += usage.get("input_tokens") or 0
         tokens["output"] += usage.get("output_tokens") or 0
     return {"stages": len(stages), "stage_names": [stage.get("stage") for stage in stages],
+            # Stages the runner does itself (orchestration, regression proof, resolver receipts) call no model.
+            "model_stage_names": [stage.get("stage") for stage in stages
+                                  if not stage.get("runner_owned") and stage.get("stage") != "orchestrator"],
             "model_seconds": round(sum(stage.get("duration_seconds") or 0 for stage in stages), 1),
             "tokens": tokens}

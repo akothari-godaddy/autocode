@@ -25,6 +25,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
         draft['milestones'][0]['acceptance_criteria'] = ['C1', 'C2']
         draft['milestones'].append({'id': 'M2', 'objective': 'Unicode flow', 'acceptance_criteria': ['C3'], 'depends_on': []})
         goals.install_draft(self.state, draft, origin='test')
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, self.state['displayed_goal'])
         self.state['settings']['milestone_checkpoints'] = copy.deepcopy(m.DEFAULTS)
@@ -77,6 +78,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
             {'id': 'M2', 'objective': 'Unicode flow', 'acceptance_criteria': ['C3'], 'depends_on': ['M3']},
             {'id': 'M3', 'objective': 'Usage help', 'acceptance_criteria': ['C4'], 'depends_on': []}]
         goals.install_draft(self.state, draft, origin='test')
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, self.state['displayed_goal'])
         self.state['settings']['milestone_checkpoints'] = copy.deepcopy(m.DEFAULTS)
@@ -257,8 +259,10 @@ class MilestoneCheckpointTests(unittest.TestCase):
 
     def test_human_review_blocks_only_current_milestone_and_resumes_after_approval(self):
         self.start(human=True); self.validate(); self.assign('M2')
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the review request
         self.assertEqual('WAITING_FOR_USER', self.state['status'])
         self.assertEqual(['C1'], self.state['user_request']['criteria'])
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve_review(self.state, 'C1', goals.review_token(self.state), s.snapshot(self.root))
         self.assertEqual('RUNNING', self.state['status'])

@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from . import test_autocode as base
 from . import test_report_repair as repairs
-from goal_fixtures import approve_fixture, envelope
+from goal_fixtures import approve_fixture, assert_operational_wait, envelope
 
 runner, support = base.runner, base.s
 # The exact module instance runner.autopilot itself dispatches through: importing
@@ -96,17 +96,38 @@ class ResolverRuntimeTests(unittest.TestCase):
         self.assertEqual([2], list(self.state['resolver']['attempts'].values()))
 
     def test_permissions_goal_changes_and_untyped_blockers_remain_user_owned(self):
+        original = copy.deepcopy(self.state)
+        human = runner.goals.human
         for kind in ('permission', 'goal_change', 'clarification', 'blocker'):
-            request = {'kind': kind, 'decision_needed': 'Make a material decision', 'impact': 'Changes work',
-                       'discovered': 'Needs decision', 'options': ['yes', 'no'], 'proposed_delta': ''}
-            runner.goals.wait_for_user(self.state, request)
-            before = copy.deepcopy(self.state)
-            self.boundary()
-            self.assertEqual('WAITING_FOR_USER', self.state['status'])
-            self.assertEqual(before['pending_questions'], self.state['pending_questions'])
-            self.assertEqual(before['goal_contract'], self.state['goal_contract'])
-            self.assertEqual('escalate', self.state['stages'][-1]['decision']['action'])
-            self.assertFalse(self.state['stages'][-1]['receipt']['callbacks_used'])
+            with self.subTest(kind=kind):
+                self.state = copy.deepcopy(original)
+                request = {'kind': kind, 'decision_needed': 'Make a material decision', 'impact': 'Changes work',
+                           'discovered': 'Needs decision', 'options': ['yes', 'no'], 'proposed_delta': ''}
+                runner.goals.wait_for_user(self.state, request)
+                # A queued request is not yet answerable and the runtime boundary cannot act on it.
+                self.assertEqual('RESOLVER_PENDING', self.state['status'])
+                queued = copy.deepcopy(self.state)
+                self.assertFalse(self.boundary())
+                self.assertEqual(queued, self.state)
+                action = human.evaluate(self.state)
+                if kind in ('permission', 'goal_change'):
+                    # Protected decisions are published to the user, never resolved autonomously.
+                    self.assertEqual('escalate', action)
+                    self.assertEqual('WAITING_FOR_USER', self.state['status'])
+                    self.assertEqual(kind, human.current(self.state)['scope'])
+                else:
+                    # Untyped blockers need a real AutoResolver diagnosis before a human request;
+                    # they stay unpublished and still grant no execution.
+                    self.assertEqual('defer', action)
+                    self.assertEqual('RESOLVER_PENDING', self.state['status'])
+                    self.assertIsNone(human.current(self.state))
+                    self.assertEqual('blocker', self.state[human.PRIVATE]['scope'])
+                before = copy.deepcopy(self.state)
+                self.assertEqual(kind in ('permission', 'goal_change'), self.boundary())
+                self.assertEqual(before, self.state)
+                self.assertEqual(original['goal_contract'], self.state['goal_contract'])
+                self.assertEqual(original['stages'], self.state['stages'])
+                self.assertNotIn('attempts', self.state['resolver'])
 
     def test_no_resolver_during_active_operation_or_unapproved_goal(self):
         self.queue()
@@ -116,8 +137,12 @@ class ResolverRuntimeTests(unittest.TestCase):
         self.assertEqual(before, self.state)
         self.state.pop('active_stage')
         self.state['goal_contract']['approval_status'] = 'draft'
+        # The ledger already holds the approval request published at the writer boundary;
+        # an unapproved goal must not add any resolver decision or attempt to it.
+        before = copy.deepcopy(self.state)
         self.assertFalse(self.boundary())
-        self.assertNotIn('resolver', self.state)
+        self.assertEqual(before, self.state)
+        self.assertEqual({'human_escalations'}, set(self.state['resolver']))
 
     def test_corrupt_saved_ledger_pauses_before_launch(self):
         self.queue()
@@ -212,9 +237,21 @@ class ResolverRuntimeTests(unittest.TestCase):
         self.assertEqual(events_before + 1, len(self.state['user_events']))
 
     def test_reset_for_resume_is_a_no_op_when_no_resolver_state_exists(self):
+        # Goal approval now records its published request in the resolver ledger, so check both
+        # a state with no resolver ledger at all and one that has no resolver attempts.
+        bare = copy.deepcopy(self.state)
+        bare.pop('resolver')
+        before = copy.deepcopy(bare)
+        runner.resolver_runtime.reset_for_resume(bare)
+        self.assertEqual(before, bare)
         before = copy.deepcopy(self.state)
         runner.resolver_runtime.reset_for_resume(self.state)
-        self.assertEqual(before, self.state)
+        self.assertEqual(before['user_events'], self.state['user_events'])
+        self.assertEqual(before['resolver']['human_escalations'], self.state['resolver']['human_escalations'])
+        self.assertEqual({}, self.state['resolver'].get('attempts', {}))
+        self.assertNotIn('lifetime_attempts', self.state['resolver'])
+        self.assertEqual({k: v for k, v in before.items() if k != 'resolver'},
+                         {k: v for k, v in self.state.items() if k != 'resolver'})
 
     def test_explicit_resume_records_report_repair_epoch_and_accumulates_lifetime_total(self):
         self.queue()
@@ -613,7 +650,8 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.assertEqual(2, len(launches))
         self.assertEqual(2, saved['resolver']['diagnostic_calls'])
         self.assertEqual(2, len(saved['automatic_timeout_recoveries']))
-        self.assertEqual('PAUSED_REPEATED_FAILURE', saved['status'])
+        # The exhausted pause is surfaced as an AutoResolver operational request.
+        assert_operational_wait(self, saved, 'PAUSED_REPEATED_FAILURE')
         self.assertNotIn('active_stage', saved)
 
     def test_cli_new_iteration_source_and_blocker_do_not_reset_lifetime_cap(self):
@@ -646,7 +684,8 @@ class OperationalDiagnosisTests(unittest.TestCase):
                     self.state = support.read(self.run / 'state.json')
         self.assertEqual(3, len(set(blockers)))
         self.assertEqual([1, 2], [row['iteration'] for row in launches])
-        self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+        # The lifetime cap still refuses a third diagnosis; the pause is published as an operational request.
+        assert_operational_wait(self, self.state, 'PAUSED_REPEATED_FAILURE')
 
     def test_cli_rejected_output_resume_spends_new_reservation(self):
         self.repeated_terra_failure()
@@ -662,10 +701,12 @@ class OperationalDiagnosisTests(unittest.TestCase):
             self.assertEqual(2, self.state['resolver']['diagnostic_calls'])
             self.assertEqual(2, self.cli())
             self.state = support.read(self.run / 'state.json')
-            self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+            # The exhausted diagnosis budget is published as an AutoResolver operational request ...
+            public = assert_operational_wait(self, self.state, 'PAUSED_REPEATED_FAILURE')
             self.assertEqual(2, self.cli())
             self.state = support.read(self.run / 'state.json')
-            self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+            # ... and a further bare resume retains that same request without a new launch.
+            self.assertEqual(public, assert_operational_wait(self, self.state, 'PAUSED_REPEATED_FAILURE'))
         self.assertEqual(2, len(launches))
         self.assertEqual(2, len({row['diagnostic_reservation_id'] for row in launches}))
 
@@ -825,8 +866,9 @@ class OperationalDiagnosisTests(unittest.TestCase):
                 with self.provider() as launches:
                     self.assertEqual(2, self.cli())
                 saved = support.read(self.run / 'state.json')
-                self.assertEqual({'time': 'PAUSED_TIME_LIMIT', 'tokens': 'PAUSED_BUDGET',
-                                  'unknown_tokens': 'PAUSED_USAGE_UNKNOWN'}[budget], saved['status'])
+                # The budget pause is surfaced as an AutoResolver operational request, uncharged.
+                assert_operational_wait(self, saved, {'time': 'PAUSED_TIME_LIMIT', 'tokens': 'PAUSED_BUDGET',
+                                                      'unknown_tokens': 'PAUSED_USAGE_UNKNOWN'}[budget])
                 self.assertEqual([], launches)
                 self.assertNotIn('diagnostic_calls', saved['resolver'])
 

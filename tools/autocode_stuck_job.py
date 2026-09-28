@@ -152,7 +152,7 @@ def annotate(state: dict, status: str, reason: str) -> str:
     stuck = state.get("next_stage")
     entry = next((row for row in reversed(state.get("stuck_investigations", []))
                   if row.get("identity") == identity(stuck or "", status) and row.get("diagnosis")), None)
-    if not entry or "Investigator:" in reason:
+    if not entry or "\nInvestigator (" in reason:
         return reason
     ask = f" Needs you: {entry['user_question']}" if entry.get("user_question") else ""
     return f"{reason}\nInvestigator ({entry['outcome']}): {entry['diagnosis']}{ask}"

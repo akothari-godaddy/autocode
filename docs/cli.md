@@ -19,9 +19,6 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `autocode tasks` / `autocode-tasks` | Run a multi-lane task flow file. |
 | `autocode components` / `autocode-components` | Build the components of an architecture record in parallel and combine them (see [Task lanes](task-lanes.md#building-components-of-an-architecture-in-parallel)). |
 | `autocode program plan\|derive\|run\|status` / `autocode-program` | Plan a large requirement, derive a workstream manifest from the approved plan, run workstreams in parallel worktrees merged onto an integration branch (see [Programs](program.md)). |
-| `autocode fix ISSUE` | Fix one bug report (GitHub issue URL, `owner/repo#N`, `#N`, `--issue-file`, or text) on a new branch; the fix is proven by executing tests (see [Fix](fix.md)). |
-| `autocode fix --status RUN_DIR` | Print a saved fix run, including model calls and tokens. |
-| `autocode verify-fix` | Model-free check of any checkout's fix against `--base`: new tests fail on base source, pass on the fix, and no test newly fails (see [Fix](fix.md#how-a-fix-is-verified)). |
 | `autocode-dashboard` | Local browser dashboard. |
 | `autocode --unit autoplanner\|autocode\|autoreview\|autoresolver` | Select one unit; omitting `--unit` runs all. |
 | `autocode compare-baseline` | Compare Vitest failure evidence (see [Execution](execution.md#baseline-comparison)). |
@@ -46,23 +43,25 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | --- | --- |
 | `--chat` | Interactive chat mode (default in a terminal). |
 | `--no-chat` | One command per turn (default for non-interactive). |
-| `--answer 'Q1=…'` | Answer a requirements question (repeatable). |
+| `--answer 'Q1=…'` | Answer a requirements question (repeatable). Requires the current `--resolver-token` shown by AutoResolver. |
 | `--feedback '…'` | Send a correction; returns to discovery and requires fresh approval. |
-| `--delegate Q1` | Accept a question's proposed default. |
+| `--delegate Q1` | Accept a question's proposed default. Requires the current `--resolver-token` shown by AutoResolver. |
 | `--delegate-all --review-token 'r3:<hash>'` | Delegate every pending question marked `delegable` with a proposed default, on the exact displayed revision. Refuses the whole call if any question lacks a default, is not delegable, has a protected or missing category (cost, quota, permission, external side effect, requested outcome), or asks about a rejected assumption. Never approves; invalidates any existing approval. |
 | `--reject-assumption A1 --review-token 'r3:<hash>'` | Reject a structured assumption from the displayed requirements handoff (repeatable). A stale token, or a handoff refreshed since display, is refused. Never approves; invalidates any existing approval. |
 | `--show-goal` | Display the current contract/revision. |
 | `--approve-goal 'r3:<hash>'` | Approve the exact displayed revision. |
 | `--edit-goal body.json` | Load a full contract body as a new draft revision. |
 | `--approve-review C1 --review-token '…'` | Record a human-review decision for criterion `C1`. |
+| `--resolver-response provide_information --resolver-request ID --resolver-token '…'` | Answer an AutoResolver operational request with corrective information. `--resolver-response` requires both `--resolver-request` and `--resolver-token`; the response itself authorizes no retry, approval or budget change. |
 
 ### Execution and recovery
 
 | Flag | Meaning |
 | --- | --- |
-| `--resume-paused` | Acknowledge an operational pause and continue. Does not approve a draft. |
+| `--resume-paused` | Acknowledge an operational pause and continue. Does not approve a draft, and does not restore a spent recovery allowance. |
 | `--diagnose-failed-stage` | With `--resume-paused`, request bounded read-only diagnosis of a recorded repeated Builder report failure. Alternative to `--retry-failed-stage`; not a permission or budget override. |
-| `--planning-review-call-limit N` | At a reconciled planning-budget pause, save a finite total allowance for the current cycle only. No model launch or approval; resume separately. |
+| `--grant-recovery N` | With `--resume-paused`, authorize N more automatic timeout recoveries for a run paused at `PAUSED_TIMEOUT_RECOVERY` after its cause was fixed. Audited as a `recovery_grant` user event; recovery history is retained. |
+| `--planning-review-call-limit N` | At a reconciled planning-budget pause, save a total allowance for the current cycle. `0` disables the cap for this and future cycles while preserving usage history; it can also be saved at a requested pause or after abandoning a stopped stage. No model launch or approval; resume separately. |
 | `--pause-after-stage` | Stop at the next saved boundary. |
 | `--retry-builder M2` | Explicitly retry a failed milestone Builder (after all workers stopped). |
 | `--abandon-stage '001/terra-01'` | Archive a stopped attempt, keep partial edits and logs. |
@@ -75,6 +74,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--max-idle-seconds` / `--max-tool-seconds` / `--max-stage-seconds` | Watchdog limits (defaults `300` / `1800` / `0`). |
 | `--no-progress-limit N` | Unchanged-batch limit (`0` disables; never disables the 3-recovery ceiling). |
 | `--max-iterations N` | Total iteration ceiling. |
+| `--test-command CMD` | New runs: the project's test suite command for a bug fix's runner-owned regression proof (default: detected; see [Bug fixes](workflow.md#bug-fixes)). |
+| `--regression-command CMD` | New runs: a command that runs only the fix's new or changed tests (default: derived from the detected framework). |
 
 ### Engine, provider, and models
 
@@ -122,7 +123,7 @@ for another agent without letting that agent make the operator's decisions. It t
 AutoCode's own arguments but refuses every decision or recovery flag (`--answer`,
 `--delegate*`, `--approve-*`, `--resume-paused`, `--retry-*`, `--feedback`,
 `--accept-completion`, …, including abbreviations) and the `intervention`, `tasks`,
-`ui`, `program`, `fix`, `verify-fix`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
+`ui`, `program`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
 with no stdin, and when AutoCode stops it prints `--status` and tells the caller to
 report and stop. Exit codes are AutoCode's.
 

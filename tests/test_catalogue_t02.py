@@ -73,6 +73,7 @@ class DagCase(t01.ApprovalCase):
     def start_diamond(self):
         draft = diamond()
         goals.install_draft(self.state, draft, origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
@@ -187,6 +188,7 @@ class DagScenarios(DagCase):
             self.check_true("unknown_dependency_rejected_at_draft", True)
             self.finish(summary="PAUSED_SAFE: unknown prerequisite rejected at draft validation")
             return
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
@@ -248,6 +250,7 @@ class DagScenarios(DagCase):
         draft = diamond()
         next(row for row in draft["milestones"] if row["id"] == "MC")["affected_paths"] = ["server/"]
         goals.install_draft(self.state, draft, origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
@@ -266,6 +269,7 @@ class DagScenarios(DagCase):
         revised = diamond()
         next(row for row in revised["milestones"] if row["id"] == "MC").pop("affected_paths")
         goals.install_draft(self.state, revised, origin="test")
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.oracle = ReadySetOracle(revised["milestones"])
@@ -330,6 +334,7 @@ class DagScenarios(DagCase):
         """DAG-10. Existing: test_planning.test_requirements_handoff_is_separate... and
         test_goals answer-preservation tests."""
         self.draft(questions=True)
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         self.check("q1_tracked", ["Q1"],
                    [q["id"] for q in self.state.get("pending_questions", [])])
@@ -354,6 +359,7 @@ class DagScenarios(DagCase):
         # Answering Q1 and redrafting without it is the legitimate resolution.
         goals.answer(self.state, "Q1", "Use a CLI")
         self.draft()
+        goals.human.evaluate(self.state)
         goals.present(self.state)
         goals.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("answered_resolution_recovers", goals.approved(self.state))

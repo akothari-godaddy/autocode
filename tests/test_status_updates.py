@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 import autocode_status as status, autocode_support as s, autocode_context as context
 import autocode_process as processes
+import autocode_resolver_human as human
 
 
 class StatusTests(unittest.TestCase):
@@ -33,10 +34,20 @@ class StatusTests(unittest.TestCase):
 
     def test_immediate_blocker_and_completion_updates(self):
         status.record(self.state, timestamp=100)
+        # An unpublished saved request is never shown as a human question.
         self.state.update(status='WAITING_FOR_USER', user_request={'question': 'Allow a new dependency?'})
         entry = status.record(self.state, timestamp=101)
+        self.assertNotIn('Allow a new dependency?', entry['text'])
+        self.assertIn('no human request has been authorized', entry['text'])
+        # Once AutoResolver publishes the request, the blocker is reported immediately.
+        self.state.pop('user_request')
+        human.queue(self.state, 'permission', {'stage': 'terra'},
+                    request={'kind': 'permission', 'decision_needed': 'Allow a new dependency?',
+                             'impact': 'Adds a runtime dependency'})
+        self.assertEqual('escalate', human.evaluate(self.state))
+        entry = status.record(self.state, timestamp=102)
         self.assertIn('Allow a new dependency?', entry['text'])
-        self.assertIn('Next:', entry['text'])
+        self.assertIn('Respond to the issued AutoResolver request.', entry['text'])
         self.assertIsNone(status.record(self.state, timestamp=900))
         self.state.update(status='PAUSED_BUDGET', user_request=None, stop_reason='Milestone time exhausted')
         self.assertIn('Milestone time exhausted', status.record(self.state, timestamp=901)['text'])
@@ -152,7 +163,10 @@ class StaleCheckpointTests(unittest.TestCase):
         self.assertTrue(payload['stale'])
         self.assertFalse(payload['active_stage_finished'])
         self.assertFalse(payload['active_stage_workers']['alive'])
-        self.assertIn('--abandon-stage', payload['next_action'])
+        # 009c8b8: a stale attempt is reconciled by AutoResolver, not by an
+        # operator --abandon-stage hint; the exact attempt is still named.
+        self.assertIn('AutoResolver must reconcile', payload['next_action'])
+        self.assertIn(payload['attempt_id'], payload['next_action'])
         self.assertIn('STALE CHECKPOINT', result.stderr)
         self.assertEqual(before, self.state_path.read_bytes())
 

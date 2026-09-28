@@ -8,7 +8,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+from tools import autocode_goals as goals
 from tools import autocode_tasks as tasks
+from tools.goal_fixtures import body
 from . import test_subprocess
 
 
@@ -44,6 +46,19 @@ class TaskFlows(unittest.TestCase):
         self.assertIn(('app', 'build'), second)
         self.assertIn(('docs', 'guide'), second)
 
+    def published_approval_state(self, run):
+        """A child run whose goal-approval request was published by its writer boundary."""
+        state = {'version': 2, 'workspace': str(self.root), 'run_dir': str(run.resolve()),
+                 'task': 'Build dashboard', 'status': 'RUNNING', 'iteration': 1, 'sessions': {},
+                 'stages': [], 'history': [], 'next_stage': 'terra', 'acceptance_criteria': [],
+                 'settings': {'roles': {r: {'model': r, 'reasoning_effort': 'high'} for r in ('astra', 'terra', 'sol')},
+                              'headroom': {'enabled': False}, 'context_soft_tokens': 10000}}
+        goals.migrate(state)
+        goals.install_draft(state, body(), origin='test')
+        self.assertEqual('escalate', goals.human.evaluate(state))
+        self.assertEqual('AWAITING_GOAL_APPROVAL', state['status'])
+        return state
+
     def test_ui_handoff_enters_next_code_task_in_the_same_workspace(self):
         path = self.manifest(self.sample()); _, manifest = tasks.load_manifest(path)
         state = tasks.new_state(path, manifest, self.root)
@@ -58,7 +73,7 @@ class TaskFlows(unittest.TestCase):
                 (run / 'state.json').write_text(json.dumps({'status': 'COMPLETE', 'figma_file': 'https://www.figma.com/design/Example123/App'}))
             else:
                 run = self.root / '.autocode/runs/code'; run.mkdir(parents=True)
-                (run / 'state.json').write_text(json.dumps({'status': 'AWAITING_GOAL_APPROVAL'}))
+                (run / 'state.json').write_text(json.dumps(self.published_approval_state(run)))
             return subprocess.CompletedProcess(command, 0, '', '')
 
         with patch.object(tasks.subprocess, 'run', side_effect=completed):
@@ -66,6 +81,15 @@ class TaskFlows(unittest.TestCase):
             tasks.launch_task(self.root, self.root / '.autocode/task-flows/x', lane, code_spec, code_record, lane_state)
         self.assertEqual('COMPLETE', ui_record['status'])
         self.assertEqual('WAITING', code_record['status'])
+        self.assertTrue(code_record['human_request_authorized'])
+        self.assertEqual('goal_approval', code_record['human_escalation']['scope'])
+        # A bare saved decision status without a published request grants no authority to ask.
+        saved = json.loads((Path(code_record['run_dir']) / 'state.json').read_text())
+        saved.pop('resolver_human_request')
+        (Path(code_record['run_dir']) / 'state.json').write_text(json.dumps(saved))
+        tasks.refresh_task(code_record)
+        self.assertEqual('PAUSED', code_record['status'])
+        self.assertFalse(code_record['human_request_authorized'])
         self.assertIn('--in-place', code_record['command'])
         self.assertEqual(ui_record['run_dir'], code_record['command'][code_record['command'].index('--ui-run') + 1])
         self.assertEqual(str(self.root), code_record['command'][code_record['command'].index('--workspace') + 1])

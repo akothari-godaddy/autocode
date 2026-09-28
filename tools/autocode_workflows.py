@@ -153,6 +153,11 @@ def approved_design(state: dict, value: dict) -> str:
     return design
 
 
+def planner_stage(state: dict) -> str:
+    """Where a workflow hands over to planning: the Planner's first stage in the saved flow."""
+    return "plan" if (state.get("settings") or {}).get("planning_flow") == "v2" else "astra_discovery"
+
+
 def kind(state: dict) -> str | None:
     """The recognized workflow, or None before recognition (and for runs that predate it)."""
     return (state.get("workflow") or {}).get("kind")

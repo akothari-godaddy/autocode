@@ -25,6 +25,7 @@ def object_value(value):
 
 
 def planning_messages(state, run=None):
+    """Internal report history for inspection, never actionable chat requests."""
     result, seen = [], set()
     stages = [record for record in state.get('stages', []) if isinstance(record, dict)] if isinstance(state.get('stages'), list) else []
     by_output = {record.get('output'): record for record in stages if record.get('output')}
@@ -191,7 +192,7 @@ class ConversationMixin:
                 data = {**data, 'workspace': attachment['workspace'], 'project': '', 'create_project': False}
 
             if doc.get('status') != 'ready':
-                raise ValueError('Wait for the Planner’s reply before attaching a project')
+                raise ValueError('Wait for the AutoResolver reply before attaching a project')
             self.joint_models(doc.get('models', {}))
             self.joint_efforts(doc.get('models', {}))
             raw = data.get('project') or data.get('workspace')
@@ -239,7 +240,6 @@ class ConversationMixin:
 
     def _chat_path(self, run):
         root = self.conversations.root.parent / 'task-chat'
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
         return root / (hashlib.sha256(str(run).encode()).hexdigest() + '.json')
 
     @contextmanager
@@ -250,6 +250,7 @@ class ConversationMixin:
             lease = self._chat_leases.get(key)
             if lease is None:
                 path = self._chat_path(run).with_suffix('.lock')
+                path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_NOFOLLOW', 0), 0o600)
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 lease = self._chat_leases[key] = [fd, 0]
@@ -300,23 +301,37 @@ class ConversationMixin:
         with self._chat_guard(run):
             previous = next((item for item in self._chat_rows(run) if item['id'] == ident), None)
             if previous:
-                if previous.get('submitted_text') != text or previous.get('question_id') != question_id or previous.get('delegate') != (data.get('delegate') is True):
+                if (previous.get('submitted_text') != text or previous.get('question_id') != question_id
+                        or previous.get('delegate') != (data.get('delegate') is True)
+                        or previous.get('resolver_request') != data.get('resolver_request')
+                        or previous.get('resolver_token') != data.get('resolver_token')):
                     raise ValueError('This request ID was already used for a different message')
-                if data.get('retry') is not True or previous.get('status') != 'error':
+                lost_action = (previous.get('status') == 'saved' and previous.get('question_id')
+                               and previous.get('action_id') not in {row['id'] for row in self.action_log(workspace, run)})
+                if data.get('retry') is not True or (previous.get('status') != 'error' and not lost_action):
                     return previous
             view = self.view(workspace, run)
-            questions = view.get('questions', [])
+            scope = object_value(view.get('human_escalation')).get('scope')
+            questions = view.get('questions', []) if scope in ('clarification', 'permission', 'goal_change') else []
             if questions and not question_id:
                 raise ValueError('Choose which question this message answers')
             question = next((q for q in questions if q.get('id') == question_id), None)
             if question_id and not question:
                 raise ValueError('That question is no longer pending. Your message was not sent.')
+            if question:
+                public = self.require_human_response(view, data, ('clarification', 'permission', 'goal_change'))
+            elif data.get('delegate') or data.get('resolver_request') or data.get('resolver_token'):
+                raise ValueError('That question is no longer pending. Your message was not sent.')
+            elif object_value(view.get('human_escalation')).get('scope') in ('operational_exhaustion', 'blocker'):
+                raise ValueError('Use the current AutoResolver response action; feedback does not resolve this request.')
             row = {'id': ident, 'role': 'user', 'speaker': 'You', 'text': text, 'submitted_text': text, 'question_id': question_id,
                    'question_text': question.get('question') if question else None, 'delegate': data.get('delegate') is True,
+                   'resolver_request': data.get('resolver_request'), 'resolver_token': data.get('resolver_token'),
                    'created_at': previous.get('created_at') if previous else time.time(), 'status': 'saved', 'error': None}
             self._save_chat(run, row)
             if question:
                 extra = ['--delegate', question_id] if row['delegate'] else ['--answer', question_id + '=' + text]
+                extra += ['--resolver-token', public['request_token']]
                 if row['delegate']:
                     row['text'] = 'Use the suggested default: ' + str(question.get('proposed_default', ''))
                 def done(action):
@@ -328,7 +343,9 @@ class ConversationMixin:
                     self._save_chat(run, row)
                     try:
                         saved = json.loads((run / 'state.json').read_text())
-                        if not saved.get('pending_questions'):
+                        if (saved.get('status') == 'RUNNING' and not saved.get('pending_questions')
+                                and not saved.get('user_request') and not saved.get('resolver_human_request')
+                                and not saved.get('resolver_human_proposal')):
                             followup = self.continue_run(workspace, run)
                             row['continue_action_id'] = followup['id']
                             self._save_chat(run, row)
@@ -417,7 +434,6 @@ class ConversationMixin:
                             message.update(status='received', error=None)
                         else:
                             message.update(status='error', error='Your message is saved, but its delivery could not be confirmed after restart. Retry this same message after checking the current question.')
-                        self._save_chat(run, message)
                     delivery = deliveries.get(message['id'])
                     if delivery:
                         message['delivery_status'] = delivery.get('status')

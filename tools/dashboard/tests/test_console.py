@@ -2,7 +2,10 @@ import http.client,json,os,subprocess,sys,tempfile,threading,time,unittest
 from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parents[1]))
-from agent_console import Console,Handler,LoopbackHTTPServer,configured_zai
+
+from agent_console import Console,Handler,LoopbackHTTPServer,ThreadingHTTPServer,configured_zai
+from test_pending_decisions import publish,resolver_human
+
 class Tests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();isolation=patch.dict(os.environ,{'AUTOCODE_HOME':str(Path(self.tmp.name)/'registry-home')});isolation.start();self.addCleanup(isolation.stop);self.ws=Path(self.tmp.name)/'w';(self.ws/'.git').mkdir(parents=True);self.run=self.ws/'.autocode/runs/r';self.run.mkdir(parents=True);self.fake=Path(self.tmp.name)/'fake.py';self.fake.write_text('import sys\nprint("o"*3000);print("e"*3000,file=sys.stderr)')
@@ -29,8 +32,8 @@ class Tests(unittest.TestCase):
    from agent_console import APP,STYLE
    self.assertIn("function renderAstraPlan(run)",APP);self.assertIn("textContent = text ?? ''",APP);self.assertIn("Initial approved plan (recorded)",APP);self.assertIn("Initial historically approved plan (inactive)",APP);self.assertIn("historically approved/inactive",APP);self.assertIn("awaiting its own approval",APP);self.assertIn("Initial plan (approval unavailable)",APP);self.assertIn("Current plan approval status",APP);self.assertIn("not proof of completion",APP);self.assertIn("No current assigned step is recorded.",APP);self.assertIn("planLines(lines)",APP);self.assertIn("#create select,#create input,#watch-root input{display:block;width:100%;max-width:100%;min-width:0}",STYLE)
  def test_waiting_request_fields_are_preserved(self):
-  request={'decision_needed':'Choose a safety boundary','discovered':'runner lock exists','impact':'cannot continue','options':['wait','use another workspace'],'proposed_delta':'defer continuation'}
-  self.state['user_request']=request;(self.run/'state.json').write_text(json.dumps(self.state));self.assertEqual(request,self.c.view(self.ws,self.run)['user_request'])
+   request={'kind':'permission','decision_needed':'Choose a safety boundary','discovered':'runner lock exists','impact':'cannot continue','options':['wait','use another workspace'],'proposed_delta':'defer continuation'}
+   publish(self.state,'permission',questions=[],request=request);(self.run/'state.json').write_text(json.dumps(self.state));self.assertEqual(request,self.c.view(self.ws,self.run)['user_request'])
  def test_discovery_summary_and_author_follow_saved_successful_planning_stage(self):
   self.state.update(settings={'joint_planning':True},discovery_summary='The draft needs a decision.',goal_contract={'origin':'glm_draft'},stages=[{'stage':'astra_discovery','role':'glm','exit_code':0}])
   def view():return self.c.view(self.ws,self.run,self.state)
@@ -63,9 +66,16 @@ class Tests(unittest.TestCase):
   from agent_console import APP
   self.assertIn("function unavailableRun(message)",APP);self.assertIn("$('#continue').disabled=true",APP);self.assertIn("$('#continue').disabled=false",APP);self.assertIn("unavailableRun('Selected run unavailable: '+run.state_error)",APP);self.assertIn("unavailableRun('Selected run unavailable: '+error.message)",APP);self.assertIn("selected=currentView==='task-detail'?chosen:null",APP)
  def test_actions_exact_and_no_implicit_continue(self):
-  x=self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'answer','id':'Q1','text':'hi'});self.assertIn('Q1=hi',x['command']);self.wait();self.assertEqual(1,len(self.c.action_log(self.ws,self.run)))
-  self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'delegate','id':'Q1'});self.wait();x=self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'approve_goal','token':'r3:abc','confirmation':'r3:abc'});self.assertIn('--approve-goal',x['command']);self.wait();x=self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'approve_review','id':'C11','token':'review'});self.assertEqual(['--approve-review','C11','--review-token','review'],x['command'][-4:]);self.wait()
-  with self.assertRaises(ValueError):self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'approve_goal','token':'stale','confirmation':'stale'})
+  fields=publish(self.state);(self.run/'state.json').write_text(json.dumps(self.state))
+  x=self.c.mutate({'workspace':str(self.ws),'run':str(self.run),**fields,'action':'answer','id':'Q1','text':'hi'});self.assertIn('Q1=hi',x['command']);self.assertIn(fields['resolver_token'],x['command']);self.wait();self.assertEqual(1,len(self.c.action_log(self.ws,self.run)))
+  self.c.mutate({'workspace':str(self.ws),'run':str(self.run),**fields,'action':'delegate','id':'Q1'});self.wait()
+  fields=publish(self.state,'goal_approval',questions=[]);token=self.state['displayed_goal'];(self.run/'state.json').write_text(json.dumps(self.state))
+  x=self.c.mutate({'workspace':str(self.ws),'run':str(self.run),**fields,'action':'approve_goal','token':token,'confirmation':token});self.assertIn('--approve-goal',x['command']);self.wait()
+  self.state['workspace']=str(self.ws.resolve())
+  with patch.object(resolver_human.support,'snapshot',return_value={'revision':'fixture-source'}):
+   fields=publish(self.state,'human_review',questions=[],request={'kind':'human_review','criteria':['C11'],'decision_needed':'Review interface'});(self.run/'state.json').write_text(json.dumps(self.state))
+   x=self.c.mutate({'workspace':str(self.ws),'run':str(self.run),**fields,'action':'approve_review','id':'C11','token':'artifact-token'});self.assertEqual(['--approve-review','C11','--review-token','artifact-token'],x['command'][-4:]);self.wait()
+   with self.assertRaises(ValueError):self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'approve_goal','token':'stale','confirmation':'stale'})
  def test_explicit_codex_provider_and_capture_serialization(self):
   p=Path(self.tmp.name)/'c.toml';p.write_text('# zai\n[model_providers.ZAI]\nx=1\n');self.assertEqual('ZAI',configured_zai(p));p.write_text('# [model_providers.ZAI]\n');self.assertIsNone(configured_zai(p));x=self.c.create({'workspace':str(self.ws),'goal':'x','engine':'codex','astra_model':'glm-5.3'});self.assertIn('--astra-provider',x['command']);self.assertIn('--astra-reasoning-effort',x['command']);self.wait(False)
   self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'continue'})
@@ -90,7 +100,7 @@ class Tests(unittest.TestCase):
   self.assertEqual(1,INDEX.count('id="change-text"'))
   self.assertEqual(1,INDEX.count('id="question-target"'))
   self.assertNotIn('question-form',APP)
-  self.assertIn("api('/api/chat'",APP)
+  self.assertIn("api(request.resolver_response?'/api/action':'/api/chat'",APP)
   self.assertIn("question_id",APP)
   self.assertIn("focus.version !== focusVersion",APP)
   self.assertIn("setSelectionRange(focus.start, focus.end, focus.direction)",APP)
