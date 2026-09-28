@@ -4,8 +4,8 @@ and stale displays. One case per finding, numbered as in the review."""
 import copy
 import unittest
 
-from . import autocode_goals as goals
-from .goal_fixtures import body
+import autocode_goals as goals
+from goal_fixtures import body
 from .test_autoplanner_step2 import EpisodeCase, clarification_only, discovery, question, requirements
 from .test_autoplanner_step3 import ObligationCase, decision_question, plan
 

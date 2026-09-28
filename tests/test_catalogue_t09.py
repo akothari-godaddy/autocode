@@ -4,16 +4,6 @@ Real process/lock/intervention machinery on temporary workspaces; no search-
 and-kill of arbitrary processes.  FX05's action-service semantics map onto the
 runner's supported idempotent surface: intervention request ids.
 """
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import contextlib
 import copy
 import io
@@ -25,17 +15,13 @@ import sys
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_interventions as interventions
 import autocode_process as processes
 import autocode_support as support
-import test_catalogue_t01 as t01
+from . import test_catalogue_t01 as t01
 
 
 class OwnershipCase(t01.ApprovalCase):

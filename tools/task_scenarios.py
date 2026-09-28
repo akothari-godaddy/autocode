@@ -119,7 +119,8 @@ def _http(method: str, url: str, body: dict | None = None, timeout: float = 10) 
     request = urllib.request.Request(url, data=data, method=method,
                                      headers={"Content-Type": "application/json"} if data else {})
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
+        # Scenario services are local; host proxy discovery is not part of their contract.
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=timeout) as response:
             raw = response.read().decode(errors="replace")
             status = response.status
     except urllib.error.HTTPError as error:

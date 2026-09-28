@@ -19,14 +19,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+TOOLS = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS))
 
 import autocode_goals as goals  # noqa: E402
 import autocode_program as program  # noqa: E402
 import goal_fixtures  # noqa: E402
 import task_scenarios  # noqa: E402
-from tools import test_subprocess  # noqa: E402
+from . import test_subprocess  # noqa: E402
 
 REAL_RUN = subprocess.run
 

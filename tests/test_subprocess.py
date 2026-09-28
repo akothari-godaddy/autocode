@@ -1,20 +1,3 @@
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / "tools"
-_FAKES = _ROOT / "tests" / "fakes"
-for _p in (_ROOT, _TOOLS, _ROOT / "tests", _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 """Full command-line flow with real processes and an explicitly fake provider."""
 import json
 import os
@@ -40,9 +23,9 @@ class SubprocessFlow(unittest.TestCase):
                         "commit", "--allow-empty", "-qm", "fixture"], check=True)
         bin_dir = self.root / "fixture-bin"
         bin_dir.mkdir()
-        source = _TOOLS
+        source = Path(__file__).resolve().parents[1] / "tools"
         for filename in ("fake_codex.py", "goal_fixtures.py"):
-            shutil.copy2(_FAKES / filename, bin_dir / ("codex" if filename == "fake_codex.py" else filename))
+            shutil.copy2(source / filename, bin_dir / ("codex" if filename == "fake_codex.py" else filename))
         (bin_dir / "codex").chmod(0o755)
         # Hermetic provider/model resolution: the child autocode.py process
         # must never read a contributor's own ~/.config/autocode or ~/.codex.

@@ -28,7 +28,7 @@ unchanged. `python3 tools/live_trial.py --list` prints the whole registry.
 - `tools/scenario_references.py`: a handwritten reference delivery per scenario. They
   are the oracle's positive control and a starting point for a scripted fixture
   provider; they are not model output.
-- `tools/test_scenario_oracles.py`: exercises positive and targeted negative controls.
+- `tests/test_scenario_oracles.py`: exercises positive and targeted negative controls.
   The references pass (UI defers without a browser); seed-only controls do not pass;
   and targeted breakages fail on the
   expected row (a fix without a regression test, a case-sensitive filter, a filter that
@@ -44,7 +44,7 @@ unchanged. `python3 tools/live_trial.py --list` prints the whole registry.
 Offline oracle controls (no provider, no model spend):
 
 ```sh
-python3 -m unittest tools.test_scenario_oracles
+python3 -m unittest tests.test_scenario_oracles
 ```
 
 Score a workspace you delivered by any route (a manual run, a dashboard run, a

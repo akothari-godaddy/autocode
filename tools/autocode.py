@@ -2232,6 +2232,19 @@ def rotate_if_needed(state, role, run_dir):
 
 
 def main(unit=None) -> int:
+    """Resolve this invocation's provider, then restore the shared global on the
+    way out — main() can run more than once per process in tests, and a real
+    provider resolved here (autocode_providers.resolve) must not leak into a
+    later invocation that expects a different, or no, provider mocked."""
+    global opencode
+    saved_opencode = opencode
+    try:
+        return _main_body(unit)
+    finally:
+        opencode = saved_opencode
+
+
+def _main_body(unit=None) -> int:
     global opencode
     if sys.argv[1:2] == ["tasks"]:
         try:
@@ -2355,7 +2368,7 @@ def main(unit=None) -> int:
     parser.add_argument("--retry-failed-stage", action="store_true",
                         help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
     parser.add_argument("--diagnose-failed-stage", action="store_true",
-                        help="For a repeated Builder failure whose report-repair is exhausted, admit one bounded "
+                        help="For a recorded repeated Builder report failure, admit one bounded "
                              "read-only model diagnosis instead of a blind retry; requires --resume-paused; "
                              "cannot combine with --retry-failed-stage")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",

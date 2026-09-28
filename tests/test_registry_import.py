@@ -1,14 +1,4 @@
 """Bounded, non-migrating registry import tests using workspace-local fixtures."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import json
 import io
 import multiprocessing
@@ -20,11 +10,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode_registry as registry
 
 
@@ -192,7 +178,7 @@ class RegistryImportTests(unittest.TestCase):
 
     def test_cli_reports_invalid_bound_as_json_error(self):
         selected, _ = self.fixture("selected")
-        result = subprocess.run([sys.executable, str(Path(__file__).with_name("autocode.py")), "registry", "import",
+        result = subprocess.run([sys.executable, str((Path(__file__).resolve().parents[1] / "tools" / ("autocode.py"))), "registry", "import",
                                  str(selected), "--max-depth", "-1", "--json"], capture_output=True, text=True, check=False)
         self.assertEqual(2, result.returncode)
         self.assertEqual("invalid_depth", json.loads(result.stdout)["error"]["code"])

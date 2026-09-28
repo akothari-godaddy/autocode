@@ -423,7 +423,7 @@ def diagnose_and_retry(project: Path, root: Path, profile: dict, run_dir: Path,
 
 GRADING_SUBPROCESS_TIMEOUT = 30  # seconds; a delivered module that hangs must not stall grading indefinitely.
 _ADAPTER = r'''
-import importlib.util, inspect, json, math, socket, sys
+import decimal, importlib.util, inspect, json, math, numbers, socket, sys
 channel = socket.socket(fileno=int(sys.argv[1]))
 try:
     spec = importlib.util.spec_from_file_location("convert", "convert.py")
@@ -438,7 +438,10 @@ try:
             or parameters[0].default is not inspect.Parameter.empty):
         raise TypeError("expected signature celsius_to_fahrenheit(celsius)")
     values = [function(value) for value in (0, 100, 37)]
-    if any(type(value) not in (int, float) or not math.isfinite(value) for value in values):
+    if any(isinstance(value, bool) or not isinstance(value, (numbers.Real, decimal.Decimal)) for value in values):
+        raise TypeError("conversion results must be finite numbers")
+    values = [float(value) for value in values]
+    if not all(math.isfinite(value) for value in values):
         raise TypeError("conversion results must be finite numbers")
     payload = {"values": values, "contract_valid": True}
 except BaseException as error:
@@ -540,7 +543,9 @@ def judge_final_verdict(project: Path, run_dir: Path, frozen_test_path: Path,
     values = payload.get("values")
     numeric = (isinstance(values, list) and len(values) == 3
                and all(type(value) in (int, float) and abs(value) < 1e6 and math.isfinite(value) for value in values))
-    checks = ([values[0] == 32, values[1] == 212, abs(values[2] - 98.6) < 0.01]
+    # Match the protected unittest's places=2 comparison without executing its
+    # assertions in the candidate-controlled interpreter.
+    checks = ([values[0] == 32, values[1] == 212, round(abs(values[2] - 98.6), 2) == 0]
               if numeric else [False, False, False])
     verified = (not timed_out and proc.returncode == 0 and payload.get("contract_valid") is True and all(checks))
     verdict.update(independent_test_exit=proc.returncode, timed_out=timed_out,

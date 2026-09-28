@@ -18,8 +18,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+TOOLS = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS))
 
 import live_scenarios  # noqa: E402
 import scenario_references as references  # noqa: E402
@@ -115,7 +115,7 @@ class OracleProcessTest(unittest.TestCase):
                 proc.wait.side_effect = wait_error
                 with mock.patch.object(scenarios.subprocess, "Popen", return_value=proc), \
                         mock.patch.object(scenarios.os, "killpg") as killpg:
-                    self.assertEqual((-1, "", "TIMEOUT"), scenarios._run(["child"], HERE, timeout=1))
+                    self.assertEqual((-1, "", "TIMEOUT"), scenarios._run(["child"], TOOLS, timeout=1))
                 killpg.assert_called_once_with(proc.pid, scenarios.signal.SIGKILL)
                 self.assertEqual([mock.call(input=None, timeout=1), mock.call(timeout=5)],
                                  proc.communicate.call_args_list)

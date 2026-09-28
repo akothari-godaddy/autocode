@@ -5,7 +5,7 @@ code: the seeded defect's regression proof, and the mechanical repeat-count
 escalation. They do not exercise astra_diagnose itself -- that mechanic
 (admission -> astra_diagnose -> a model's retry recommendation ->
 re-dispatch) is already proven offline, through the real CLI, in
-tools/test_resolver_runtime.py's OperationalDiagnosisTests. What is new here
+tests/test_resolver_runtime.py's OperationalDiagnosisTests. What is new here
 is specific to live_diagnosis_trial.py: its fixture harness must not crash,
 and it must not misattribute a non-target pause to astra_diagnose's trigger.
 """
@@ -21,8 +21,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))
+TOOLS = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(TOOLS))
 
 import live_diagnosis_trial as trial  # noqa: E402
 from autopilot_testkit import Bundle  # noqa: E402
@@ -216,6 +216,32 @@ class JudgeFinalVerdictTests(unittest.TestCase):
                 (self.project / "convert.py").write_text(candidate)
                 self.assertEqual("FAIL", trial.verdict_result(
                     trial.judge_final_verdict(self.project, self.run_dir, self.frozen)))
+
+    def test_stdlib_numeric_results_preserve_the_frozen_test_contract(self):
+        candidates = [
+            "from fractions import Fraction\ndef celsius_to_fahrenheit(celsius): return Fraction(9, 5) * celsius + 32\n",
+            "from decimal import Decimal\ndef celsius_to_fahrenheit(celsius): return Decimal.from_float(celsius * 9 / 5 + 32)\n",
+        ]
+        (self.project / "test_convert.py").write_text(trial.SEED_TEST)
+        for candidate in candidates:
+            with self.subTest(candidate=candidate):
+                (self.project / "convert.py").write_text(candidate)
+                reference = subprocess.run([sys.executable, "test_convert.py"], cwd=self.project,
+                                           capture_output=True, text=True, timeout=10)
+                self.assertEqual(0, reference.returncode, reference.stdout + reference.stderr)
+                self.assertEqual("PASS", trial.verdict_result(
+                    trial.judge_final_verdict(self.project, self.run_dir, self.frozen)))
+
+    def test_numeric_tolerance_does_not_exceed_the_frozen_test_contract(self):
+        (self.project / "test_convert.py").write_text(trial.SEED_TEST)
+        (self.project / "convert.py").write_text(
+            "def celsius_to_fahrenheit(celsius): return 98.609 if celsius == 37 else celsius * 9 / 5 + 32\n")
+        reference = subprocess.run([sys.executable, "test_convert.py"], cwd=self.project,
+                                   capture_output=True, text=True, timeout=10)
+        self.assertNotEqual(0, reference.returncode)
+        self.assertIn("FAIL", reference.stderr)
+        self.assertEqual("FAIL", trial.verdict_result(
+            trial.judge_final_verdict(self.project, self.run_dir, self.frozen)))
 
     def test_reference_with_noisy_non_utf8_output_still_passes(self):
         (self.project / "test_convert.py").write_text(trial.SEED_TEST)

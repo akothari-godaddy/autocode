@@ -6,16 +6,6 @@ evaluate model quality.
 """
 from __future__ import annotations
 
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import json
 import os
 import subprocess
@@ -25,12 +15,8 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-HERE = _TOOLS
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+HERE = Path(__file__).resolve().parents[1] / "tools"
+sys.path.insert(0, str(HERE))
 
 import live_profiles as profiles  # noqa: E402
 import live_scenarios as scenarios  # noqa: E402
@@ -154,6 +140,23 @@ class Fx01OracleTest(unittest.TestCase):
 
 
 class TrialVerdictTest(unittest.TestCase):
+    def test_harness_timeout_preserves_both_reports_and_oracle_checks(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            oracle = scenarios.OracleResult(scenarios.FAIL, "not delivered", [{"name": "artifact", "ok": False}])
+            spec = {"title": "Fixture", "task": "fixture", "oracle_name": "FX01",
+                    "oracle": mock.Mock(return_value=oracle)}
+            with (mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": str(root / "evidence")}),
+                  mock.patch.object(live_trial, "make_workspace", return_value=root),
+                  mock.patch.object(scenarios, "scenario", return_value=spec),
+                  mock.patch.object(live_trial, "drive", side_effect=live_trial.TrialError("deadline exhausted"))):
+                self.assertEqual(1, live_trial.main(["LIVE-01", "--workspace", str(root)]))
+            evidence = root / "evidence/LIVE-01/01"
+            self.assertEqual("ERROR", json.loads((evidence / "result.json").read_text())["status"])
+            report = json.loads((evidence / "live-trial.json").read_text())
+            self.assertEqual("ERROR", report["verdict"])
+            self.assertEqual(oracle.checks, report["checks"])
+
     def test_verdict_matrix(self):
         cases = [
             ("TASK_COMPLETE", scenarios.PASS, scenarios.PASS),
@@ -218,11 +221,12 @@ class LiveTrialSmokeTest(unittest.TestCase):
         self.assertEqual(0, code)
 
     def test_live_profile_requires_authorization(self):
-        with tempfile.TemporaryDirectory(prefix="live-trial-auth-") as temp:
-            code = live_trial.main([
-                "LIVE-01", "--profile", "glm53", "--workspace", temp,
-            ])
-        self.assertEqual(2, code)
+        for flags in ([], ["--authorize-deployment"]):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory(prefix="live-trial-auth-") as temp:
+                code = live_trial.main([
+                    "LIVE-01", "--profile", "glm53", "--workspace", temp, *flags,
+                ])
+            self.assertEqual(2, code)
 
     def test_bundle_records_profile_and_oracle_checks(self):
         with tempfile.TemporaryDirectory(prefix="live-trial-bundle-") as temp:
@@ -240,6 +244,185 @@ class LiveTrialSmokeTest(unittest.TestCase):
         self.assertEqual("TASK_COMPLETE", payload["runner_status"])
         self.assertTrue(payload["checks"])
         self.assertTrue(all(check["ok"] for check in payload["checks"]))
+
+
+class DrivingBoundsTest(unittest.TestCase):
+    def test_deadline_is_shared_across_cli_steps(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            states = [{"status": "WAITING_FOR_USER", "pending_questions": [{"id": "Q1", "options": ["yes"]}]},
+                      {"status": "TASK_COMPLETE"}, {"status": "TASK_COMPLETE"}]
+            with (mock.patch.object(live_trial.time, "monotonic", side_effect=[0, 2, 5]),
+                  mock.patch.object(live_trial, "_discover_run_dir", return_value=root),
+                  mock.patch.object(live_trial, "load_state", side_effect=states),
+                  mock.patch.object(live_trial, "invoke", return_value=subprocess.CompletedProcess([], 0, "", "")) as invoke):
+                live_trial.drive(root, root, profiles.resolve("fixture"), "task", 8, 20, mock.Mock())
+            self.assertEqual([18, 15], [call.args[-1] for call in invoke.call_args_list])
+
+    def test_unhandled_pause_stops_without_blind_resume(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            with (mock.patch.object(live_trial, "_discover_run_dir", return_value=root),
+                  mock.patch.object(live_trial, "load_state", return_value={"status": "PAUSED_USAGE_UNKNOWN"}),
+                  mock.patch.object(live_trial, "invoke", return_value=subprocess.CompletedProcess([], 2, "", "")) as invoke):
+                result = live_trial.drive(root, root, profiles.resolve("fixture"), "task", 8, 20, mock.Mock())
+            self.assertEqual("PAUSED_USAGE_UNKNOWN", result["state"]["status"])
+            self.assertEqual(1, invoke.call_count)
+
+    def test_review_uses_public_cli_and_artifact_token(self):
+        state = {"status": "WAITING_FOR_USER", "user_request": {"kind": "human_review", "criteria": ["C1"]},
+                 "displayed_review": "artifact-token"}
+        step = mock.Mock()
+        self.assertTrue(live_trial._serve_gate(state, HERE, HERE, profiles.resolve("fixture"), step))
+        self.assertEqual(["--approve-review", "C1", "--review-token", "artifact-token"], step.call_args.args[1][-4:])
+        del state["displayed_review"]
+        with self.assertRaises(live_trial.TrialError):
+            live_trial._serve_gate(state, HERE, HERE, profiles.resolve("fixture"), step)
+
+    def test_timeout_stops_provider_in_separate_process_group(self):
+        import psutil
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            marker = root / "child.pid"
+            script = ("import subprocess,sys,time; from pathlib import Path; "
+                      "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); "
+                      f"Path({str(marker)!r}).write_text(str(child.pid)); time.sleep(60)")
+            with self.assertRaisesRegex(live_trial.TrialError, "budget exhausted"):
+                live_trial.invoke([sys.executable, "-c", script], dict(os.environ), root, 1)
+            pid = int(marker.read_text())
+            self.assertFalse(psutil.pid_exists(pid))
+
+
+class ProgramModeTest(unittest.TestCase):
+    """`--mode program` drives `autocode program run` and serves each child run's gates."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory(prefix="program-mode-")
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+        env = mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": str(self.root / "artifacts")})
+        env.start()
+        self.addCleanup(env.stop)
+        self.project = self.root / "project"
+        self.project.mkdir()
+        self.integration = self.root / "integration"
+        self.integration.mkdir()
+        self.child_run = self.root / "child-run"
+        self.child_run.mkdir()
+        self.calls: list[list[str]] = []
+        self.program_status = ["WAITING", "COMPLETE"]
+
+    def fake_invoke(self, cmd, env, cwd, timeout):
+        self.calls.append(cmd)
+        if cmd[2:4] == ["program", "run"]:
+            status = self.program_status.pop(0)
+            child_status = "AWAITING_GOAL_APPROVAL" if status == "WAITING" else "TASK_COMPLETE"
+            (self.child_run / "state.json").write_text(json.dumps(
+                {"status": child_status, "displayed_goal": "r1:abc"}))
+            summary = {"status": status, "state_file": str(self.root / "state.json"),
+                       "integration_workspace": str(self.integration),
+                       "workstreams": [{"id": "contracts", "status": "WAITING" if status == "WAITING" else "MERGED",
+                                        "run_dir": str(self.child_run), "workspace": str(self.root / "wt")}]}
+            return subprocess.CompletedProcess(cmd, 2 if status != "COMPLETE" else 0, json.dumps(summary), "")
+        if "--approve-goal" in cmd:
+            (self.child_run / "state.json").write_text(json.dumps({"status": "RUNNING"}))
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        raise AssertionError(f"unexpected command {cmd}")
+
+    def test_program_command_passes_profile_flags_without_authorizing_deployment(self):
+        cmd = live_trial.program_command(self.project, profiles.resolve("fixture"), self.root / "program.json")
+        self.assertEqual(["program", "run"], cmd[2:4])
+        self.assertNotIn("--authorize-deployment", cmd)
+        self.assertIn("--joint-planning", cmd)
+        self.assertNotIn("--in-place", cmd)
+        self.assertNotIn("--no-chat", cmd)
+
+    def test_program_command_authorizes_deployment_only_when_explicit(self):
+        cmd = live_trial.program_command(self.project, profiles.resolve("fixture"), self.root / "program.json",
+                                         authorize_deployment=True)
+        self.assertEqual(1, cmd.count("--authorize-deployment"))
+
+    def test_program_deadline_is_shared_across_gate_steps(self):
+        bundle = mock.Mock()
+        self.program_status = ["WAITING", "COMPLETE"]
+        with (mock.patch.object(live_trial.time, "monotonic", side_effect=[0, 2, 5, 8]),
+              mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke) as invoke):
+            live_trial.drive_program(self.project, self.root, profiles.resolve("fixture"),
+                                     {"version": 1}, 8, 20, bundle)
+        self.assertEqual([18, 15, 12], [call.args[-1] for call in invoke.call_args_list])
+
+    def test_cli_deployment_opt_in_is_independent_of_live_spend(self):
+        spec = {"title": "Fixture", "program_manifest": {"version": 1, "name": "x"},
+                "oracle_name": "T", "oracle": lambda project: scenarios.OracleResult(scenarios.PASS, "ok", [])}
+        for profile in ("fixture", "glm53"):
+            for authorize in (False, True):
+                with self.subTest(profile=profile, authorize=authorize):
+                    self.calls.clear()
+                    self.program_status = ["WAITING", "COMPLETE"]
+                    flags = ["--i-authorize-live-model-spend"] if profile != "fixture" else []
+                    if authorize:
+                        flags.append("--authorize-deployment")
+                    with (mock.patch.object(live_trial, "make_workspace", return_value=self.project),
+                          mock.patch.object(scenarios, "scenario", return_value=spec),
+                          mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke)):
+                        code = live_trial.main(["PROGRAM-01", "--mode", "program", "--profile", profile,
+                                                "--workspace", str(self.root), *flags])
+                    self.assertEqual(0, code)
+                    self.assertEqual(3, len(self.calls))
+                    for cmd in self.calls:
+                        is_program = cmd[2:4] == ["program", "run"]
+                        self.assertEqual(authorize and is_program, "--authorize-deployment" in cmd)
+                        self.assertNotIn("--i-authorize-live-model-spend", cmd)
+
+    def test_gates_are_served_per_child_and_the_product_is_the_integration_worktree(self):
+        bundle = Bundle("PROGRAM-TEST")
+        with mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke):
+            run = live_trial.drive_program(self.project, self.root, profiles.resolve("fixture"),
+                                           {"version": 1, "name": "x"}, 20, 60, bundle)
+        self.assertEqual("COMPLETE", run["state"]["status"])
+        self.assertEqual(self.integration, run["product"])
+        kinds = [c[2:4] == ["program", "run"] for c in self.calls]
+        self.assertEqual([True, False, True], kinds)
+        self.assertTrue(all("--authorize-deployment" not in cmd for cmd in self.calls))
+        approve = self.calls[1]
+        self.assertIn("--approve-goal", approve)
+        self.assertEqual(str(self.root / "wt"), approve[approve.index("--workspace") + 1])
+        self.assertEqual(str(self.child_run), approve[approve.index("--run-dir") + 1])
+
+    def test_a_program_stop_without_a_servable_gate_is_never_promoted(self):
+        self.program_status = ["BLOCKED"]
+        bundle = Bundle("PROGRAM-TEST")
+
+        def blocked(cmd, env, cwd, timeout):
+            self.calls.append(cmd)
+            summary = {"status": "BLOCKED", "state_file": str(self.root / "s.json"),
+                       "integration_workspace": str(self.integration),
+                       "workstreams": [{"id": "contracts", "status": "FAILED"}]}
+            return subprocess.CompletedProcess(cmd, 2, json.dumps(summary), "")
+
+        with mock.patch.object(live_trial, "invoke", side_effect=blocked):
+            run = live_trial.drive_program(self.project, self.root, profiles.resolve("fixture"),
+                                           {"version": 1, "name": "x"}, 20, 60, bundle)
+        self.assertEqual(1, len(self.calls))
+        spec = {"oracle": lambda project: scenarios.OracleResult(scenarios.PASS, "ok", []), "oracle_name": "T"}
+        verdict = live_trial.judge(run, spec, self.integration, bundle)
+        self.assertEqual(scenarios.ERROR, verdict.status)
+        self.assertEqual("paused", live_trial.classify_program_status("AUTHORIZATION_REQUIRED"))
+        self.assertEqual("paused", live_trial.classify_program_status("PAUSED_MERGE_CONFLICT"))
+        self.assertEqual("complete", live_trial.classify_program_status("COMPLETE"))
+
+    def test_mode_program_needs_a_manifest_and_score_only_scores_without_driving(self):
+        with mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke):
+            self.assertEqual(2, live_trial.main(["LIVE-01", "--mode", "program", "--workspace", str(self.root)]))
+        self.assertEqual([], self.calls)
+        import scenario_references as references
+        product = self.root / "delivered"
+        references.write(references.BUGFIX_REFERENCE, product)
+        with mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke):
+            self.assertEqual(0, live_trial.main(["BUGFIX-01", "--score-only", str(product)]))
+        self.assertEqual([], self.calls)
+        report = json.loads(next((self.root / "artifacts").glob("BUGFIX-01/*/live-trial.json")).read_text())
+        self.assertEqual(("PASS", "score-only", "bugfix"), (report["verdict"], report["mode"], report["task_type"]))
 
 
 if __name__ == "__main__":

@@ -298,6 +298,14 @@ import json
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from socketserver import TCPServer
+
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+    def server_bind(self):
+        # Numeric loopback needs no external reverse-DNS lookup.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address
 
 
 class JsonHandler(BaseHTTPRequestHandler):
@@ -328,7 +336,7 @@ def call(method, url, payload=None):
     request = urllib.request.Request(url, data=data, method=method,
                                      headers={"Content-Type": "application/json"} if data else {})
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=10) as response:
             raw = response.read()
             return response.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as error:
@@ -338,7 +346,7 @@ def call(method, url, payload=None):
 
 
 def serve(handler, port):
-    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
+    server = LoopbackHTTPServer(("127.0.0.1", port), handler)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
@@ -594,7 +602,7 @@ def call(method, url, payload=None):
     request = urllib.request.Request(url, data=data, method=method,
                                      headers={"Content-Type": "application/json"} if data else {})
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(request, timeout=10) as response:
             raw = response.read()
             return response.status, (json.loads(raw) if raw else None)
     except urllib.error.HTTPError as error:
@@ -609,13 +617,16 @@ class EndToEnd(unittest.TestCase):
         ports = {name: free_port() for name in ("catalog", "cart", "checkout", "gateway")}
         url = lambda name: f"http://127.0.0.1:{ports[name]}"
         cls.gateway = url("gateway")
-        cls.children = [subprocess.Popen(command, cwd=ROOT) for command in (
+        cls.children = []
+        cls.addClassCleanup(cls.stop_services)
+        for command in (
             [sys.executable, "services/catalog/server.py", "--port", str(ports["catalog"])],
             [sys.executable, "services/cart/server.py", "--port", str(ports["cart"])],
             [sys.executable, "services/checkout/server.py", "--port", str(ports["checkout"]),
              "--catalog-url", url("catalog"), "--cart-url", url("cart")],
             [sys.executable, "gateway/server.py", "--port", str(ports["gateway"]),
-             "--catalog-url", url("catalog"), "--cart-url", url("cart"), "--checkout-url", url("checkout")])]
+              "--catalog-url", url("catalog"), "--cart-url", url("cart"), "--checkout-url", url("checkout")]):
+            cls.children.append(subprocess.Popen(command, cwd=ROOT))
         for name in ports:
             deadline = time.monotonic() + 20
             while time.monotonic() < deadline:
@@ -628,11 +639,17 @@ class EndToEnd(unittest.TestCase):
                 raise RuntimeError(f"{name} did not start")
 
     @classmethod
-    def tearDownClass(cls):
+    def stop_services(cls):
         for child in cls.children:
-            child.terminate()
+            if child.poll() is None:
+                child.terminate()
+        deadline = time.monotonic() + 3
         for child in cls.children:
-            child.wait(timeout=10)
+            try:
+                child.wait(timeout=max(0.01, deadline - time.monotonic()))
+            except subprocess.TimeoutExpired:
+                child.kill()
+                child.wait(timeout=1)
 
     def test_journey(self):
         status, items = call("GET", self.gateway + "/catalog")

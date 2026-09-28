@@ -75,8 +75,12 @@ assert.equal(context.renderSessionCheckpoints({run:'x',status:'RUNNING'},[]),nul
 // from saved state only.
 const host=context.renderSessionCheckpoints(base,checkpoints);
 const list=host.children.at(-1);
+assert.equal(list.className,'checkpoint-list');
+assert.equal(list.value,'');
 assert.equal(list.children.length,5);
 const built1=list.children[1],toggle=built1.children[0],detail=built1.children[1];
+assert.equal(built1.className,'checkpoint-item checkpoint-built');
+assert.equal(built1.value,'');
 assert.equal(detail.hidden,true);
 assert.equal(toggle['attr:aria-expanded'],'false');
 toggle.onclick();

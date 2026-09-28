@@ -1,14 +1,4 @@
 """Real CLI unit boundaries with isolated workspaces and offline providers."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 from pathlib import Path
@@ -16,9 +6,9 @@ import sys
 import unittest
 
 from . import test_dispatch, test_subprocess, test_planning, test_goals
-from . import autopilot as orchestrator
-from . import autocode_support as support
-from . import autocode as runner
+import autopilot as orchestrator
+import autocode_support as support
+import autocode as runner
 
 
 class UnitFlow(unittest.TestCase):
@@ -29,7 +19,7 @@ class UnitFlow(unittest.TestCase):
     new_run_engine_args = ('--engine', 'codex')
 
     def select(self, name):
-        self.entry = [sys.executable, str(Path(__file__).with_name(name + '.py'))]
+        self.entry = [sys.executable, str((Path(__file__).resolve().parents[1] / "tools" / (name + '.py')))]
 
     def test_separate_units_plan_parallel_build_review_dependency_and_complete(self):
         self.fixture()

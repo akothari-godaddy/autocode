@@ -1,14 +1,4 @@
 """Bounded-assignment scenarios against the real runner, worktrees and completion gates."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import os
@@ -54,7 +44,7 @@ class AssignmentScenarios(unittest.TestCase):
     def install_builder(self, scenario):
         fixture_bin = self.root / ".autocode/fixture-bin"
         fixture_bin.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(Path(__file__).with_name("scenario_builder.py"), fixture_bin / "codex")
+        shutil.copy2((Path(__file__).resolve().parents[1] / "tools" / ("scenario_builder.py")), fixture_bin / "codex")
         (fixture_bin / "codex").chmod(0o755)
         self.environment = patch.dict(os.environ, {
             "PATH": str(fixture_bin) + os.pathsep + os.environ["PATH"],

@@ -183,7 +183,7 @@ because those repairs make its worktree dirty. Its approved scope still applies.
   re-evaluates readiness after each batch finishes. There is no program-wide budget,
   cancellation/eviction API or automatic worktree cleanup in this version.
 
-Testing: `python3 -m unittest tools.test_program` covers manifest rules, derivation
+Testing: `python3 -m unittest tests.test_program` covers manifest rules, derivation
 from an approved contract, wave order, worktree bases, merges, conflict pause and
 manual resolution, ownership enforcement, tracked integration repairs, contract
 propagation, explicit retries, interrupted checkpoint recovery, deployment gates on
