@@ -234,10 +234,11 @@ def reset_for_resume(state):
 # exhausted": whether repair is exhausted is only checked by reject_completed_
 # stage at the moment PAUSED_REPEATED_FAILURE first fires, and that check
 # reads pending_report_repair['attempts'], which --resume-paused's own
-# reset_report_repair_for_resume zeroes on every explicit resume, before this
-# route's own admission check runs. There is currently no marker of exhaustion
-# that survives that reset, so admission enforces repetition count only; do
-# not describe or rely on it as an exhaustion check until one exists. A
+# reset_report_repair_for_resume zeroes on every explicit resume (after this
+# route's admission check, but admission does not read it). There is currently
+# no marker of exhaustion that survives that reset, so admission enforces
+# repetition count only; do not describe or rely on it as an exhaustion check
+# until one exists. A
 # reviewer's own REWORK verdict keeps using the existing, unrelated
 # astra_resolve route.
 DIAGNOSIS_BOUNDARIES = policy.Boundaries(frozenset({'retry', 'escalate'}), frozenset())

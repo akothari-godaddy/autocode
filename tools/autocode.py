@@ -2547,12 +2547,10 @@ def _main_body(unit=None) -> int:
                             if isinstance(row, dict):
                                 row["seconds"] = 0
                                 row["seconds_by_role"] = {}
-                    # Reset the report-repair and resolver current-cycle attempt
-                    # budgets on explicit resume. Both resets are recorded, not
-                    # silent, and accumulate into a lifetime total neither
-                    # function resets (see reset_report_repair_for_resume and
-                    # resolver_runtime.reset_for_resume).
-                    reset_report_repair_for_resume(state)
+                    # Reset the resolver current-cycle attempt budget on explicit
+                    # resume; recorded, not silent (resolver_runtime.reset_for_resume).
+                    # The report-repair budget is reset further down, after the
+                    # retry paths that read its exhausted count.
                     resolver_runtime.reset_for_resume(state)
                     if args.retry_report:
                         try:
@@ -2581,14 +2579,13 @@ def _main_body(unit=None) -> int:
                         repeated_failure_resume_guard(state, workspace)
                         prepare_planning_retry(state, run_dir)
                         prepare_exhausted_execution_report_retry(state, run_dir, workspace)
-                    # Reset report repair attempts on explicit resume, for whatever
-                    # repair record is still pending. An exhaustion-gated retry
-                    # above (which requires and archives the true attempt count)
-                    # already consumed it if one applied; resetting first would
-                    # corrupt that archived count and always fail those guards.
-                    pending = state.get("pending_report_repair")
-                    if pending and isinstance(pending, dict):
-                        pending["attempts"] = 0
+                    # Reset report repair attempts (recorded, lifetime total kept)
+                    # for whatever repair record is still pending. An
+                    # exhaustion-gated retry above (which requires and archives
+                    # the true attempt count) already consumed it if one applied;
+                    # resetting first would corrupt that archived count and
+                    # always fail those guards.
+                    reset_report_repair_for_resume(state)
                 reconcile_active(state, run_dir, workspace)
             except ReportRepairQueued:
                 pass  # Durable pending repair is dispatched below, not original work.
