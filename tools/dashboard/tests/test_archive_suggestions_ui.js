@@ -12,7 +12,7 @@ const element=(tag,value='')=>({tag,value,children:[],append(...children){this.c
 const now=Date.parse('2026-09-24T20:00:00Z');
 class FixedDate extends Date { static now(){return now;} }
 const context=vm.createContext({
-  Date:FixedDate,JSON,
+  Date:FixedDate,JSON,latestData:{runs:[]},
   $:()=>host,
   n:element,
   card:(_,className)=>({...element('div'),className}),
@@ -23,7 +23,7 @@ const context=vm.createContext({
   basename:value=>value.split('/').at(-1),
   reviewTaskArchive:run=>{reviewed=run.run;}
 });
-vm.runInContext(script,context);
+vm.runInContext(source.slice(source.indexOf('function concise('),source.indexOf('function taskStarted('))+script,context);
 const old='2026-09-20T20:00:00Z';
 const recent='2026-09-24T19:00:00Z';
 const run=(id,status,live,checkpoint=old)=>({run:'/repo/.autocode/runs/'+id,workspace:'/repo',task:id,status,

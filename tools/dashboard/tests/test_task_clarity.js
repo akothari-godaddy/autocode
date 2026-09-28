@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const source = fs.readFileSync(path.join(__dirname, '../dashboard_app.js'), 'utf8');
+const projectedRun = require('./resolver_fixture');
 const context = vm.createContext({URLSearchParams});
 vm.runInContext(source.slice(source.indexOf('const basename ='), source.indexOf("document.addEventListener('focusin'")) +
   '\nlet taskFilter="all", projectFilter="", latestData=null;\n' +
@@ -65,15 +66,15 @@ assert.equal(classify({status: 'RUNNING', error: 'Project is unavailable'}).grou
 assert.equal(classify({status: 'WAITING_FOR_USER', state_error: 'Malformed checkpoint'}).label, 'Unavailable');
 
 // A joint draft only needs approval after the Plan Reviewer finalizes it and a token exists.
-const finalized = {status: 'AWAITING_GOAL_APPROVAL', model_settings: {joint_planning: true},
-  goal_token: 'goal:1:hash', goal: {origin: 'astra_finalize', approval_status: 'draft', body: {intended_outcome: 'Build an exercise tracker'}}};
+const finalized = projectedRun('goal_approval', {status: 'AWAITING_GOAL_APPROVAL', model_settings: {joint_planning: true},
+  goal: {origin: 'astra_finalize', approval_status: 'draft', body: {intended_outcome: 'Build an exercise tracker'}}});
 assert.equal(classify(finalized).label, 'Approve plan');
 assert.equal(classify(finalized).reason, 'Build an exercise tracker');
 assert.equal(classify({...finalized, goal_token: ''}).group, 'stopped');
 assert.equal(classify({...finalized, goal: {...finalized.goal, origin: 'glm_draft'}}).group, 'stopped');
 assert.equal(classify({...finalized, goal: {...finalized.goal, approval_status: 'approved'}}).group, 'stopped');
-assert.equal(classify({...finalized, questions: [question]}).action, 'Answer 1 question');
-const multiple = classify({status: 'WAITING_FOR_USER', questions: [question, {id: 'Q2', question: 'What should pass?'}]});
+assert.equal(classify(projectedRun('clarification', {...finalized, questions: [question]})).action, 'Answer 1 question');
+const multiple = classify(projectedRun('clarification', {questions: [question, {id: 'Q2', question: 'What should pass?'}]}));
 assert.equal(multiple.group, 'attention');
 assert.equal(multiple.action, 'Answer 2 questions');
 assert.equal(multiple.reason, question.question);
@@ -82,14 +83,16 @@ assert.equal(multiple.reason, question.question);
 // human-review request should divert a waiting question to the output tab.
 const review = {status: 'WAITING_FOR_USER', review_token: 'artifact:new',
   review_criteria: [{id: 'C1'}, {id: 'C2'}], human_reviews: {C1: {token: 'artifact:new'}, C2: {token: 'artifact:old'}}};
-const output = classify({...review, user_request: {kind: 'human_review', decision_needed: 'Review the interface'}});
+const output = classify(projectedRun('human_review', {...review, user_request: {kind: 'human_review', decision_needed: 'Review the interface'}}));
 assert.equal(output.label, 'Review output');
 assert.equal(output.action, 'Review 1 item');
 assert.equal(output.tab, 'execution');
-const blocker = classify({...review, questions: [question], user_request: {kind: 'blocker', decision_needed: question.question}});
+const blocker = classify(projectedRun('clarification', {...review, questions: [question]}));
 assert.equal(blocker.action, 'Answer 1 question');
 assert.equal(blocker.tab, 'interview');
-assert.equal(classify({status: 'BLOCKED_HUMAN', questions: [question], user_request: {decision_needed:'Choose the deployment target'}}).reason, 'Choose the deployment target');
+assert.equal(classify(projectedRun('blocker', {questions: [question], user_request: {decision_needed:'Choose the deployment target'}})).reason, 'Choose the deployment target');
+assert.equal(classify({status:'BLOCKED_HUMAN',questions:[question]}).label,'Awaiting AutoResolver');
+assert.equal(classify(projectedRun(null,{status:'WAITING_FOR_USER',questions:[question]})).group,'stopped');
 assert.equal(classify({status: 'DRY_RUN', questions: [question]}).group, 'other');
 assert.equal(classify({status: 'UNRECOGNIZED_STATE'}).group, 'other');
 
@@ -157,7 +160,7 @@ for (const state of ['unknown','none','exited']) {
   assert.equal(classify(saved).stateLabel,'Stopped at a checkpoint');
 }
 assert.equal(classify(live).stateLabel,'Worker confirmed running');
-assert.equal(classify({status:'WAITING_FOR_USER',questions:[question]}).stateLabel,'Waiting for your decision');
+assert.equal(classify(projectedRun('clarification',{questions:[question]})).stateLabel,'Waiting for your decision');
 assert.equal(classify({status:'WAITING_FOR_USER',questions:[],user_request:null}).group,'stopped');
 assert.equal(classify({status:'TASK_COMPLETE'}).stateLabel,'Complete');
 for(const status of ['PAUSED_INVALID_OUTPUT','PAUSED_REPORT_REPAIR_LIMIT','PAUSED_PERMISSION_RECONCILIATION']) {

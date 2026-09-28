@@ -1084,6 +1084,18 @@ SCENARIOS = {
 }
 
 
+def _dual_layout_oracle(spec_id, rich_spec, thin_spec):
+    """Score seeded campaign projects with the campaign oracle and delivered
+    reference packages (score-only mode) with the task-type oracle."""
+    rich_oracle, thin_oracle = rich_spec["oracle"], thin_spec["oracle"]
+    seed_names = set(rich_spec["seed"])
+
+    def oracle(project):
+        names = {row.name for row in Path(project).iterdir()} if Path(project).is_dir() else set()
+        return rich_oracle(project) if seed_names <= names else thin_oracle(project)
+    return {**rich_spec, "oracle": oracle}
+
+
 def registry() -> dict:
     """Every registered scenario: the task-type catalogue plus this module's
     richer campaign definitions, which win for ids both define."""
@@ -1092,7 +1104,9 @@ def registry() -> dict:
     except ImportError:
         import task_scenarios
     merged = dict(task_scenarios.SCENARIOS)
-    merged.update(SCENARIOS)
+    for scenario_id, spec in SCENARIOS.items():
+        merged[scenario_id] = (_dual_layout_oracle(scenario_id, spec, merged[scenario_id])
+                               if scenario_id in merged else spec)
     return merged
 
 

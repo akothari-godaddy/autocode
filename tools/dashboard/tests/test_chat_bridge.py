@@ -15,11 +15,16 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from agent_console import Console, Handler, LoopbackHTTPServer
 from dashboard_chat import planning_messages
+from test_pending_decisions import publish, resolver_human
 
 
 FAKE_RUNNER = r'''
 import json, sys
 from pathlib import Path
+sys.path.insert(0, FIXTURE_IMPORT_PATH)
+from test_pending_decisions import publish, resolver_human
+from unittest.mock import patch
+patch.object(resolver_human.support, 'snapshot', return_value={'revision': 'fixture-source'}).start()
 root = Path(__file__).parent
 args = sys.argv[1:]
 def arg(flag): return args[args.index(flag) + 1]
@@ -75,8 +80,13 @@ else:
    if (root/'answer-fails').exists():
     print('fixture answer rejected',file=sys.stderr);raise SystemExit(1)
    ident,text=arg('--answer').split('=',1) if '--answer' in args else (arg('--delegate'),'delegated')
+   assert arg('--resolver-token') == state['resolver_human_request']['request_token']
    state.setdefault('answers',{})[ident]=text
    state['pending_questions']=[q for q in state.get('pending_questions',[]) if q['id']!=ident]
+   state.pop('resolver_human_request',None)
+   state.pop('user_request',None)
+   if state['pending_questions']: publish(state)
+   else: state['status']='RUNNING'
   else: state['continued']=state.get('continued',0)+1
   write(path,state)
  print('fixture saved')
@@ -88,10 +98,13 @@ class ChatFixture:
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
+        source_snapshot = patch.object(resolver_human.support, 'snapshot', return_value={'revision': 'fixture-source'})
+        source_snapshot.start()
+        self.addCleanup(source_snapshot.stop)
         self.workspace = self.root / 'project'
         (self.workspace / '.git').mkdir(parents=True)
         self.fake = self.root / 'runner.py'
-        self.fake.write_text(FAKE_RUNNER)
+        self.fake.write_text(FAKE_RUNNER.replace('FIXTURE_IMPORT_PATH', repr(str(Path(__file__).resolve().parent))))
         self.provider_calls = []
         self.console = self.make_console()
 
@@ -141,6 +154,8 @@ class ChatFixture:
         self.run.mkdir(parents=True)
         self.state = {'workspace': str(self.workspace), 'task': 'Existing task', 'status': 'WAITING_FOR_USER',
                       'pending_questions': list(questions), 'intervention_capability': {'supported': True, 'version': 1}}
+        if questions:
+            publish(self.state)
         self.save_state()
         return self.run
 
@@ -151,8 +166,15 @@ class ChatFixture:
         return json.loads((self.run / 'state.json').read_text())
 
     def chat(self, text='Please retain the history', **extra):
+        fields = {}
+        if extra.get('question_id'):
+            previous = next((row for row in self.console._chat_rows(self.run)
+                             if row['id'] == extra.get('request_id', 'message-request')), None)
+            public = self.read_state().get('resolver_human_request', {})
+            fields = ({key: previous.get(key) for key in ('resolver_request', 'resolver_token')} if previous else
+                      {'resolver_request': public.get('request_id'), 'resolver_token': public.get('request_token')})
         return self.console.chat({'workspace': str(self.workspace), 'run': str(self.run),
-                                  'request_id': 'message-request', 'text': text, **extra})
+                                  'request_id': 'message-request', 'text': text, **fields, **extra})
 
 
 class ChatBridgeTests(ChatFixture, unittest.TestCase):
@@ -402,29 +424,30 @@ class ChatBridgeTests(ChatFixture, unittest.TestCase):
         message = restored.task_view(self.workspace, self.run)['chat_messages'][0]
         self.assertEqual('received', message['status'])
         self.assertIsNone(message['error'])
-        self.assertEqual('received', restored._chat_rows(self.run)[0]['status'])
+        self.assertEqual('saved', restored._chat_rows(self.run)[0]['status'], 'Polling must not rewrite receipts')
         self.assertNotIn('continued', self.read_state())
         self.assertEqual([], self.commands())
 
     def test_restart_keeps_unconfirmed_answers_visible_for_explicit_same_id_retry(self):
         self.make_run([{'id': ident, 'question': ident} for ident in ('missing', 'changed', 'delegated')])
         self.state['answers'] = {'changed': {'text': 'Different value'}, 'delegated': {'text': 'Browser only'}}
+        fields = publish(self.state)
         self.save_state()
         for ident in ('missing', 'changed', 'delegated'):
             self.console._save_chat(self.run, {
                 'id': 'restart-' + ident, 'role': 'user', 'speaker': 'You', 'text': 'Browser only',
                 'submitted_text': 'Browser only', 'question_id': ident, 'question_text': ident,
-                'delegate': ident == 'delegated', 'status': 'saved', 'action_id': 'lost-' + ident, 'error': None})
+                'delegate': ident == 'delegated', 'status': 'saved', 'action_id': 'lost-' + ident, 'error': None, **fields})
         restored = self.make_console()
         restored.conversations
         messages = restored.task_view(self.workspace, self.run)['chat_messages']
         self.assertEqual(['error'] * 3, [row['status'] for row in messages])
         self.assertTrue(all('could not be confirmed after restart' in row['error'] for row in messages))
-        self.assertEqual(['error'] * 3, [row['status'] for row in restored._chat_rows(self.run)])
+        self.assertEqual(['saved'] * 3, [row['status'] for row in restored._chat_rows(self.run)])
         self.assertEqual([], self.commands())
         data = {'workspace': str(self.workspace), 'run': str(self.run), 'text': 'Browser only',
-                'question_id': 'missing', 'request_id': 'restart-missing'}
-        self.assertEqual('error', restored.chat(data)['status'])
+                'question_id': 'missing', 'request_id': 'restart-missing', **fields}
+        self.assertEqual('saved', restored.chat(data)['status'])
         self.assertEqual([], self.commands())
         restored.chat({**data, 'retry': True})
         self.eventually(lambda: restored._chat_rows(self.run)[0]['status'] == 'received')
@@ -471,6 +494,21 @@ class ChatBridgeTests(ChatFixture, unittest.TestCase):
         self.chat('answer', question_id='current')
         with self.assertRaisesRegex(ValueError, 'different message'):
             self.chat('different answer', question_id='current')
+
+    def test_human_review_question_does_not_capture_ordinary_feedback(self):
+        self.make_run()
+        publish(self.state, scope='human_review')
+        self.save_state()
+        view = self.console.view(self.workspace, self.run)
+        self.assertTrue(view['human_request_authorized'])
+        self.assertEqual('human_review', view['human_escalation']['scope'])
+        self.assertTrue(view['questions'])
+        with patch.object(self.console, 'intervene', return_value={'id': 'feedback', 'status': 'applied'}) as intervention, \
+                patch.object(self.console, 'enqueue') as enqueue:
+            row = self.chat('Please change the requested output before I accept it', request_id='review-feedback')
+        self.assertEqual('received', row['status'])
+        self.assertEqual('feedback', intervention.call_args.args[2])
+        enqueue.assert_not_called()
 
     def test_feedback_has_durable_receipt_survives_reload_and_replays_once(self):
         self.make_run()

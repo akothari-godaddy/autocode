@@ -350,7 +350,7 @@ function openScenario(info, name, viewport) {
     'completed-missing': ['#task-title', 'completed runtime-monitoring'],
     'completed-invalid': ['#task-title', 'completed runtime-monitoring'],
     plan: ['#brief-current', 'Plan revision'],
-    'pending-answer': ['#conversation', 'saved planning step'],
+    'pending-answer': ['#conversation', 'The worker state says the planning step was saved'],
   }[name];
   waitForCondition('document.querySelector(' + JSON.stringify(expected[0]) + ')?.textContent.includes(' + JSON.stringify(expected[1]) + ')', name + ' scenario render');
   // Browser hash navigation can retain a nested page scroll position. Every
@@ -393,7 +393,7 @@ function assertScenarioRendered(name) {
     'completed-missing': ['#task-title', /completed runtime-monitoring/],
     'completed-invalid': ['#task-title', /completed runtime-monitoring/],
     plan: ['#brief-current', /Plan revision/],
-    'pending-answer': ['#conversation', /saved planning step/i],
+    'pending-answer': ['#conversation', /The worker state says the planning step was saved/],
   };
   const entry = expected[name];
   const text = data('()=>document.querySelector(' + JSON.stringify(entry[0]) + ')?.textContent||""');
@@ -431,11 +431,21 @@ function assertM2Scenario(name, viewport) {
     }
     assert.ok(workspace.rows.some(row => row.state === 'Running · worker verified alive'));
     assert.ok(workspace.rows.some(row => row.state === 'Activity reported · live process not confirmed'));
+    const decisions=data('()=>latestData.runs.filter(run=>statusInfo(run).group==="attention").map(run=>({authorized:run.human_request_authorized,scope:run.human_escalation?.scope,id:run.human_escalation?.request_id,token:run.human_escalation?.request_token}))');
+    assert.equal(decisions.length,3,viewport.name+' aggregate contains exactly three issued requests');
+    assert.ok(decisions.every(row=>row.authorized===true&&row.id&&row.token),viewport.name+' waiting rows retain verified resolver envelopes');
+    assert.deepEqual(decisions.map(row=>row.scope).sort(),['clarification','clarification','goal_approval']);
     return;
   }
 
   const navigation = data('()=>[...document.querySelectorAll(".detail-tabs [role=tab]")].map(tab=>tab.textContent.trim())');
   assert.deepEqual(navigation, ['Now', 'Conversation', 'Plan', 'Changes', 'Preview', 'Checks', 'History'], name + ' retains every labeled task destination');
+  if(['waiting','plan','pending-answer'].includes(name)){
+    const authority=data('()=>({authorized:latestRun.human_request_authorized,scope:latestRun.human_escalation?.scope,id:latestRun.human_escalation?.request_id,token:latestRun.human_escalation?.request_token,questionsMatch:JSON.stringify(latestRun.questions)===JSON.stringify(latestRun.human_escalation?.questions)})');
+    assert.equal(authority.authorized,true,name+' is published by the test writer, not a raw model question');
+    assert.equal(authority.scope,name==='plan'?'goal_approval':'clarification');
+    assert.ok(authority.id&&authority.token&&authority.questionsMatch,name+' controls use the current projected envelope');
+  }
 
   if (['running', 'waiting', 'paused', 'completed'].includes(name)) {
     const task = taskFoldMetrics(),facts=Object.fromEntries(task.facts.map(fact=>[fact.key,fact]));
@@ -480,7 +490,7 @@ function assertM2Scenario(name, viewport) {
       // clipped operational-fact node.
       assert.match(facts.blocker.visibleText, /^Answer 3 questions · first unresolved: The worker state says the planning step was/);
       assert.match(data('()=>document.querySelector(".decision-card")?.innerText||""'), new RegExp(expected.question.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\n+/g, '\\s+')));
-      assert.match(data('()=>document.querySelector("#now")?.textContent||""'), /After the final answer is saved, planning continues automatically\./);
+      assert.match(data('()=>document.querySelector("#now")?.textContent||""'), /Planning continues only if the controller returns to Running with no pending request\./);
       assert.match(data('()=>document.querySelector("#now")?.textContent||""'), /This does not approve a plan or start implementation\./);
     }
     if (name === 'paused') {
@@ -539,7 +549,7 @@ function assertM2Scenario(name, viewport) {
     const answer = data('()=>({conversation:document.querySelector("#conversation")?.textContent||"",delivery:document.querySelector("#task-delivery")?.textContent||"",mode:document.querySelector("#live-mode")?.textContent||"",label:document.querySelector("#change-label")?.textContent||"",questionCount:document.querySelector("#question-target")?.options.length||0,request:document.querySelector("#change-history")?.textContent||""})');
     assert.match(answer.conversation, /The worker state says the planning step was saved/);
     assert.match(answer.conversation, /If recovery succeeds, should the dashboard return to plan review/);
-    assert.equal(answer.delivery, 'After the final answer is saved, planning continues automatically.');
+    assert.equal(answer.delivery, 'Planning continues only if the controller returns to Running with no pending request.');
     assert.equal(answer.mode, 'This does not approve a plan or start implementation.');
     assert.equal(answer.label, 'Your answer');
     assert.equal(answer.questionCount, 3);
@@ -773,17 +783,22 @@ function assertM2Scenario(name, viewport) {
       openFlowScenario(info, 'flow-answer-'+viewport.name, viewport, 'Answer the saved recovery');
       browser('click', '.detail-tabs [data-tab="interview"]');
       browser('wait', '100');
-      const answerBefore=data('()=>({questions:latestRun.questions?.length||0,status:latestRun.status,approval:latestRun.goal?.approval_status||"",draft:document.querySelector("#change-text").value})');
+      const answerBefore=data('()=>({questions:latestRun.questions?.length||0,status:latestRun.status,approval:latestRun.goal?.approval_status||"",draft:document.querySelector("#change-text").value,authorized:latestRun.human_request_authorized,request:latestRun.human_escalation?.request_id,token:latestRun.human_escalation?.request_token})');
       browser('fill', '#change-text', 'Preserve the saved revision and inspect the interrupted attempt first.');
       browser('press', 'Enter');
       waitForCondition('(latestRun.questions?.length||0)===2', viewport.name + ' answer receipt');
-      const answerAfter=data('()=>({questions:latestRun.questions?.length||0,status:latestRun.status,approval:latestRun.goal?.approval_status||"",draft:document.querySelector("#change-text").value,receipt:(latestRun.chat_messages||[]).find(message=>message.question_id==="question-1")||null})');
+      const answerAfter=data('()=>({questions:latestRun.questions?.length||0,status:latestRun.status,approval:latestRun.goal?.approval_status||"",draft:document.querySelector("#change-text").value,authorized:latestRun.human_request_authorized,request:latestRun.human_escalation?.request_id,token:latestRun.human_escalation?.request_token,receipt:(latestRun.chat_messages||[]).find(message=>message.question_id==="question-1")||null})');
       assert.equal(answerBefore.questions, 3, viewport.name+' flow begins with three saved questions');
       assert.equal(answerAfter.questions, 2, viewport.name+' saved answer updates only the addressed question');
       assert.equal(answerAfter.status, answerBefore.status, viewport.name+' answer does not approve or start work');
       assert.equal(answerAfter.approval, answerBefore.approval, viewport.name+' answer preserves the plan gate');
       assert.equal(answerAfter.draft, '', viewport.name+' confirmed answer receipt clears only the submitted draft');
       assert.equal(answerAfter.receipt?.status, 'received', viewport.name+' answer records a durable receipt');
+      assert.equal(answerBefore.authorized,true);assert.equal(answerAfter.authorized,true);
+      assert.equal(answerAfter.receipt.resolver_request,answerBefore.request,viewport.name+' receipt remains bound to the request actually answered');
+      assert.equal(answerAfter.receipt.resolver_token,answerBefore.token,viewport.name+' answer sends the exact displayed resolver token');
+      assert.notEqual(answerAfter.request,answerBefore.request,viewport.name+' remaining questions require a newly issued request');
+      assert.notEqual(answerAfter.token,answerBefore.token,viewport.name+' old replies cannot target the remaining questions');
       flow.answer={before:answerBefore,after:answerAfter,screenshot:captureRepresentativeFlow('answer',viewport)};
 
       freshBrowserSession('plan-'+viewport.name);
