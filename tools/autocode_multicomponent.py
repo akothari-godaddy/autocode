@@ -40,7 +40,10 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .autocode_taskrun import TaskRun, TaskRunError
+try:
+    from .autocode_taskrun import TaskRun, TaskRunError
+except ImportError:
+    from autocode_taskrun import TaskRun, TaskRunError
 
 GIT_IDENTITY = ("-c", "user.name=AutoCode", "-c", "user.email=autocode@localhost")
 EXCLUDE = (":(exclude).autocode", ":(exclude).autocode-ui", ":(exclude,glob)**/__pycache__/**",

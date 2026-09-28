@@ -4,6 +4,7 @@ import argparse,json,os,re,selectors,signal,subprocess,sys,threading,time,tomlli
 from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import parse_qs,urlparse
 sys.dont_write_bytecode=True
 CODEX_DEFAULT_MODELS={'astra':'gpt-5.6-sol','terra':'gpt-5.6-terra','sol':'gpt-5.6-sol','completion':'gpt-5.6-sol'}
@@ -414,7 +415,7 @@ class LegacyConsole:
   except OSError:key=str(run or ws)
   return list(self.actions.get(key,[]))
  def joint_models(self,d):
-  explicit={role:d.get(role+'_model','') for role in ('glm','astra','terra','sol','completion')}
+  explicit={role:d.get(role+'_model','') for role in ('glm','plan_reviewer','astra','terra','sol','completion')}
   if any(not isinstance(value,str) for value in explicit.values()):raise ValueError('Model choices must be strings')
   chosen={role:value for role,value in explicit.items() if value}
   if self.run_provider!='opencode':
@@ -438,7 +439,7 @@ class LegacyConsole:
     if value not in catalogue['models']:raise ValueError('Choose a current provider/model identifier from the catalogue')
   return chosen
  def joint_efforts(self,d):
-  explicit={role:d.get(role+'_reasoning_effort','') for role in ('astra','terra','sol','completion')}
+  explicit={role:d.get(role+'_reasoning_effort','') for role in ('plan_reviewer','astra','terra','sol','completion')}
   if any(not isinstance(value,str) for value in explicit.values()):raise ValueError('Reasoning choices must be strings')
   if any(value and value not in REASONING_EFFORTS for value in explicit.values()):raise ValueError('Choose a supported reasoning level')
   return {role:value for role,value in explicit.items() if value}
@@ -457,7 +458,7 @@ class LegacyConsole:
   else:
    if role=='glm' or model not in (CODEX_DEFAULT_MODELS.get(role),GLM_MODELS.get(role)):raise ValueError('This saved route does not support the selected replacement model')
    selected=model
-  action=self.enqueue(ws,run,'Confirm model replacement for '+role,['--'+role+'-model',selected,'--show-goal','--no-chat'])
+  action=self.enqueue(ws,run,'Confirm model replacement for '+role,['--'+role.replace('_','-')+'-model',selected,'--show-goal','--no-chat'])
   action['request_id']=request_id
   return action
  def create(self,d):
@@ -469,8 +470,8 @@ class LegacyConsole:
   if engine=='opencode':
    chosen=self.joint_models(d);efforts=self.joint_efforts(d)
    extra=[goal,'--engine','opencode','--provider',self.run_provider,'--joint-planning','--no-chat']
-   for role,value in chosen.items():extra+=['--'+role+'-model',value]
-   for role,value in efforts.items():extra+=['--'+role+'-reasoning-effort',value]
+   for role,value in chosen.items():extra+=['--'+role.replace('_','-')+'-model',value]
+   for role,value in efforts.items():extra+=['--'+role.replace('_','-')+'-reasoning-effort',value]
    return self.enqueue(ws,None,'Create OpenCode task' if self.run_provider=='opencode' else 'Create '+self.run_provider+' task',extra)
   if d.get('glm_model'):raise ValueError('Planner discovery requires the default joint-planning engine')
   models={r:d.get(r+'_model',v) for r,v in CODEX_DEFAULT_MODELS.items()};provider=self.zai_probe()
@@ -509,7 +510,7 @@ class LegacyConsole:
    if not efforts:raise ValueError('Choose at least one reasoning level')
    if v.get('active_stage'):raise ValueError('Wait for the current model step to finish before changing reasoning')
    extra=[]
-   for role,value in efforts.items():extra+=['--'+role+'-reasoning-effort',value]
+   for role,value in efforts.items():extra+=['--'+role.replace('_','-')+'-reasoning-effort',value]
    return self.enqueue(ws,run,'Save reasoning settings',extra+['--show-goal','--no-chat'])
   if action=='set_model':return self.confirm_model_replacement(d,ws,run,v)
   if action=='continue':return self.enqueue(ws,run,'Continue',[])
@@ -534,6 +535,11 @@ class Console(TaskArchiveMixin, ProjectRemovalMixin, ConversationMixin, Registry
 INDEX = Path(__file__).with_name('dashboard.html').read_text()
 STYLE = Path(__file__).with_name('dashboard.css').read_text()
 APP = Path(__file__).with_name('dashboard_app.js').read_text()
+
+class LoopbackHTTPServer(ThreadingHTTPServer):
+ def server_bind(self):
+  # Skip HTTPServer's reverse-DNS getfqdn() of the numeric loopback address: ~35s per bind on some hosts (#92).
+  TCPServer.server_bind(self);self.server_name,self.server_port=self.server_address[:2]
 
 class Handler(BaseHTTPRequestHandler):
  server_version='agent-console';protocol_version='HTTP/1.1'
@@ -624,5 +630,5 @@ def main():
   try:
    registry=provider_registry();run_provider=a.provider or registry.default_name();registry.resolve(run_provider)
   except (RuntimeError,ValueError) as error:p.error(str(error))
-  c=Console(a.workspace,a.runner,watch_roots=a.watch_root,watch_depth=a.watch_depth,run_provider=run_provider);c._discovered();s=ThreadingHTTPServer(('127.0.0.1',a.port),Handler);s.console=c;s.hosts={'127.0.0.1:'+str(s.server_port),'localhost:'+str(s.server_port)};print('http://127.0.0.1:'+str(s.server_port),flush=True);s.serve_forever()
+  c=Console(a.workspace,a.runner,watch_roots=a.watch_root,watch_depth=a.watch_depth,run_provider=run_provider);c._discovered();s=LoopbackHTTPServer(('127.0.0.1',a.port),Handler);s.console=c;s.hosts={'127.0.0.1:'+str(s.server_port),'localhost:'+str(s.server_port)};print('http://127.0.0.1:'+str(s.server_port),flush=True);s.serve_forever()
 if __name__=='__main__':main()

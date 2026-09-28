@@ -2,7 +2,7 @@ import http.client,json,os,subprocess,sys,tempfile,threading,time,unittest
 from unittest.mock import patch
 from pathlib import Path
 sys.path.insert(0,str(Path(__file__).parents[1]))
-from agent_console import Console,Handler,ThreadingHTTPServer,configured_zai
+from agent_console import Console,Handler,LoopbackHTTPServer,configured_zai
 class Tests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();isolation=patch.dict(os.environ,{'AUTOCODE_HOME':str(Path(self.tmp.name)/'registry-home')});isolation.start();self.addCleanup(isolation.stop);self.ws=Path(self.tmp.name)/'w';(self.ws/'.git').mkdir(parents=True);self.run=self.ws/'.autocode/runs/r';self.run.mkdir(parents=True);self.fake=Path(self.tmp.name)/'fake.py';self.fake.write_text('import sys\nprint("o"*3000);print("e"*3000,file=sys.stderr)')
@@ -50,7 +50,7 @@ class Tests(unittest.TestCase):
   rows=console.discover();self.assertEqual(1,len(rows));self.assertIn('escapes watched workspace',rows[0]['error'])
   with self.assertRaises(ValueError):console.mutate({'workspace':str(watched),'run':str(escaped),'action':'continue'})
  def test_selected_run_disappearance_api_and_ui_invalidation_regression(self):
-  s=ThreadingHTTPServer(('127.0.0.1',0),Handler);s.console=self.c;s.hosts={'127.0.0.1:'+str(s.server_port)};threading.Thread(target=s.serve_forever,daemon=True).start()
+  s=LoopbackHTTPServer(('127.0.0.1',0),Handler);s.console=self.c;s.hosts={'127.0.0.1:'+str(s.server_port)};threading.Thread(target=s.serve_forever,daemon=True).start()
   def get():
    h=http.client.HTTPConnection('127.0.0.1',s.server_port);h.request('GET','/api/run?workspace='+str(self.ws).replace('/','%2F')+'&run='+str(self.run).replace('/','%2F'));reply=h.getresponse();status=reply.status;body=json.loads(reply.read());h.close();return status,body
   try:
@@ -72,7 +72,7 @@ class Tests(unittest.TestCase):
   with self.assertRaises(ValueError):self.c.mutate({'workspace':str(self.ws),'run':str(self.run),'action':'continue'})
   x=self.wait();self.assertEqual(0,x['exit_status']);self.assertGreater(len(x['stdout']),1000);self.assertGreater(len(x['stderr']),1000)
  def test_http_security(self):
-  s=ThreadingHTTPServer(('127.0.0.1',0),Handler);s.console=self.c;authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start()
+  s=LoopbackHTTPServer(('127.0.0.1',0),Handler);s.console=self.c;authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start()
   def post(headers=None,missing_host=False):
    body=json.dumps({'workspace':str(self.ws),'run':str(self.run),'action':'continue'});h=http.client.HTTPConnection('127.0.0.1',s.server_port)
    if missing_host:
@@ -118,7 +118,7 @@ class Tests(unittest.TestCase):
   flat=str(rows);self.assertNotIn(str(d4),flat);self.assertNotIn(str(ng),flat)
   c1=Console([],self.fake,lambda:'ZAI',watch_roots=[root],watch_depth=1)
   self.assertEqual({str(d1)},{r['workspace'] for r in c1.discover() if r.get('run')})
-  s=ThreadingHTTPServer(('127.0.0.1',0),Handler);s.console=c;s.hosts={'127.0.0.1:'+str(s.server_port)};threading.Thread(target=s.serve_forever,daemon=True).start()
+  s=LoopbackHTTPServer(('127.0.0.1',0),Handler);s.console=c;s.hosts={'127.0.0.1:'+str(s.server_port)};threading.Thread(target=s.serve_forever,daemon=True).start()
   try:
    h=http.client.HTTPConnection('127.0.0.1',s.server_port);h.request('GET','/api/runs');reply=h.getresponse();payload=json.loads(reply.read());h.close()
    self.assertIn(str(d1),payload['workspaces']);self.assertIn(str(d3),payload['workspaces']);self.assertNotIn(str(d4),payload['workspaces']);self.assertNotIn(str(ng),payload['workspaces'])
@@ -194,7 +194,7 @@ class Tests(unittest.TestCase):
   with self.assertRaisesRegex(ValueError,'existing Git workspace'):c.create({'project':['not','a','path'],'goal':'x','engine':'opencode'})
   self.assertEqual([],c.workspaces);self.assertFalse(missing.exists());self.assertEqual({},c.actions)
  def test_create_api_requires_same_origin_and_authorizes_only_valid_entered_project(self):
-  external=Path(self.tmp.name).resolve()/'api-worktree';external.mkdir();(external/'.git').write_text('gitdir: /tmp/worktree');s=ThreadingHTTPServer(('127.0.0.1',0),Handler);s.console=Console([],self.fake,lambda:None);authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start()
+  external=Path(self.tmp.name).resolve()/'api-worktree';external.mkdir();(external/'.git').write_text('gitdir: /tmp/worktree');s=LoopbackHTTPServer(('127.0.0.1',0),Handler);s.console=Console([],self.fake,lambda:None);authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start()
   def post(body,headers):
    h=http.client.HTTPConnection('127.0.0.1',s.server_port);h.request('POST','/api/create',json.dumps(body),headers);reply=h.getresponse();status=reply.status;reply.read();h.close();return status
   try:
@@ -202,9 +202,14 @@ class Tests(unittest.TestCase):
   finally:s.shutdown();s.server_close()
  def test_unavailable_watch_root_reports_error_row_only_for_that_root(self):
   base=Path(self.tmp.name).resolve();ok=self.make_ws(base/'ok');missing=base/'missing';bad=base/'bad';bad.mkdir();bad.chmod(0)
-  c=Console([],self.fake,lambda:'ZAI',watch_roots=[missing,ok,bad])
+  c=Console([],self.fake,lambda:'ZAI',watch_roots=[missing,ok,bad]);scandir=os.scandir
+  # Root ignores mode 0, so deny the unreadable root the way the OS denies every other user.
+  def denied(path='.'):
+   if Path(path)==bad:raise PermissionError(13,'Permission denied',str(bad))
+   return scandir(path)
   try:
-   rows=c.discover();errs={r['workspace']:r['error'] for r in rows if 'error' in r and not r.get('run')}
+   with patch.object(os,'scandir',denied):rows=c.discover()
+   errs={r['workspace']:r['error'] for r in rows if 'error' in r and not r.get('run')}
    self.assertEqual({str(missing),str(bad)},set(errs))
    for e in errs.values():self.assertIn('watch root unavailable',e)
    self.assertEqual([str(ok)],[r['workspace'] for r in rows if r.get('run')])
@@ -264,7 +269,7 @@ class RuntimeWatchRootTests(unittest.TestCase):
   self.assertEqual([str(project)],[str(w) for w in c.workspaces])
   self.assertEqual([{'path':str(cli_root),'runtime':False,'removable':False}],c.watch_root_rows())
  def test_runtime_root_api_rejects_hostile_origin_and_invalid_paths(self):
-  cli_root=self.base/'cli-root';cli_root.mkdir();explicit=self.workspace(self.base/'explicit');c=Console([explicit],self.fake,lambda:None,watch_roots=[cli_root]);s=ThreadingHTTPServer(('127.0.0.1',0),Handler);s.console=c;authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start();root=self.workspace(self.base/'runtime'/'project').parent
+  cli_root=self.base/'cli-root';cli_root.mkdir();explicit=self.workspace(self.base/'explicit');c=Console([explicit],self.fake,lambda:None,watch_roots=[cli_root]);s=LoopbackHTTPServer(('127.0.0.1',0),Handler);s.console=c;authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start();root=self.workspace(self.base/'runtime'/'project').parent
   def post(body,headers):
    h=http.client.HTTPConnection('127.0.0.1',s.server_port);h.request('POST','/api/watch-roots',json.dumps(body),headers);reply=h.getresponse();status=reply.status;reply.read();h.close();return status
   try:
@@ -272,7 +277,7 @@ class RuntimeWatchRootTests(unittest.TestCase):
    self.assertEqual(403,post({'action':'add','path':str(root)},{'Host':'evil.example','Content-Type':'application/json'}));self.assertEqual(400,post({'action':'add','path':str(root/'missing')},headers));self.assertEqual(400,post({'action':'remove','path':str(cli_root)},headers));self.assertEqual(400,post({'action':'remove','path':str(explicit)},headers));self.assertEqual(202,post({'action':'add','path':str(root)},headers));self.assertIn(str(root/'project'),[str(w) for w in c.workspaces]);self.assertEqual(202,post({'action':'remove','path':str(root)},headers));self.assertEqual([str(cli_root)],[row['path'] for row in c.watch_root_rows()])
   finally:s.shutdown();s.server_close()
  def test_runtime_root_api_removes_disappeared_source_by_returned_canonical_path(self):
-  cli_root=self.base/'cli-root';project=self.workspace(cli_root/'project');c=Console([],self.fake,lambda:None,watch_roots=[cli_root],watch_ttl=0);s=ThreadingHTTPServer(('127.0.0.1',0),Handler);s.console=c;authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start();root=self.base/'runtime-root';root.mkdir()
+  cli_root=self.base/'cli-root';project=self.workspace(cli_root/'project');c=Console([],self.fake,lambda:None,watch_roots=[cli_root],watch_ttl=0);s=LoopbackHTTPServer(('127.0.0.1',0),Handler);s.console=c;authority='127.0.0.1:'+str(s.server_port);s.hosts={authority};threading.Thread(target=s.serve_forever,daemon=True).start();root=self.base/'runtime-root';root.mkdir()
   def request(method,path,body=None):
    h=http.client.HTTPConnection('127.0.0.1',s.server_port);headers={'Host':authority,'Origin':'http://'+authority,'Content-Type':'application/json'};h.request(method,path,json.dumps(body) if body is not None else None,headers if body is not None else {'Host':authority});reply=h.getresponse();status=reply.status;payload=json.loads(reply.read());h.close();return status,payload
   try:

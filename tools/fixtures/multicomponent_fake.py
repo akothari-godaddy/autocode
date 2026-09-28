@@ -147,6 +147,27 @@ def component_id_for(prompt: str, data: dict) -> str:
     return found
 
 
+def complete(value, schema):
+    """Give every required field the script leaves out an empty value of its type (same as
+    scenarios/harness/fake_codex.py): new report fields then mean "none", not a crash."""
+    kind = schema.get("type")
+    if kind == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        for key in schema.get("required", []):
+            if key not in value and key in properties:
+                sub = properties[key]
+                value[key] = (sub["enum"][0] if sub.get("enum") else
+                              {"object": lambda: complete({}, sub), "array": list, "string": str, "boolean": bool,
+                               "integer": int, "number": float}.get(sub.get("type"), lambda: None)())
+        for key, sub in properties.items():
+            if key in value:
+                complete(value[key], sub)
+    elif kind == "array" and isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for item in value:
+            complete(item, schema["items"])
+    return value
+
+
 def main() -> int:
     if sys.argv[1:] == ["login", "status"]:
         print("Logged in using ChatGPT (multicomponent fake)")
@@ -164,6 +185,8 @@ def main() -> int:
         stage = original.get("stage", stage)
     component_id = component_id_for(prompt, data)
     report = report_for(stage, component_id, MANIFEST[component_id], data)
+    if "--output-schema" in sys.argv:
+        complete(report, json.loads(Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text()))
     Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps(report))
     print(json.dumps({"type": "turn.completed", "usage": {"input_tokens": 0, "output_tokens": 0}}), flush=True)
     return 0

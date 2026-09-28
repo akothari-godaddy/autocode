@@ -18,6 +18,10 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `autocode ui` / `autocode-ui` | Figma design (and optional `--build` handoff to implementation). |
 | `autocode tasks` / `autocode-tasks` | Run a multi-lane task flow file. |
 | `autocode components` / `autocode-components` | Build the components of an architecture record in parallel and combine them (see [Task lanes](task-lanes.md#building-components-of-an-architecture-in-parallel)). |
+| `autocode program plan\|derive\|run\|status` / `autocode-program` | Plan a large requirement, derive a workstream manifest from the approved plan, run workstreams in parallel worktrees merged onto an integration branch (see [Programs](program.md)). |
+| `autocode fix ISSUE` | Fix one bug report (GitHub issue URL, `owner/repo#N`, `#N`, `--issue-file`, or text) on a new branch; the fix is proven by executing tests (see [Fix](fix.md)). |
+| `autocode fix --status RUN_DIR` | Print a saved fix run, including model calls and tokens. |
+| `autocode verify-fix` | Model-free check of any checkout's fix against `--base`: new tests fail on base source, pass on the fix, and no test newly fails (see [Fix](fix.md#how-a-fix-is-verified)). |
 | `autocode-dashboard` | Local browser dashboard. |
 | `autocode --unit autoplanner\|autocode\|autoreview\|autoresolver` | Select one unit; omitting `--unit` runs all. |
 | `autocode compare-baseline` | Compare Vitest failure evidence (see [Execution](execution.md#baseline-comparison)). |
@@ -45,6 +49,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--answer 'Q1=…'` | Answer a requirements question (repeatable). |
 | `--feedback '…'` | Send a correction; returns to discovery and requires fresh approval. |
 | `--delegate Q1` | Accept a question's proposed default. |
+| `--delegate-all --review-token 'r3:<hash>'` | Delegate every pending question marked `delegable` with a proposed default, on the exact displayed revision. Refuses the whole call if any question lacks a default, is not delegable, has a protected or missing category (cost, quota, permission, external side effect, requested outcome), or asks about a rejected assumption. Never approves; invalidates any existing approval. |
+| `--reject-assumption A1 --review-token 'r3:<hash>'` | Reject a structured assumption from the displayed requirements handoff (repeatable). A stale token, or a handoff refreshed since display, is refused. Never approves; invalidates any existing approval. |
 | `--show-goal` | Display the current contract/revision. |
 | `--approve-goal 'r3:<hash>'` | Approve the exact displayed revision. |
 | `--edit-goal body.json` | Load a full contract body as a new draft revision. |
@@ -55,6 +61,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | Flag | Meaning |
 | --- | --- |
 | `--resume-paused` | Acknowledge an operational pause and continue. Does not approve a draft. |
+| `--diagnose-failed-stage` | With `--resume-paused`, request bounded read-only diagnosis of a recorded repeated Builder report failure. Alternative to `--retry-failed-stage`; not a permission or budget override. |
 | `--planning-review-call-limit N` | At a reconciled planning-budget pause, save a finite total allowance for the current cycle only. No model launch or approval; resume separately. |
 | `--pause-after-stage` | Stop at the next saved boundary. |
 | `--retry-builder M2` | Explicitly retry a failed milestone Builder (after all workers stopped). |
@@ -83,6 +90,21 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--reasoning-effort`, `--<role>-reasoning-effort` | Shared / per-role reasoning effort (`low`, `medium`, `high`, `xhigh`, …). |
 | `--migrate-only` | Run the opt-in legacy migration and stop (see [Testing](testing.md#legacy-migration--opt-in-only)). |
 
+### Programs
+
+| Flag | Meaning |
+| --- | --- |
+| `program run MANIFEST --max-parallel N` | Concurrent workstreams (default 2). |
+| `program run MANIFEST --authorize-deployment` | Allow `deployment` workstreams to start or resume; their runs still need plan approval. Descriptor generation is ordinary `code`. |
+| `program run MANIFEST --retry-workstream ID` | Explicitly retry a failed workstream in its existing worktree/checkpoint, without bypassing child gates. Repeat for multiple failed workstreams. |
+| `program run MANIFEST --dry-run` | Validate and preview without creating branches or worktrees. |
+| `program derive --run-dir RUN --output program.json` | Write the manifest from an approved plan; refuses unapproved plans. |
+
+Unrecognized `program run` flags (for example `--engine`, model overrides) are passed through to every child code run.
+
+Program manifests support `code`, `integration`, and `deployment`. UI workstreams are
+deferred until the UI runner supports checkpoint recovery; use `autocode ui` separately.
+
 ### Figma / UI
 
 | Flag | Meaning |
@@ -92,6 +114,33 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--ui-run /path` | Import a completed design run. |
 | `--figma-review human` | Require a human visual approval during implementation. |
 | `--max-plan-reworks`, `--max-reworks` | Review-loop limits (`none`, `0`, or a number). |
+
+## Unattended callers (agents)
+
+`autocode-unattended` (or `scripts/autocode-unattended` from a checkout) runs AutoCode
+for another agent without letting that agent make the operator's decisions. It takes
+AutoCode's own arguments but refuses every decision or recovery flag (`--answer`,
+`--delegate*`, `--approve-*`, `--resume-paused`, `--retry-*`, `--feedback`,
+`--accept-completion`, …, including abbreviations) and the `intervention`, `tasks`,
+`ui`, `program`, `fix`, `verify-fix`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
+with no stdin, and when AutoCode stops it prints `--status` and tells the caller to
+report and stop. Exit codes are AutoCode's.
+
+When a run completes, the wrapper prints the command to analyze it:
+`autocode-unattended --analyze --run-dir RUN [--out DIR]`. That launches no stage; it
+reads the saved run and reports the outcome, each acceptance criterion with its
+recorded status and evidence, findings, stages (role, time, exit, tokens, report
+path), cost by role (model calls, seconds and tokens per role, with report-format
+repair calls counted separately), and the code changes against the task's base commit,
+including new untracked files, plus a summary of the run's always-on [activity log](execution.md#activity-log).
+`--out` saves `analysis.md`, the full `changes.diff` and a copy of `activity.jsonl`.
+
+To lock a Claude Code agent to it, launch the agent from a copy of
+[`examples/agent-operator`](../examples/agent-operator): its `.claude/settings.json`
+allows only `autocode-unattended` and read-only tools, denies edits and other
+AutoCode or provider commands, and uses `dontAsk` so anything else is refused
+without a prompt. Its `CLAUDE.md` has the agent report stops verbatim and, after completion,
+analyze the work read-only. Keep that directory outside the target workspace.
 
 ## Exit codes
 

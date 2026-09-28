@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_console import Console, Handler, ModelCatalogue, ThreadingHTTPServer, saved_models
+from agent_console import Console, Handler, ModelCatalogue, LoopbackHTTPServer, saved_models
 
 
 class ModelSelectionTests(unittest.TestCase):
@@ -140,6 +140,43 @@ class ModelSelectionTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'must be strings'):
                     self.console.create({'project': str(self.workspace), 'goal': 'reject', 'engine': 'opencode', role+'_model': value})
         self.assertEqual(launches, len(self.console.action_log(self.workspace)))
+
+    def test_independent_plan_reviewer_route_and_effort_reach_runner(self):
+        model = 'zai-coding-plan/glm-5.3'
+        action = self.console.create({'project': str(self.workspace), 'goal': 'review route',
+                                      'plan_reviewer_model': model,
+                                      'plan_reviewer_reasoning_effort': 'max'})
+        self.assertEqual(['--plan-reviewer-model', model, '--plan-reviewer-reasoning-effort', 'max'],
+                         action['command'][-4:])
+        self.wait()
+        with self.assertRaisesRegex(ValueError, 'catalogue'):
+            self.console.create({'project': str(self.workspace), 'goal': 'bad review route',
+                                 'plan_reviewer_model': 'zai-coding-plan/unlisted'})
+        with self.assertRaisesRegex(ValueError, 'supported reasoning level'):
+            self.console.create({'project': str(self.workspace), 'goal': 'bad review effort',
+                                 'plan_reviewer_reasoning_effort': 'ultra'})
+
+        self.console.created_workspaces.append(self.workspace.resolve())
+        (self.run / 'state.json').write_text(json.dumps({
+            'task': 'reviewer settings', 'status': 'PAUSED',
+            'settings': {'engine': 'opencode', 'joint_planning': True,
+                         'roles': {'plan_reviewer': {'model': model, 'reasoning_effort': 'high'}}}}))
+        changed = self.console.mutate({'workspace': str(self.workspace), 'run': str(self.run),
+                                       'action': 'set_reasoning', 'plan_reviewer_reasoning_effort': 'xhigh'})
+        self.assertEqual(['--plan-reviewer-reasoning-effort', 'xhigh', '--show-goal', '--no-chat'],
+                         changed['command'][-4:])
+        for _ in range(100):
+            if changed['status'] not in ('queued', 'running'):
+                break
+            time.sleep(.01)
+        self.assertNotIn(changed['status'], ('queued', 'running'))
+        with patch.object(self.console.catalogue, 'fetch', return_value={
+            'usable': True, 'models': [model, 'openai/gpt-6-astra']}):
+            replaced = self.console.mutate({'workspace': str(self.workspace), 'run': str(self.run),
+                                            'action': 'set_model', 'role': 'plan_reviewer',
+                                            'model': 'openai/gpt-6-astra', 'request_id': 'reviewer-model-1'})
+        self.assertEqual(['--plan-reviewer-model', 'openai/gpt-6-astra', '--show-goal', '--no-chat'],
+                         replaced['command'][-4:])
 
     def test_every_role_uses_actual_opencode_catalogue_for_all_providers(self):
         values = ['openai/gpt-5.6-terra', 'openai/new-model', 'another-provider/model-v1', 'local/model:32b']
@@ -285,7 +322,7 @@ run.mkdir(parents=True,exist_ok=True)
             self.console.create({'project': str(self.workspace), 'goal': 'reject', 'engine': 'codex', 'glm_model': 'zai-coding-plan/glm-5.3'})
 
     def test_catalogue_retry_requires_same_origin_and_polling_does_not_invoke_it(self):
-        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server = LoopbackHTTPServer(('127.0.0.1', 0), Handler)
         server.console = self.console
         authority = '127.0.0.1:' + str(server.server_port)
         server.hosts = {authority}
@@ -314,11 +351,14 @@ run.mkdir(parents=True,exist_ok=True)
         self.assertIn('Completion owner <small>Automatic ladder: Sol Medium → Sol High → Astra High', INDEX)
         self.assertIn('Default · GLM-5.3', INDEX)
         self.assertIn('id="astra-reasoning-effort"', INDEX)
+        self.assertIn('id="plan_reviewer-model"', INDEX)
+        self.assertIn('id="plan_reviewer-reasoning-effort"', INDEX)
+        self.assertIn('id="task-plan_reviewer-reasoning"', INDEX)
         self.assertIn('id="terra-reasoning-effort"', INDEX)
         self.assertIn('id="sol-reasoning-effort"', INDEX)
         self.assertIn('id="completion-reasoning-effort"', INDEX)
         self.assertIn('id="create-error"', INDEX)
-        self.assertIn("['glm','astra','terra','sol','completion'].map", APP)
+        self.assertIn("['glm','plan_reviewer','astra','terra','sol','completion'].map", APP)
         self.assertIn("models[role+'_reasoning_effort']", APP)
         self.assertIn("action:'set_reasoning'", APP)
         self.assertIn('id="task-reasoning-form"', INDEX)

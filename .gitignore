@@ -29,3 +29,5 @@ dist/
 # Scratch workspaces and evidence from test and harness runs
 .tmp-*/
 .scenario-runs/
+# Default artifact directory written by tools/autopilot_testkit.py during test runs
+.tmp-autopilot-testkit/

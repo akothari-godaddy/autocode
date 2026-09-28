@@ -77,6 +77,11 @@ This command does not yet resume a build across separate invocations: if a
 component stopped needing input, rerunning `autocode components` refuses
 rather than reusing its worktree. Resolve that component's own run directly,
 or remove `.autocode-components/<id>` to rebuild it from scratch.
+When the work is one requirement that must be split, built in parallel and
+combined, use a [program](program.md) instead of lanes: workstreams declare
+dependencies and ownership, dependents branch from the merged results of their
+prerequisites, and completed workstreams are merged onto one integration branch
+with conflicts paused for you.
 
 ## Multiple tasks in one project
 

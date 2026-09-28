@@ -195,7 +195,9 @@ def main() -> int:
             "constraints": ["Python standard library only"],
             "acceptance_tests": ["Execute greeting and invalid-input regression checks"],
             "source_refs": ["task"],
-            "proposed_assumptions": ["CLI invocation is sufficient"],
+            "proposed_assumptions": [{"id": "A1", "text": "CLI invocation is sufficient", "kind": "inferable",
+                                      "category": "behavior", "convention_ref": "task",
+                                      "rationale": "The task specifies a command-line tool", "supports": []}],
             "open_questions": [],
             "requirements": [
                 {"id": "R1",
@@ -214,6 +216,8 @@ def main() -> int:
             "ignored_statements": [],
             "conflicts": [],
             "proposed_reframes": [],
+            "ignored_requirements": [],
+            "machine_resolutions": [], "access_blockers": [],
         }
     elif stage == "astra_discovery":
         report = {
@@ -221,15 +225,16 @@ def main() -> int:
             "contract": _contract(),
             "code_refs": [], "alternatives": [], "uncertainties": [],
             "contract_changes": [], "conflict_resolutions": [],
+            "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
             "requirement_trace": _trace(*TRACE_ROWS),
         }
     elif stage == "astra_challenge":
-        report = {"summary": "Handwritten plan review; no concerns", "concerns": []}
+        report = {"summary": "Handwritten plan review; no concerns", "obligation_decisions": [], "concerns": []}
     elif stage == "astra_finalize":
         report = {
             "summary": "Handwritten final plan",
             "contract": _planning_contract(),
-            "decisions": [], "contract_changes": [],
+            "obligation_decisions": [], "decisions": [], "contract_changes": [],
             "conflict_resolutions": [],
             "requirement_trace": _trace(*TRACE_ROWS),
         }
@@ -239,6 +244,7 @@ def main() -> int:
             "contract": _contract(),
             "code_refs": [], "responses": [], "contract_changes": [],
             "conflict_resolutions": [],
+            "machine_resolutions": [], "remediation_records": [], "access_blockers": [],
             "requirement_trace": _trace(*TRACE_ROWS),
         }
     elif stage == "terra":

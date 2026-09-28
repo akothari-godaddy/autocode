@@ -97,6 +97,8 @@ def prepare(state, stage, state_path, schema_dir):
         return prepare_investigation(state)
     if stage == discuss_job.STAGE:
         return prepare_answer(state)
+    if stage == 'astra_diagnose':
+        return prepare_diagnosis(state, stage, state_path, schema_dir)
     if stage != 'astra_resolve':
         raise ValueError(f'Autoresolver cannot run {stage}')
     guard(state, Path(state['workspace']))
@@ -134,6 +136,82 @@ def validate(state, value, record, workspace):
         raise ValueError('Resolver requires a diagnosis and a REWORK or BLOCKED decision')
     if value['status'] == 'REWORK' and (not value.get('evidence') or value.get('next_task', {}).get('kind') != 'implement'):
         raise ValueError('Resolver must supply an evidence-backed implementation repair')
+
+
+# Operational diagnosis: a genuinely separate stage and schema from astra_resolve.
+# It is not bound to a reviewer REWORK verdict, never touches acceptance_criteria,
+# and its output can only recommend "retry" (with guidance) or "escalate" -- never
+# an implementation task, a contract change, or a completion claim. The runner
+# revalidates the recommendation against the same bounded policy used to admit
+# the diagnosis before any retry is authorized (see autocode_resolver_runtime).
+DIAGNOSIS_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "required": ["diagnosis", "recommendation"],
+    "properties": {
+        "diagnosis": goals.STRING,
+        "recommendation": {
+            "type": "object", "additionalProperties": False,
+            "required": ["action", "rationale"],
+            "properties": {
+                "action": {"type": "string", "enum": ["retry", "escalate"]},
+                "rationale": goals.STRING,
+                "guidance": goals.STRING,
+                "evidence_refs": {"type": "array", "items": goals.STRING},
+            },
+        },
+    },
+}
+
+
+def diagnosis_guard(state, workspace):
+    goals.execution_guard(state)
+    request = state.get('diagnosis_request') or {}
+    if (request.get('contract_hash') != state['goal_contract']['hash']
+            or request.get('source_revision') != support.snapshot(workspace)['revision']):
+        raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis needs the current source and approved contract')
+    for path, digest in request.get('evidence_hashes', {}).items():
+        if not Path(path).is_file() or support.file_hash(path) != digest:
+            raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis evidence changed; reconcile before diagnosing')
+
+
+def prepare_diagnosis(state, stage, state_path, schema_dir):
+    if stage != 'astra_diagnose':
+        raise ValueError(f'Autoresolver cannot run {stage}')
+    diagnosis_guard(state, Path(state['workspace']))
+    state['settings']['roles'].setdefault('resolver', copy.deepcopy(state['settings']['roles']['astra']))
+    # Reuse the Plan Reviewer's handoff context (current source, task, evidence
+    # inventory) for input only; the output schema below is unrelated to and far
+    # narrower than the reviewer decision schema that context call would imply.
+    request = execution_request(state, 'astra_review', state_path, schema_dir)
+    instruction, payload = request.prompt.split('CURRENT HANDOFF DATA\n', 1)
+    data = json.loads(payload)
+    data.update(stage=stage, diagnosis_request=state['diagnosis_request'],
+                execution_engine=state['settings']['roles']['resolver'].get('engine', state['settings'].get('engine', 'codex')))
+    prompt = ('You are AUTORESOLVER, a read-only failure diagnostician, not a Builder or completion owner. '
+              'A stage has failed the same way repeatedly (see diagnosis_request.repeated_count) and the runner has '
+              'stopped its own deterministic recovery for it. '
+              'Inspect diagnosis_request (the repeated failure identity, its evidence, and how many times it '
+              'recurred) plus the current handoff data. Return a nonempty diagnosis explaining the likely cause. '
+              'Recommend "retry" only when you can name a concrete, different action or guidance the next '
+              'Builder attempt should follow; recommend "escalate" whenever the cause is unclear, out of scope, '
+              'or needs a human decision -- never guess. You cannot approve work, change requirements, weaken '
+              'tests, modify source, dispatch a task, or claim completion yourself; this recommendation is '
+              'advisory only, and the runner independently validates and bounds it before any retry proceeds.\n'
+              + instruction + '\nDiagnosis constraint overrides completion choices: return only diagnosis and recommendation.\n'
+              + 'CURRENT HANDOFF DATA\n' + json.dumps(data, indent=2))
+    metrics = {**request.metrics, 'estimated_prompt_tokens': (len(prompt) + 3) // 4}
+    return ModelRequest('astra', 'resolver', prompt, metrics, DIAGNOSIS_SCHEMA, False)
+
+
+def validate_diagnosis(state, value, record, workspace):
+    diagnosis_guard(state, workspace)
+    if record.get('changed_files') or record.get('source_revision') != state['diagnosis_request']['source_revision']:
+        raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis must leave the reviewed source unchanged')
+    if not value.get('diagnosis', '').strip():
+        raise ValueError('Diagnosis requires a nonempty explanation')
+    recommendation = value.get('recommendation') or {}
+    if recommendation.get('action') not in ('retry', 'escalate') or not recommendation.get('rationale', '').strip():
+        raise ValueError('Diagnosis recommendation requires a rationale and a retry-or-escalate action')
 
 
 def preserve_review_criteria(state, value):

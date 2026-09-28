@@ -11,7 +11,7 @@ not to add surface area. See `RELIABILITY.md` for product priorities.
 | Path | What it is |
 | --- | --- |
 | `tools/` | The application, installed as the `autocode_cli` package. Flat for now. |
-| `tools/test_*.py` | Unit and integration tests (`unittest`). |
+| `tests/test_*.py` | Unit and integration tests (`unittest`). `tests/__init__.py` puts `tools/` on `sys.path`, so tests import runtime modules by their top-level names (`import autopilot`, `from units import autoreview`). |
 | `scenarios/` | End-to-end scenario harness and catalog. Black box: it drives the CLI and never imports `tools/`. |
 | `test-scenarios/` | Older fault-injection suite (crash/resume, budgets, dirty workspaces) against a fake Codex. |
 | `tools/dashboard/`, `macos-app/` | Browser dashboard and native macOS host. Frozen: bug fixes only. |
@@ -31,10 +31,10 @@ were archived at tag `archive/pre-restructure-2026-09-26`
 
 1. **Do not grow the big modules.** `autocode.py`, `autocode_goals.py`,
    `autocode_support.py` and `autopilot.py` have line limits recorded in
-   `tools/test_architecture.py`. New behavior goes in a new module with one
+   `tests/test_architecture.py`. New behavior goes in a new module with one
    purpose. Lower the recorded limit when you shrink one.
-2. **Do not join the import cycle.** 27 modules currently import each other
-   through `autocode.py` (listed in `tools/test_architecture.py`). A new module
+2. **Do not join the import cycle.** 31 modules currently import each other
+   through `autocode.py` (listed in `tests/test_architecture.py`). A new module
    must depend only on lower-level modules, never on `autocode`, `autopilot` or
    anything that imports them. Pass what you need as arguments instead.
    Removing a module from the cycle is progress: take it off the list.
@@ -87,22 +87,19 @@ CLI model flags follow the code names: `--astra-model`, `--glm-model`,
 
 ## Testing
 
-Run everything from the repository root. Test modules use two import styles
-(package-relative, and `sys.path` insertion); only `tools.<module>` names from
-the root load both. Running from inside `tools/` silently skips about half the
-suite as import errors.
+Run everything from the repository root, with the venv interpreter.
 
 ```sh
 PY=.venv/bin/python   # has psutil; the system python3 does not
-$PY -m unittest tools.test_architecture                        # seconds
-$PY -m unittest tools.test_goals tools.test_autocode           # the modules you touched
+$PY -m unittest tests.test_architecture                        # seconds
+$PY -m unittest tests.test_goals tests.test_autocode           # the modules you touched
 $PY scenarios/run.py run --fake                                # every scenario end to end, under a minute
 $PY -m unittest scenarios/test_harness.py                      # harness and catalog, under a minute
 $PY tools/run_suite.py                                         # the suite gate CI runs; about 40 minutes
 ```
 
-`tools/run_suite.py` runs the same discovery as `unittest discover -s tools -t .`
-minus the modules listed, with reasons, in `tools/suite_exclusions.json`. Most of
+`tools/run_suite.py` discovers `tests/test_*.py` minus the modules listed, with
+reasons, in `tests/suite_exclusions.json`. Most of
 the full suite's time is spent waiting on subprocesses and timeouts, not
 computing. Before committing a change to `tools/`, run the tests for the modules
 you touched, `test_architecture`, and the fake scenario runs.

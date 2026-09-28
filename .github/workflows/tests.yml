@@ -7,20 +7,30 @@ on:
 
 jobs:
   suite:
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Full history, not the default shallow (depth-1) clone:
+          # tests.test_catalogue_t14.SystematicCase.test_sys07_saved_failing_trace_replays
+          # reads a specific historical commit (`git show <sha>:tools/autocode_support.py`)
+          # to replay a saved regression, and a shallow clone doesn't have it.
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install runtime dependency
-        run: python3 -m pip install "psutil>=7.0,<8"
+      - name: Install package and runtime dependencies
+        run: python3 -m pip install -e .
 
       - name: Run the suite gate
         # tools/run_suite.py wraps the same discovery as
-        # `python -m unittest discover -s tools -t . -p 'test_*.py'`, minus
+        # `python -m unittest discover -s tests -t . -p 'test_*.py'`, minus
         # the modules documented in tests/suite_exclusions.json (each with a
         # recorded reason). It fails if any non-excluded test fails, and
         # separately fails if an exclusion entry no longer matches anything
@@ -28,3 +38,27 @@ jobs:
         run: python3 tools/run_suite.py --verbosity 2
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+
+      - name: Run the dashboard suite
+        # tools/dashboard/tests is outside tests/, so run_suite.py never
+        # discovers it; run it here so it can't drift unnoticed again (#94).
+        run: python3 -m unittest discover -s tools/dashboard/tests -p 'test_*.py' -v
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run the dashboard Node tests
+        # The two browser tests drive the agent-browser CLI, which this job
+        # doesn't install; the log names each one it leaves out.
+        run: |
+          for test_file in tools/dashboard/tests/test_*.js; do
+            if grep -q "agent-browser" "$test_file"; then
+              echo "Not run here (needs agent-browser): $test_file"
+              continue
+            fi
+            echo "node $test_file"
+            node "$test_file" || exit 1
+          done

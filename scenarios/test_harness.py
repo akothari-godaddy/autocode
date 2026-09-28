@@ -104,6 +104,38 @@ class RunChecksTests(unittest.TestCase):
                                                             no_requirements=True, max_questions=0)))
 
 
+    def test_a_planned_fix_needs_plan_review_and_the_users_approval(self):
+        planned = {"view": {"workflow": "bugfix"}, "cli_calls": ["start", "approve-plan", "resume"],
+                   "stages": ["investigate_bug", "astra_discovery", "astra_challenge", "terra"], "answers": []}
+        self.assertTrue(all(c.ok for c in oracle.run_checks(planned, workflow="bugfix", plan_approved=True)))
+        small = {**planned, "cli_calls": ["start", "resume"], "stages": ["investigate_bug", "terra"]}
+        failed = {c.name for c in oracle.run_checks(small, workflow="bugfix", plan_approved=True) if not c.ok}
+        self.assertEqual({"plan_reviewed", "plan_approved_by_user"}, failed)
+
+
+class FakeSchemaTests(unittest.TestCase):
+    """The scripted model answers "none" for any required field its script does not know yet."""
+
+    def test_missing_required_fields_get_empty_values_of_their_type(self):
+        import importlib, json, os
+        with tempfile.TemporaryDirectory() as root:
+            config = Path(root) / "config.json"
+            config.write_text(json.dumps({"check": "true", "paths": [], "brief": "x"}))
+            os.environ["SCENARIO_FAKE_CONFIG"] = str(config)
+            try:
+                fake = importlib.import_module("harness.fake_codex")
+            finally:
+                del os.environ["SCENARIO_FAKE_CONFIG"]
+        schema = {"type": "object", "required": ["kept", "rows", "note", "flag", "kind", "nested"], "properties": {
+            "kept": {"type": "string"}, "rows": {"type": "array", "items": {"type": "object", "required": ["id", "extra"],
+                "properties": {"id": {"type": "string"}, "extra": {"type": "array"}}}},
+            "note": {"type": "string"}, "flag": {"type": "boolean"}, "kind": {"type": "string", "enum": ["none", "some"]},
+            "nested": {"type": "object", "required": ["n"], "properties": {"n": {"type": "integer"}}}}}
+        report = fake.complete({"kept": "yes", "rows": [{"id": "R1"}]}, schema)
+        self.assertEqual({"kept": "yes", "rows": [{"id": "R1", "extra": []}], "note": "", "flag": False,
+                          "kind": "none", "nested": {"n": 0}}, report)
+
+
 class FakeRunTests(unittest.TestCase):
     """End to end through AutoCode's real CLI, with the scripted model (about 30 s each)."""
 

@@ -8,8 +8,14 @@ reason), and fails loudly - rather than silently widening its own pass rate -
 if an exclusion entry no longer matches any discovered test, which usually
 means the module was renamed, removed, or fixed and the entry is now stale.
 
+The test tree lives in tests/ at the repo root (the runtime itself lives in
+tools/, importable by its top-level module names because tests/__init__.py
+puts tools/ on sys.path). This script stays at tools/run_suite.py, as every
+doc and CI step already invokes it there, but discovers tests/ and reads
+tests/suite_exclusions.json.
+
 Usage:
-    python3 tools/run_suite.py                  # discover tools/test_*.py, apply exclusions, run
+    python3 tools/run_suite.py                  # discover tests/test_*.py, apply exclusions, run
     python3 tools/run_suite.py --list-excluded   # print excluded modules and reasons, run nothing
 
 Exit code is 0 only when every non-excluded test passes (or is itself
@@ -26,7 +32,8 @@ import unittest
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-DEFAULT_EXCLUSIONS_PATH = HERE / "suite_exclusions.json"
+TESTS_DIR = REPO_ROOT / "tests"
+DEFAULT_EXCLUSIONS_PATH = TESTS_DIR / "suite_exclusions.json"
 
 
 def load_exclusions(path: Path) -> dict[str, str]:
@@ -74,8 +81,8 @@ def filter_excluded(suite: unittest.TestSuite, exclusions: dict[str, str]
 
     Returns (kept_suite, matched_modules, unmatched_modules). A module in
     ``exclusions`` is matched only by an exact module-path match (never a
-    prefix), so excluding tools.test_a cannot silently also exclude
-    tools.test_a_extra.
+    prefix), so excluding tests.test_a cannot silently also exclude
+    tests.test_a_extra.
     """
     kept = unittest.TestSuite()
     matched: set[str] = set()
@@ -89,7 +96,7 @@ def filter_excluded(suite: unittest.TestSuite, exclusions: dict[str, str]
     return kept, matched, unmatched
 
 
-def discover(start_dir: Path = HERE, top_level_dir: Path = REPO_ROOT) -> unittest.TestSuite:
+def discover(start_dir: Path = TESTS_DIR, top_level_dir: Path = REPO_ROOT) -> unittest.TestSuite:
     return unittest.defaultTestLoader.discover(str(start_dir), pattern="test_*.py",
                                                top_level_dir=str(top_level_dir))
 
@@ -98,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__,
                                       formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--exclusions", type=Path, default=DEFAULT_EXCLUSIONS_PATH,
-                         help="path to the exclusions JSON file (default: tools/suite_exclusions.json)")
+                         help="path to the exclusions JSON file (default: tests/suite_exclusions.json)")
     parser.add_argument("--list-excluded", action="store_true",
                          help="print excluded modules and reasons, then exit without running anything")
     parser.add_argument("--verbosity", type=int, default=1)

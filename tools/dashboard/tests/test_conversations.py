@@ -364,9 +364,16 @@ class ProviderTests(unittest.TestCase):
 
     def test_capture_replaces_invalid_utf8_and_writes_full_stdin(self):
         script = 'import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data+b"\\xff")'
-        code, output = chats._capture([sys.executable, '-c', script], dict(os.environ), '/private/tmp', 'prompt' * 30000, timeout=3)
+        code, output = chats._capture([sys.executable, '-c', script], dict(os.environ), tempfile.gettempdir(), 'prompt' * 30000, timeout=3)
         self.assertEqual(0, code)
         self.assertEqual('prompt' * 30000 + '\ufffd', output)
+
+    def test_capture_names_missing_scratch_directory_separately_from_missing_opencode(self):
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(chats.ConversationProviderError, 'scratch directory is missing'):
+                chats._capture([sys.executable, '-c', 'pass'], dict(os.environ), Path(directory) / 'gone', 'prompt', timeout=3)
+            with self.assertRaisesRegex(chats.ConversationProviderError, 'OpenCode is unavailable'):
+                chats._capture([str(Path(directory) / 'no-opencode')], dict(os.environ), directory, 'prompt', timeout=3)
 
     def test_capture_stops_timeout_and_output_overflow(self):
         cases = [('import time; time.sleep(5)', .1, 1024, 'too long'),
@@ -375,13 +382,13 @@ class ProviderTests(unittest.TestCase):
             with self.subTest(message=message):
                 start = time.monotonic()
                 with self.assertRaisesRegex(chats.ConversationProviderError, message):
-                    chats._capture([sys.executable, '-c', script], dict(os.environ), '/private/tmp', 'prompt', timeout=timeout, output_limit=limit)
+                    chats._capture([sys.executable, '-c', script], dict(os.environ), tempfile.gettempdir(), 'prompt', timeout=timeout, output_limit=limit)
                 self.assertLess(time.monotonic() - start, 3)
 
     def test_provider_kills_process_group_and_reaps_on_timeout(self):
         with patch.object(chats.os, 'killpg', wraps=os.killpg) as killpg:
             with self.assertRaises(chats.ConversationProviderError):
-                chats._capture([sys.executable, '-c', 'import time; time.sleep(5)'], dict(os.environ), '/private/tmp', 'prompt', timeout=.1)
+                chats._capture([sys.executable, '-c', 'import time; time.sleep(5)'], dict(os.environ), tempfile.gettempdir(), 'prompt', timeout=.1)
         self.assertTrue(killpg.called)
         self.assertEqual(chats.signal.SIGKILL, killpg.call_args.args[1])
 

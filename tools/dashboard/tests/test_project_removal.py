@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from test_chat_bridge import ChatFixture
-from agent_console import Console, Handler, ThreadingHTTPServer
+from agent_console import Console, Handler, LoopbackHTTPServer
 
 
 class ProjectRemovalFixture(ChatFixture):
@@ -124,7 +124,7 @@ class ProjectRemovalTests(ProjectRemovalFixture, unittest.TestCase):
 
 class ProjectRemovalHttpTests(ProjectRemovalFixture, unittest.TestCase):
     def test_http_remove_restore_origin_and_missing_folder(self):
-        server = ThreadingHTTPServer(('127.0.0.1',0),Handler)
+        server = LoopbackHTTPServer(('127.0.0.1',0),Handler)
         server.console = self.console
         server.hosts = {'127.0.0.1:'+str(server.server_port)}
         thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()

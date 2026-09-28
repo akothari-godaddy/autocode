@@ -77,12 +77,14 @@ def persist(path, state):
     """Publish an update only after its checkpoint is durably saved."""
     import sys
     try:
-        from . import autocode_support as support, autocode_checkpoints as checkpoints
+        from . import autocode_support as support, autocode_checkpoints as checkpoints, autocode_activity_log as activity_log
     except ImportError:
         import autocode_support as support
         import autocode_checkpoints as checkpoints
+        import autocode_activity_log as activity_log
     checkpoints.update(state)
     entry = record(state)
     support.atomic_json(path, state)
+    activity_log.record(path, state)
     if entry:
         print(entry['text'], file=sys.stderr, flush=True)

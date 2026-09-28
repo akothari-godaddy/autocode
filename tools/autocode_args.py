@@ -102,6 +102,10 @@ def build_parser(*, unit, units, role_models, joint_models):
     parser.add_argument("--resume-paused", action="store_true", help="Acknowledge a saved pause; uncertain stages still require reconciliation")
     parser.add_argument("--retry-failed-stage", action="store_true",
                         help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
+    parser.add_argument("--diagnose-failed-stage", action="store_true",
+                        help="For a recorded repeated Builder report failure, admit one bounded "
+                             "read-only model diagnosis instead of a blind retry; requires --resume-paused; "
+                             "cannot combine with --retry-failed-stage")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
                         help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
@@ -115,6 +119,12 @@ def build_parser(*, unit, units, role_models, joint_models):
     parser.add_argument("--feedback", metavar="TEXT", help="Send brief feedback to the Requirements Gatherer; never approves implementation")
     parser.add_argument("--delegate", action="append", default=[], metavar="QUESTION_ID",
                         help="Explicitly accept the proposed default and delegate this decision")
+    parser.add_argument("--delegate-all", action="store_true",
+                        help="Delegate every currently pending question marked delegable with a proposed default; "
+                             "never grants approval and invalidates any existing one")
+    parser.add_argument("--reject-assumption", action="append", default=[], metavar="ASSUMPTION_ID",
+                        help="Reject a structured assumption from the current requirements handoff; "
+                             "never grants approval and invalidates any existing one")
     parser.add_argument("--approve-goal", metavar="TOKEN", help="Approve exactly a previously displayed revision")
     parser.add_argument("--edit-goal", type=Path, help="Load a revised contract body JSON; invalidates approval")
     parser.add_argument("--approve-review", action="append", default=[], metavar="CRITERION_ID")
@@ -122,7 +132,8 @@ def build_parser(*, unit, units, role_models, joint_models):
                         help="Bind an authenticated legacy acceptance to current validated evidence without a new approval")
     parser.add_argument("--accept-completion", action="store_true",
                         help="Operator-accept completion after the runner itself verifies every gate; use when the model's completion report cannot be produced")
-    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token")
+    parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token; "
+                        "also required by --delegate-all and --reject-assumption")
     return parser
 
 
@@ -141,6 +152,10 @@ def validate(parser, args, unit):
         parser.error("--retry-report requires --run-dir and --resume-paused")
     if args.retry_failed_stage and (not args.run_dir or not args.resume_paused):
         parser.error("--retry-failed-stage requires --run-dir and --resume-paused")
+    if args.diagnose_failed_stage and (not args.run_dir or not args.resume_paused):
+        parser.error("--diagnose-failed-stage requires --run-dir and --resume-paused")
+    if args.diagnose_failed_stage and args.retry_failed_stage:
+        parser.error("--diagnose-failed-stage and --retry-failed-stage are alternative responses to the same pause; use one")
     if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
         parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
     if unit and args.unit != unit:
@@ -153,7 +168,8 @@ def validate(parser, args, unit):
         if getattr(args, flag) is not None and getattr(args, flag) < 0:
             parser.error(f"--{flag.replace('_', '-')} must be nonnegative")
     actions = [args.status, args.dry_run, args.migrate_only, args.show_goal,
-               bool(args.answer or args.delegate), bool(args.approve_goal), bool(args.edit_goal),
+               bool(args.answer or args.delegate), bool(args.delegate_all), bool(args.reject_assumption),
+               bool(args.approve_goal), bool(args.edit_goal),
                bool(args.approve_review), bool(args.reconcile_review),
                args.feedback is not None, args.accept_completion, args.abandon_stage is not None,
                args.request_milestone_checkpoints, args.planning_review_call_limit is not None]
@@ -161,8 +177,12 @@ def validate(parser, args, unit):
         parser.error("Choose one action per invocation; answering and approving are separate events")
     if args.retry_builder and any(actions):
         parser.error("--retry-builder is a resume action; do not combine it with another action")
-    if args.review_token and not (args.approve_review or args.reconcile_review):
-        parser.error("--review-token requires --approve-review or --reconcile-review")
+    if (args.delegate_all or args.reject_assumption) and not args.review_token:
+        parser.error("--delegate-all and --reject-assumption require --review-token with the displayed goal token")
+    if args.review_token and not (args.approve_review or args.reconcile_review
+                                  or args.delegate_all or args.reject_assumption):
+        parser.error("--review-token requires --approve-review, --reconcile-review, --delegate-all "
+                     "or --reject-assumption")
     if args.reconcile_review and not args.review_token:
         parser.error("--reconcile-review requires --review-token")
     if not args.run_dir and any(actions[2:]):

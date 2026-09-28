@@ -287,6 +287,38 @@ def report_for(stage: str, data: dict) -> dict:
     raise SystemExit(f"fake_codex: no scripted report for stage {stage!r}")
 
 
+def complete(value, schema: dict):
+    """Give every required field the script leaves out an empty value of its schema type.
+
+    The runner requires every field in fresh output, and AutoCode keeps adding optional-in-
+    spirit fields (lists of things found, flags). A scripted report means "none of those",
+    as a real model would say; without this, each new field stops every scripted run.
+    """
+    kind = schema.get("type")
+    kind = kind[0] if isinstance(kind, list) else kind
+    if kind == "object" and isinstance(value, dict):
+        properties = schema.get("properties", {})
+        for key in schema.get("required", []):
+            if key not in value and key in properties:
+                value[key] = empty(properties[key])
+        for key, sub in properties.items():
+            if key in value:
+                complete(value[key], sub)
+    elif kind == "array" and isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for item in value:
+            complete(item, schema["items"])
+    return value
+
+
+def empty(schema: dict):
+    kind = schema.get("type")
+    kind = kind[0] if isinstance(kind, list) else kind
+    if schema.get("enum"):
+        return schema["enum"][0]
+    return {"object": lambda: complete({}, schema), "array": list, "string": str, "boolean": bool,
+            "integer": int, "number": float, "null": lambda: None}.get(kind, lambda: None)()
+
+
 def main() -> int:
     if sys.argv[1:] == ["login", "status"]:
         print("Logged in using ChatGPT (scenario fake provider)")
@@ -304,6 +336,8 @@ def main() -> int:
         # Report repairs are answered as the stage that owns them.
         stage = original.get("stage", stage)
     report = report_for(stage, data)
+    if "--output-schema" in sys.argv:
+        complete(report, json.loads(Path(sys.argv[sys.argv.index("--output-schema") + 1]).read_text()))
     Path(sys.argv[sys.argv.index("-o") + 1]).write_text(json.dumps(report))
     emit({"type": "turn.completed", "usage": {"input_tokens": 0, "output_tokens": 0}})
     return 0

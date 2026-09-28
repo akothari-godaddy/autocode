@@ -54,6 +54,33 @@ The active batch is saved in
 and displays saved batch/worker statuses and worktree/log locations. Those statuses
 are checkpoint reports, not proof that worker processes are currently alive.
 
+## Report-only repair
+
+A completed provider response can fail JSON, schema, or evidence validation without
+requiring implementation to run again. The runner saves OpenCode's selected terminal
+assistant text as `.response.txt` before parsing and the parsed report as `.json`
+before schema/evidence validation. These are rejected artifacts, not accepted results.
+Tool output and earlier assistant messages are not substitutes for the terminal report.
+
+The rejected artifacts are archived and hash-pinned. Repair receives the complete
+report/text inline, its stable path and hash, the exact validation error, and mappings
+for artifact paths moved by archival. It must not reconstruct the report by searching
+raw JSONL or old prompts. A second repair receives the latest rejected draft paired
+with its latest error; the original report and execution receipts remain the immutable
+baseline for commands, failures, evidence, and user decisions.
+
+Report sources are limited to 128 KiB each and the runner-supplied repair prompt to
+256 KiB, including provider-added schema/instructions. Missing, empty, or oversized
+inputs pause as `PAUSED_REPORT_REPAIR_INPUT` before another provider call, without
+charging a repair attempt. Full originals remain available for inspection; report
+content is never silently truncated to satisfy the limit. Old pending OpenCode
+checkpoints with missing report files can materialize their terminal response locally
+from intact, pinned events instead of making the model search the log.
+
+Repairs remain read-only, use the existing attempt limit and role/model routing, and
+cannot approve plans, rerun tests, replace original execution evidence, or convert
+unsupported observations into passing validation.
+
 ## Milestone checkpoints and acceptance
 
 New runs enforce a milestone checkpoint in the runner. Each task names an outcome,
@@ -311,6 +338,30 @@ addresses in `next_task.findings`; an empty or missing list takes every open fin
 `--max-findings-per-task N` (saved as `limits.max_findings_per_task`) rejects a
 REWORK task that bundles more than `N` open findings, so the correction has to be
 split. The default is unlimited, and `0` disables the check on a saved run.
+
+## Activity log
+
+Every run keeps an append-only `activity.jsonl` next to `state.json`. It is always on
+and records what AutoCode itself did, one JSON object per event:
+
+| Event | Recorded |
+| --- | --- |
+| `invocation` | Program, flag names (never values), and caller: `unattended` through `autocode-unattended`, otherwise `direct`. Written by any command that saves the run. |
+| `transition` | Status, phase, next stage, iteration, task ID, which of those changed, and the runner's stop reason (up to 500 characters) when the status changed. |
+| `stage_started` / `stage_finished` | Stage, role, route role, iteration, engine, model, task ID, times, duration, exit code, timeout, rejection, number of changed files, token counts. |
+| `findings` | Counts by status and severity. |
+| `plan_revision` / `plan_approval` / `human_review` | Brief revision numbers, approval status, and criterion IDs reviewed by a person. |
+| `builders` / `stages_rewound` | Parallel Builder milestone statuses; a shortened stage history. |
+
+It holds no content: no task text, prompts, plans, answers, feedback, findings
+text, file names, code, diffs or model output. Those stay in `state.json` and the
+per-stage artifacts. Nothing is trimmed, unlike `progress_messages` in
+`state.json`. Only saves that change the run add lines, so read-only commands such
+as `--status` add none. A failure to append never fails the checkpoint.
+
+`autocode-unattended --analyze` summarizes the log (calls by caller, stages, stops,
+operator decisions) and `--out` copies it. Runs saved before this log existed have
+no `activity.jsonl`; their log starts with the next save.
 
 ## Pause, recovery, and abandonment
 
