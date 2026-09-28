@@ -18,9 +18,6 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `autocode ui` / `autocode-ui` | Figma design (and optional `--build` handoff to implementation). |
 | `autocode tasks` / `autocode-tasks` | Run a multi-lane task flow file. |
 | `autocode program plan\|derive\|run\|status` / `autocode-program` | Plan a large requirement, derive a workstream manifest from the approved plan, run workstreams in parallel worktrees merged onto an integration branch (see [Programs](program.md)). |
-| `autocode fix ISSUE` | Fix one bug report (GitHub issue URL, `owner/repo#N`, `#N`, `--issue-file`, or text) on a new branch; the fix is proven by executing tests (see [Fix](fix.md)). |
-| `autocode fix --status RUN_DIR` | Print a saved fix run, including model calls and tokens. |
-| `autocode verify-fix` | Model-free check of any checkout's fix against `--base`: new tests fail on base source, pass on the fix, and no test newly fails (see [Fix](fix.md#how-a-fix-is-verified)). |
 | `autocode-dashboard` | Local browser dashboard. |
 | `autocode --unit autoplanner\|autocode\|autoreview\|autoresolver` | Select one unit; omitting `--unit` runs all. |
 | `autocode compare-baseline` | Compare Vitest failure evidence (see [Execution](execution.md#baseline-comparison)). |
@@ -76,6 +73,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--max-idle-seconds` / `--max-tool-seconds` / `--max-stage-seconds` | Watchdog limits (defaults `300` / `1800` / `0`). |
 | `--no-progress-limit N` | Unchanged-batch limit (`0` disables; never disables the 3-recovery ceiling). |
 | `--max-iterations N` | Total iteration ceiling. |
+| `--test-command CMD` | New runs: the project's test suite command for a bug fix's runner-owned regression proof (default: detected; see [Bug fixes](workflow.md#bug-fixes)). |
+| `--regression-command CMD` | New runs: a command that runs only the fix's new or changed tests (default: derived from the detected framework). |
 
 ### Engine, provider, and models
 
@@ -123,7 +122,7 @@ for another agent without letting that agent make the operator's decisions. It t
 AutoCode's own arguments but refuses every decision or recovery flag (`--answer`,
 `--delegate*`, `--approve-*`, `--resume-paused`, `--retry-*`, `--feedback`,
 `--accept-completion`, …, including abbreviations) and the `intervention`, `tasks`,
-`ui`, `program`, `fix`, `verify-fix`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
+`ui`, `program`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
 with no stdin, and when AutoCode stops it prints `--status` and tells the caller to
 report and stop. Exit codes are AutoCode's.
 

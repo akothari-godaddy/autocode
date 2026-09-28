@@ -14,8 +14,9 @@ def assert_operational_wait(test, state, pause_status):
     return public
 
 
-def body(*, questions=False, human=False):
+def body(*, questions=False, human=False, task_kind="build"):
     return {
+        "task_kind": task_kind,
         "intended_outcome": "Provide a deterministic greeting CLI",
         "intended_user": "A local developer",
         "end_to_end_flow": ["Run the CLI with a name", "Read the greeting or an invalid-input error"],

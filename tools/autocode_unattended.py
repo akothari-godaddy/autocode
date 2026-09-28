@@ -39,8 +39,7 @@ OPERATOR_FLAGS = (
     "--chat",
 )
 # Subcommands that submit interventions or run other flows.
-OPERATOR_SUBCOMMANDS = ("tasks", "ui", "program", "compare-baseline", "capture", "registry", "intervention",
-                       "fix", "verify-fix")
+OPERATOR_SUBCOMMANDS = ("tasks", "ui", "program", "compare-baseline", "capture", "registry", "intervention")
 
 STOP_NOTICE = """\
 AUTOCODE STOPPED FOR THE OPERATOR (exit {rc}).
@@ -132,8 +131,8 @@ def cost_by_role(stages: list[dict]) -> list[str]:
     repairs = 0
     for stage in stages:
         name = str(stage.get("stage") or "")
-        if name == "orchestrator":
-            continue
+        if name == "orchestrator" or stage.get("runner_owned"):
+            continue  # runner-owned steps (orchestrator, regression_proof) launch no model
         role = stage.get("route_role") or stage.get("role") or name or "unknown"
         repairs += name.endswith("_report_repair")
         row = rows.setdefault(role, {"calls": 0, "seconds": 0.0, "in": 0, "out": 0})

@@ -76,15 +76,6 @@ Exit codes and verdicts follow [testing](testing.md#live-trial-results):
 `PASS` (0), `HONEST_BLOCKER` (2, a recorded pause rather than delivered work),
 `FALSE_COMPLETE`/`FAIL`/`ERROR` (1). `--score-only` exits 2 for `DEFERRED`.
 
-Bug-fix scenarios can also be driven through [`autocode fix`](fix.md) with
-`--mode fix`, scored by the same oracle. The evidence bundle records the fix run's
-model calls, seconds and tokens next to the verdict, so the two workflows can be
-compared on the same task:
-
-```sh
-python3 tools/live_trial.py BUGFIX-01 --mode fix --profile fixture   # offline harness check
-```
-
 `--i-authorize-live-model-spend` never authorizes deployment. The driver's separate
 `--authorize-deployment` flag is required to schedule deployment workstreams;
 `PROGRAM-01` generates descriptors as ordinary code and does not need that flag.

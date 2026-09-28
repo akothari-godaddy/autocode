@@ -25,7 +25,9 @@ import uuid
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures
     from . import autocode_gocode as gocode
+    from . import autocode_regression as regression
 except ImportError:
+    import autocode_regression as regression
     import autocode_support as support
     import autocode_goals as goals
     import autocode_interventions as interventions
@@ -334,6 +336,52 @@ def normalize_plan_challenge_blocking(value, record):
         for row in concerns]}
 
 
+# Planning-report lists that only cite provenance. A report that omits one is otherwise
+# complete; an empty list claims nothing, and every semantic check (requirement coverage,
+# concern responses, obligations) still runs on the normalized report. Lists that carry a
+# decision (requirements, open_questions, concerns, responses, decisions, assumptions)
+# are never defaulted: a missing one still goes to report repair.
+PROVENANCE_LISTS = frozenset({
+    "code_refs", "source_refs", "alternatives", "uncertainties", "contract_changes",
+    "conflict_resolutions", "requirement_trace", "remediation_records", "machine_resolutions",
+    "access_blockers", "ignored_statements", "conflicts", "proposed_reframes",
+    "ignored_requirements", "obligation_decisions"})
+PLANNING_STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
+
+
+def default_missing_provenance(value, record):
+    """Fill omitted provenance lists instead of paying for a report-repair model call.
+
+    Two recorded live trials spent their whole remaining budget repairing a planning
+    report that only lacked such a list (VALIDATION.md: `$: missing code_refs`).
+    """
+    stage = str(record.get("stage", "")).removesuffix("_report_repair")
+    if stage not in PLANNING_STAGES or not isinstance(value, dict):
+        return value
+    try:
+        properties = read_json(Path(record["schema"])).get("properties", {})
+    except (OSError, ValueError, KeyError):
+        return value
+    missing = sorted(key for key in PROVENANCE_LISTS
+                     if key in properties and key not in value and properties[key].get("type") == "array")
+    defaults = {key: [] for key in missing}
+    # An omitted job type is "build", as for every run before task_kind existed; approval
+    # always shows the job type, so a wrong default is visible before any build starts.
+    if "task_kind" in properties and "task_kind" not in value:
+        defaults["task_kind"] = "build"
+    contract = value.get("contract")
+    contract_schema = properties.get("contract", {}).get("properties", {})
+    if isinstance(contract, dict) and "task_kind" in contract_schema and "task_kind" not in contract:
+        defaults["contract"] = {**contract, "task_kind": "build"}
+        missing.append("contract.task_kind")
+    elif "task_kind" in defaults:
+        missing.append("task_kind")
+    if not defaults:
+        return value
+    record["defaulted_fields"] = sorted(missing)
+    return {**value, **defaults}
+
+
 def load_stage_report(record, workspace=None, evidence_record=None):
     if record.get("engine") == "opencode":
         # Raw provider events are authoritative, including during recovery.
@@ -347,6 +395,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
         value = final_json(Path(record["output"]))
     reported = copy.deepcopy(value)
     value = normalize_plan_challenge_blocking(value, record)
+    value = default_missing_provenance(value, record)
     evidence_record = evidence_record or record
     validation = value.get('validation', value)
     checks = validation.get('checks') if isinstance(validation, dict) else None
@@ -2183,6 +2232,8 @@ def configure(args, state):
                     getattr(args, 'max_milestone_replans', None)
                     if getattr(args, 'max_milestone_replans', None) is not None else milestones.DEFAULTS['max_replans'])},
             "headroom": {"enabled": args.headroom == "on", "verified": False},
+            "regression": {key: value for key, value in (("test_command", getattr(args, "test_command", None)),
+                           ("regression_command", getattr(args, "regression_command", None))) if value},
             "context_soft_tokens": args.context_soft_tokens if args.context_soft_tokens is not None else 10000,
             "rotation_after_input_tokens": args.rotate_after_input_tokens if args.rotate_after_input_tokens is not None else 1000000,
             "limits": {"iteration_ceiling": args.legacy_iteration_ceiling if args.legacy_iteration_ceiling is not None
@@ -2747,18 +2798,6 @@ def _main_body(unit=None) -> int:
         except ImportError:
             import autocode_program
         return autocode_program.cli(sys.argv[2:])
-    if sys.argv[1:2] == ["fix"]:
-        try:
-            from . import autocode_fix
-        except ImportError:
-            import autocode_fix
-        return autocode_fix.cli(sys.argv[2:])
-    if sys.argv[1:2] == ["verify-fix"]:
-        try:
-            from . import autocode_verify
-        except ImportError:
-            import autocode_verify
-        return autocode_verify.cli(sys.argv[2:])
     if sys.argv[1:2] == ["compare-baseline"]:
         try:
             from . import autocode_baseline
@@ -2808,6 +2847,10 @@ def _main_body(unit=None) -> int:
                         help="Override the independent plan-reviewer model for the saved engine")
     parser.add_argument("--plan-reviewer-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override independent plan-reviewer reasoning effort")
+    parser.add_argument("--test-command", help="New runs: shell command for the project's test suite, used by the "
+                        "runner's regression proof on bug-fix tasks (default: detected)")
+    parser.add_argument("--regression-command", help="New runs: shell command that runs only the new or changed "
+                        "tests of a bug fix (default: derived from the detected test framework)")
     parser.add_argument("--max-iterations", type=int, help="Total iteration ceiling (new-run default: 15; resumes keep saved limits)")
     parser.add_argument('--unlimited-iterations',action='store_true',help='Remove only the iteration ceiling; other safety and usage limits remain')
     for role, model in DEFAULT_ROLE_MODELS.items():
@@ -3035,6 +3078,8 @@ def _main_body(unit=None) -> int:
         isolated = task_workspaces.metadata(workspace)
         if isolated:
             state.update(project_workspace=isolated["project_workspace"], task_branch=isolated["branch"])
+        # The revision a bug fix is proven against (autocode_regression).
+        state["base_commit"] = (isolated or {}).get("base_commit") or regression.head(workspace)
         if args.ui_run:
             state["ui_run"] = str(args.ui_run.resolve())
         if args.legacy_iteration_ceiling is None:
@@ -3626,6 +3671,7 @@ def _main_body(unit=None) -> int:
                         resolver_runtime.operational_boundary(sys.modules[__name__], current, run_dir, workspace)
                 if stage == "orchestrator":
                     return autopilot.unit_module(stage).dispatch(current, workspace, run_dir)
+                regression.before_review(current, stage, workspace, run_dir)
                 request = autopilot.unit_module(stage).prepare(current, stage, state_path, SCHEMA_DIR)
                 role, route_role = request.role, request.route_role
                 rotate_if_needed(current, route_role, run_dir)
