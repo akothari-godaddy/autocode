@@ -264,6 +264,14 @@ import on base is not a reproduction. Without per-test results exit codes decide
 When nothing can be proven (for example no test command is found), the proof is
 `UNVERIFIED` and the bug fix cannot complete until a command is supplied.
 
+The scratch worktrees use the project's own environment: its `.venv`, `venv` or
+`node_modules` is linked in, and the Python tests run with the project's
+virtualenv interpreter even though the task worktree has none. Build-generated
+source files that git ignores but that sit next to tracked code (such as a
+setuptools-scm or hatch-vcs `_version.py`) are copied from the project into every
+scratch tree, base and fix alike, so the package imports there. Ignored build
+output directories are not copied.
+
 Planning reports that omit only a provenance list (such as `code_refs` or
 `source_refs`) now get an empty list instead of a report-repair model call; the
 raw report is kept and every semantic check still runs. Reports that omit a list
