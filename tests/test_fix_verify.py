@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -203,6 +204,23 @@ class VerifyCase(unittest.TestCase):
         self.assertEqual(verify.PASS, result["verdict"], result)
         self.assertEqual(["tests.test_calc::test_empty"], result["fail_to_pass"])
 
+    def test_scratch_tree_code_wins_over_an_editable_install(self):
+        """Review r12: a .pth in a linked venv must not import the user's checkout instead."""
+        with tempfile.TemporaryDirectory() as temp:
+            tree = Path(temp)
+            (tree / "src").mkdir()
+            env = verify.test_environment(tree, {"PYTHONPATH": "/elsewhere"})
+            self.assertEqual([str(tree / "src"), str(tree), "/elsewhere"], env["PYTHONPATH"].split(os.pathsep))
+            self.assertEqual("1", env["CI"])
+
+    def test_a_suite_that_cannot_start_is_broken_not_failing(self):
+        """Review finding 15: command-not-found and no-results runs stop before any model call."""
+        receipt = {"timed_out": False, "results": None, "results_expected": False}
+        self.assertEqual("broken", verify.suite_health({**receipt, "exit_code": 127}))
+        self.assertEqual("failing", verify.suite_health({**receipt, "exit_code": 1}))
+        self.assertEqual("broken", verify.suite_health({**receipt, "exit_code": 0, "results_expected": True}))
+        self.assertEqual("timeout", verify.suite_health({**receipt, "exit_code": None, "timed_out": True}))
+
     def test_untracked_new_test_file_counts_as_the_regression_test(self):
         project = self.project()
         new_test = ("import subprocess, sys, unittest\n\nclass Blank(unittest.TestCase):\n"
@@ -240,9 +258,13 @@ class VerifyCase(unittest.TestCase):
 
     def test_test_path_classification(self):
         for path in ("tests/test_x.py", "pkg/test_x.py", "x_test.go", "src/a.test.ts", "spec/a_spec.rb",
-                     "src/test/java/FooTest.java", "__tests__/a.js", "pkg/testdata/in.txt", "conftest.py"):
+                     "src/test/java/FooTest.java", "__tests__/a.js", "pkg/testdata/in.txt", "conftest.py",
+                     "src/__snapshots__/x.test.ts.snap", "test/unit/helpers.js", "pkg/core/tests/data.json",
+                     "TestParser.java"):
             self.assertTrue(verify.is_test_path(path), path)
-        for path in ("greet.py", "src/contest.py", "latest.py", "src/protest/x.go", "attestation.rs"):
+        for path in ("greet.py", "src/contest.py", "latest.py", "src/protest/x.go", "attestation.rs",
+                     "src/Latest.java", "src/Contest.kt", "numpy/testing/utils.py", "django/test/client.py",
+                     "api/spec/openapi.yaml"):
             self.assertFalse(verify.is_test_path(path), path)
 
     def test_framework_detection(self):
@@ -262,14 +284,111 @@ class VerifyCase(unittest.TestCase):
             self.assertEqual(("jest", "npm test --silent"), (framework.name, framework.suite))
             self.assertIn("jest src/a.test.js", framework.targeted(["src/a.test.js"]))
 
-    def test_unittest_failures_are_parsed_per_test(self):
+    def test_unittest_results_are_parsed_per_test(self):
         with tempfile.TemporaryDirectory() as temp:
             log = Path(temp) / "out.log"
-            log.write_text("test_a (m.C.test_a) ... ok\nFAIL: test_b (m.C.test_b)\nERROR: test_c (m.C)\n"
-                           "----\nRan 3 tests in 0.1s\n\nFAILED (failures=1, errors=1)\n")
+            log.write_text(
+                "test_a (m.C.test_a) ... ok\n"
+                "test_b (m.C.test_b)\nA docstring line ... FAIL\n"
+                "test_d (m.C.test_d) ... noisy output from the test\nok\n"
+                "test_e (m.C.test_e) ... skipped 'needs network'\n"
+                "test_f (m.C.test_f) ... expected failure\n"
+                "======================================================================\n"
+                "FAIL: test_b (m.C.test_b)\nERROR: test_c (m.C)\n"
+                "----------------------------------------------------------------------\n"
+                "Ran 6 tests in 0.1s\n\nFAILED (failures=1, errors=1, skipped=1, expected failures=1)\n")
             framework = verify.Framework("unittest", "python -m unittest", python="python")
             results = verify.per_test_results(framework, {"output": str(log)}, Path(temp) / "none.xml")
-            self.assertEqual({"failed": ["m.C.test_b", "m.C::test_c"], "total": 3}, results)
+            self.assertEqual({"passed": ["m.C.test_a", "m.C.test_d"], "failed": ["m.C.test_b", "m.C::test_c"],
+                              "skipped": ["m.C.test_e", "m.C.test_f"], "collection_errors": [], "total": 6,
+                              "complete": True}, results)
+
+    def test_skipping_a_test_that_passed_on_base_is_a_regression(self):
+        """Review r1: break greet(), skip the test that would catch it, add a real regression test."""
+        project = self.project()
+        broken = REFERENCE["greet.py"].replace('return f"Hello, {name}"', 'return f"Hi, {name}"')
+        skipped = REFERENCE["test_greet.py"].replace(
+            "    def test_ada(self):", "    @unittest.skip('flaky')\n    def test_ada(self):")
+        project.write({"greet.py": broken, "test_greet.py": skipped})
+        result = project.verify()
+        self.assertEqual(verify.FAIL, result["verdict"], result)
+        self.assertTrue(any("did not pass on the candidate" in reason and "test_ada" in reason
+                            for reason in result["failures"]), result)
+
+    def test_an_import_error_on_base_is_not_a_reproduction(self):
+        """Review r11: a no-op helper the test imports makes base fail only at import time."""
+        project = self.project()
+        noop = SEED["greet.py"].replace("def main(", "def normalize(name):\n    return name\n\n\ndef main(")
+        tests = SEED["test_greet.py"].replace("from greet import greet", "from greet import greet, normalize")
+        tests = tests.replace("    def test_ada(self):",
+                              "    def test_normalize(self):\n        self.assertEqual('x', normalize('x'))\n\n"
+                              "    def test_ada(self):")
+        project.write({"greet.py": noop, "test_greet.py": tests})
+        result = project.verify()
+        self.assertEqual(verify.FAIL, result["verdict"], result)
+        self.assertTrue(any("only fail to import or collect" in reason for reason in result["failures"]), result)
+        self.assertEqual([], result["fail_to_pass"])
+
+    def test_builder_chosen_commands_never_make_a_pass(self):
+        """Review r3: with no detectable framework, the Builder's own commands prove nothing."""
+        files = {"lib.sh": "echo old\n", "tests/test_lib.sh": "sh lib.sh | grep -q old\n"}
+        project = self.project(files)
+        project.write({"lib.sh": "echo new\n", "tests/test_bug.sh": "sh lib.sh | grep -q new\n"})
+        reported = {"test_command": "sh tests/test_bug.sh", "regression_command": "sh tests/test_bug.sh"}
+        result = verify.verify(project.root, project.base, project.evidence, reported=reported, timeout=60)
+        self.assertEqual(verify.UNVERIFIED, result["verdict"], result)
+        self.assertEqual(("builder", "builder"), (result["commands"]["regression_source"],
+                                                   result["commands"]["suite_source"]))
+        self.assertFalse(verify._mentions_tests("grep -q FIXED lib.sh # tests/test_bug.sh", ["tests/test_bug.sh"]))
+        self.assertFalse(verify._mentions_tests("true", ["t/t.sh"]))
+        self.assertTrue(verify._mentions_tests("python -m pytest tests/test_x.py::test_y", ["tests/test_x.py"]))
+
+    def test_a_run_that_reports_no_results_is_not_a_pass(self):
+        """Review r4: product code that exits the test process early with status 0."""
+        project = self.project()
+        exits = REFERENCE["greet.py"].replace('    return f"Hello, {name}"',
+                                              '    import os\n    os._exit(0)')
+        project.write({"greet.py": exits, "test_greet.py": REFERENCE["test_greet.py"]})
+        result = project.verify()
+        self.assertNotEqual(verify.PASS, result["verdict"], result)
+        self.assertTrue(any("without reporting any test result" in reason
+                            for reason in result["failures"] + result["unverified"]), result)
+
+    def test_non_ascii_and_binary_changes_are_counted(self):
+        """Review r8: quoted numstat paths made a 60-line change count as 0 lines."""
+        project = self.project({**SEED, "café.py": "x = 1\n"})
+        project.write({"café.py": "x = 1\n" + "y = 2\n" * 60, "logo.bin": "\0binary"})
+        stats = verify.diff_stats(project.root, project.base, verify.changed_files(project.root, project.base))
+        self.assertEqual(60 + verify.BINARY_LINES, stats["source_lines_changed"])
+        self.assertEqual(["logo.bin"], stats["binary_files"])
+        self.assertEqual(["logo.bin"], stats["non_code_files"])
+
+    def test_scratch_tree_handles_a_directory_that_became_a_file(self):
+        project = self.project({**SEED, "data/a.txt": "a\n"})
+        (project.root / "data" / "a.txt").unlink()
+        (project.root / "data").rmdir()
+        (project.root / "data").write_text("now a file\n")
+        changes = verify.changed_files(project.root, project.base)
+        tree = verify.make_tree(project.root, project.base, project.evidence / "tree", project.root, changes)
+        self.addCleanup(verify.remove_tree, project.root, tree)
+        self.assertEqual("now a file\n", (tree / "data").read_text())
+
+    @unittest.skipUnless(verify._python_can_import(sys.executable, "pytest"), "pytest is not installed")
+    def test_deselecting_a_test_through_config_is_not_a_fix(self):
+        """Review r2: no product change, only `addopts = --deselect`."""
+        files = {"pytest.ini": "[pytest]\n",
+                 "calc.py": "def mean(v):\n    return sum(v) / len(v)\n",
+                 "test_calc.py": "from calc import mean\n\n\ndef test_mean():\n    assert mean([2]) == 2\n\n\n"
+                                 "def test_empty():\n    assert mean([]) == 0\n"}
+        project = self.project(files)
+        project.write({"pytest.ini": "[pytest]\naddopts = --deselect test_calc.py::test_empty\n",
+                       "test_calc.py": files["test_calc.py"] + "\n\ndef test_more():\n    assert mean([4]) == 4\n"})
+        framework = verify.detect_framework(project.root, python=sys.executable)
+        base_suite = verify.baseline(project.root, project.base, project.evidence, framework=framework,
+                                     suite_command=framework.suite, timeout=120)
+        result = verify.verify(project.root, project.base, project.evidence, framework=framework,
+                               base_suite=base_suite, timeout=120)
+        self.assertEqual(verify.FAIL, result["verdict"], result)
 
 
 class IssueCase(unittest.TestCase):

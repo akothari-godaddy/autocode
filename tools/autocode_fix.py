@@ -35,6 +35,7 @@ import shlex
 import signal
 import subprocess
 import sys
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -96,7 +97,7 @@ def load_record(run_dir):
 
 
 def git(cwd, *args, check=True):
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace")
     if check and result.returncode:
         raise RuntimeError(f"git {' '.join(args)}: {result.stderr.strip()}")
     return result.stdout.strip()
@@ -180,6 +181,21 @@ class Engine:
         return value
 
 
+def _feed(stream, text):
+    try:
+        stream.write(text)
+        stream.close()
+    except (BrokenPipeError, OSError, ValueError):
+        pass
+
+
+def _kill(process):
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def _session(events_path):
     for row in support.events(events_path):
         if row.get("type") == "thread.started" and isinstance(row.get("thread_id"), str):
@@ -212,38 +228,32 @@ def call_agent(engine, *, role, label, workspace, run_dir, prompt, schema, sessi
     print(f"{label}: {role} started ({engine.name} {model or 'default model'})", flush=True)
     started = time.monotonic()
     timed_out = None
+    # The worktree's own code must win over an editable install of the user's checkout.
+    env = verifier.test_environment(workspace, env)
     with events.open("w") as stdout:
         process = subprocess.Popen(command, cwd=workspace, stdin=subprocess.PIPE if stdin_text is not None
                                    else subprocess.DEVNULL, stdout=stdout, stderr=subprocess.STDOUT, text=True,
                                    start_new_session=True, env=env)
-        if stdin_text is not None:
-            try:
-                process.stdin.write(stdin_text)
-                process.stdin.close()
-            except BrokenPipeError:
-                pass
-        last_size, last_change = 0, time.monotonic()
-        while process.poll() is None:
-            time.sleep(0.2)
-            size = events.stat().st_size if events.exists() else 0
-            if size != last_size:
-                last_size, last_change = size, time.monotonic()
-            elapsed = time.monotonic() - started
-            if timeout and elapsed > timeout:
-                timed_out = f"exceeded the {timeout}-second stage limit"
-            elif idle_timeout and time.monotonic() - last_change > idle_timeout:
-                timed_out = f"produced no output for {idle_timeout} seconds"
-            if timed_out:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except (ProcessLookupError, PermissionError):
-                    pass
-                process.wait()
-                break
         try:
-            os.killpg(process.pid, signal.SIGKILL)  # no stray descendants after a turn
-        except (ProcessLookupError, PermissionError):
-            pass
+            if stdin_text is not None:
+                # A prompt larger than the pipe buffer must not block the timeout loop below.
+                threading.Thread(target=_feed, args=(process.stdin, stdin_text), daemon=True).start()
+            last_size, last_change = 0, time.monotonic()
+            while process.poll() is None:
+                time.sleep(0.2)
+                size = events.stat().st_size if events.exists() else 0
+                if size != last_size:
+                    last_size, last_change = size, time.monotonic()
+                if timeout and time.monotonic() - started > timeout:
+                    timed_out = f"exceeded the {timeout}-second stage limit"
+                elif idle_timeout and time.monotonic() - last_change > idle_timeout:
+                    timed_out = f"produced no output for {idle_timeout} seconds"
+                if timed_out:
+                    _kill(process)
+                    process.wait()
+                    break
+        finally:
+            _kill(process)  # no stray descendants after a turn, a timeout, or Ctrl-C
     metrics = support.event_metrics(events)
     row.update(finished_at=now(), duration_seconds=round(time.monotonic() - started, 1),
                exit_code=process.returncode, timed_out=timed_out, tokens=metrics["provider_tokens"])
@@ -346,15 +356,34 @@ def repair_prompt(feedback, *, fresh, record, issue_text):
     return body
 
 
+def is_blocking(finding):
+    return str(finding.get("severity", "")).strip().lower() in BLOCKING
+
+
+def blocking_findings(review):
+    """A review blocks when it does not approve or names a critical or high finding.
+
+    REQUEST_CHANGES without such a finding still blocks: the verdict is the Reviewer's
+    decision, and its findings (whatever their severity) go back to the Builder.
+    """
+    findings = [f for f in review.get("findings") or [] if isinstance(f, dict)]
+    severe = [f for f in findings if is_blocking(f)]
+    if severe:
+        return severe
+    if str(review.get("verdict", "")).strip().upper() != "APPROVE":
+        return findings or [{"severity": "high", "file": "", "problem": review.get("summary") or
+                             "The Reviewer requested changes without a specific finding"}]
+    return []
+
+
 def findings_feedback(review):
-    lines = ["An independent reviewer found blocking problems in your change:"]
-    for finding in review.get("findings", []):
-        if finding.get("severity") in BLOCKING:
-            where = finding.get("file", "")
-            if finding.get("line"):
-                where += f":{finding['line']}"
-            lines.append(f"- [{finding['severity']}] {where}: {finding.get('problem', '')}"
-                         + (f" Suggested: {finding['suggestion']}" if finding.get("suggestion") else ""))
+    lines = ["An independent reviewer did not accept your change:"]
+    for finding in blocking_findings(review):
+        where = finding.get("file", "")
+        if finding.get("line"):
+            where += f":{finding['line']}"
+        lines.append(f"- [{finding.get('severity', '')}] {where}: {finding.get('problem', '')}"
+                     + (f" Suggested: {finding['suggestion']}" if finding.get("suggestion") else ""))
     lines.append("Address each one. If a finding is wrong, leave the code as it is and explain why in "
                  "your summary; the reviewer will see your explanation.")
     return "\n".join(lines)
@@ -402,18 +431,23 @@ THE CHANGE (base {record['base'][:12]} to candidate)
 
 # --- patch and PR text ------------------------------------------------------------
 
-def patch_text(workspace, base, changes, limit=None):
+def patch_bytes(workspace, base, changes):
+    """An exact, applicable patch from ``base`` to the workspace, untracked files included."""
     tracked = [p for p in changes if changes[p] != "added" or git(workspace, "ls-files", "--", p, check=False)]
     parts = []
     if tracked:
-        parts.append(subprocess.run(["git", "diff", "--binary", "--no-renames", base, "--", *tracked], cwd=workspace,
-                                    capture_output=True, text=True).stdout)
+        parts.append(subprocess.run(["git", "--literal-pathspecs", "diff", "--binary", "--no-renames", base, "--",
+                                     *tracked], cwd=workspace, capture_output=True).stdout)
     for path in changes:
         if path in tracked or not (Path(workspace) / path).exists():
             continue
         parts.append(subprocess.run(["git", "diff", "--no-index", "--binary", "--", "/dev/null", path],
-                                    cwd=workspace, capture_output=True, text=True).stdout)
-    text = "".join(parts)
+                                    cwd=workspace, capture_output=True).stdout)
+    return b"".join(parts)
+
+
+def patch_text(workspace, base, changes, limit=None):
+    text = patch_bytes(workspace, base, changes).decode("utf-8", "replace")
     if limit and len(text) > limit:
         text = text[:limit] + f"\n[... diff truncated; {len(text) - limit} more characters. Read the files.]"
     return text
@@ -450,9 +484,11 @@ def pr_text(record, report, verification, review):
                      f"(`{_public(verification['commands']['suite'], record)}`)")
     lines += [f"- Note: {note}" for note in verification["notes"]]
     lines += [f"- Not verified: {reason}" for reason in verification["unverified"]]
+    lines += [f"- Read carefully: {reason}" for reason in verification.get("review_reasons", [])]
     if review:
         lines += ["", "## Independent review", f"{review.get('verdict')}: {review.get('summary', '')}"]
-        lines += [f"- [{f['severity']}] {f.get('file', '')}: {f.get('problem', '')}" for f in review.get("findings", [])]
+        lines += [f"- [{f.get('severity')}] {f.get('file', '')}: {f.get('problem', '')}"
+                  for f in review.get("findings") or [] if isinstance(f, dict)]
     return "\n".join(lines) + "\n"
 
 
@@ -465,31 +501,52 @@ def subject(title, limit=66):
 
 
 def commit(workspace, record, report, changes):
-    issue = record["issue"]
+    """One commit on the fix branch holding exactly the verified paths.
+
+    The index is rebuilt from ``base``: whatever the Builder staged or committed
+    (dependency links, stray files) is left out. Hooks do not run, so the
+    committed tree is the tree that was verified, and that is checked.
+    """
+    base, issue = record["base"], record["issue"]
     root = ((report or {}).get("diagnosis") or {}).get("root_cause", "")
     message = f"Fix: {subject(issue['title'])}\n\n{root}".strip()
     if issue.get("url"):
         message += f"\n\nRefs: {issue['url']}"
-    paths = list(changes)
-    git(workspace, "add", "-A", "--", *paths)
-    staged = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=workspace).returncode
-    if staged == 0:
-        # The Builder already committed everything (against instructions); keep its commit.
-        return git(workspace, "rev-parse", "HEAD")
+    paths = sorted(changes)
+    git(workspace, "reset", "-q", base)  # mixed: the branch and index return to base; files stay
+    git(workspace, "--literal-pathspecs", "add", "-A", "--", *paths)
     identity = []
     if not git(workspace, "config", "user.email", check=False):
         identity = ["-c", "user.name=AutoCode", "-c", "user.email=autocode@localhost"]
-    git(workspace, *identity, "commit", "-q", "-m", message)
+    git(workspace, *identity, "commit", "-q", "--no-verify", "-m", message)
+    committed = sorted(p for p in git(workspace, "diff", "--name-only", "-z", base, "HEAD").split("\0") if p)
+    unexpected = git(workspace, "--literal-pathspecs", "diff", "--name-only", "HEAD", "--", *paths)
+    if committed != paths or unexpected:
+        raise RuntimeError("The commit does not match the verified change; inspect the fix branch")
     return git(workspace, "rev-parse", "HEAD")
+
+
+def restore(workspace, base, patch_path, current_changes):
+    """Put the fix worktree back to a saved verified candidate (worktree mode only)."""
+    git(workspace, "reset", "-q", "--hard", base)
+    for path, status in current_changes.items():
+        if status == "added":
+            target = Path(workspace) / path
+            if target.is_symlink() or target.is_file():
+                target.unlink()
+    if Path(patch_path).stat().st_size:
+        git(workspace, "apply", "--binary", str(patch_path))
 
 
 # --- the workflow -------------------------------------------------------------------
 
-def needs_review(policy, verification):
-    if policy in ("never", "always"):
-        return policy == "always"
-    # "auto": skip only a tiny single-file source change that a human can read at a glance
-    # in the PR; tests have already proven the regression flip and the suite.
+def needs_review(policy, verification, *, reviewed_before=False):
+    if policy == "never":
+        return False
+    if policy == "always" or reviewed_before or verification.get("review_reasons"):
+        return True  # once a Reviewer has spoken, every later candidate is re-reviewed
+    # "auto": skip only a tiny code change in one source file, proven by named tests,
+    # that a human can read at a glance in the PR.
     stats = verification["stats"]
     return not (stats["source_files"] == 1 and stats["source_lines_changed"] <= TINY_SOURCE_LINES)
 
@@ -503,7 +560,18 @@ def check_in_place(project, base):
         raise ValueError("--in-place works on HEAD; omit --base or check out the base first")
 
 
+def exclude_runner_files(project):
+    """Keep run records and worktrees out of `git add -A` in the user's checkout (local only)."""
+    exclude = Path(git(project, "rev-parse", "--path-format=absolute", "--git-path", "info/exclude"))
+    current = exclude.read_text() if exclude.is_file() else ""
+    if "/.autocode/" not in current.splitlines():
+        exclude.parent.mkdir(parents=True, exist_ok=True)
+        exclude.write_text(current + ("" if not current or current.endswith("\n") else "\n")
+                           + "# AutoCode run records and worktrees\n/.autocode/\n")
+
+
 def prepare_workspace(project, base, name, in_place):
+    exclude_runner_files(project)
     if in_place:
         check_in_place(project, base)
         return project, None
@@ -535,19 +603,27 @@ def cost_summary(record):
 
 
 def finish(record, status, reason, *, workspace=None, report=None, verification=None, review=None):
-    record.update(status=status, reason=reason, finished_at=now())
+    """Write the patch, PR text and (on READY) the commit, then the final record.
+
+    A failure while producing those artifacts turns the run into ERROR with the
+    reason recorded; it never leaves the record at RUNNING.
+    """
     run_dir = Path(record["run_dir"])
-    if workspace is not None and verification and verification["changes"]:
-        (run_dir / "patch.diff").write_text(patch_text(workspace, record["base"], verification["changes"]))
-        record["patch"] = str(run_dir / "patch.diff")
-        (run_dir / "PR.md").write_text(pr_text(record, report, verification, review))
-        record["pr_text"] = str(run_dir / "PR.md")
-        if status == "READY" and record.get("branch"):
-            record["commit"] = commit(workspace, record, report, verification["changes"])
+    record.update(status=status, reason=reason, finished_at=now())
+    try:
+        if workspace is not None and verification and verification["changes"]:
+            (run_dir / "patch.diff").write_bytes(patch_bytes(workspace, record["base"], verification["changes"]))
+            record["patch"] = str(run_dir / "patch.diff")
+            (run_dir / "PR.md").write_text(pr_text(record, report, verification, review))
+            record["pr_text"] = str(run_dir / "PR.md")
+            if status == "READY" and record.get("branch"):
+                record["commit"] = commit(workspace, record, report, verification["changes"])
+    except Exception as error:  # noqa: BLE001 - recorded, never swallowed silently
+        record.update(status="ERROR", reason=f"{reason}; then failed to write the result: {error}")
     record["cost"] = cost_summary(record)
     save(run_dir, record)
     print_summary(record)
-    return exit_code(status)
+    return exit_code(record["status"])
 
 
 def exit_code(status):
@@ -600,7 +676,17 @@ def run(args) -> int:
     support.atomic_json(run_dir / "issue.json", issue)
     save(run_dir, record)
     print(f"autocode fix: {issue['title'] or '(untitled report)'}\nRun: {run_dir}", flush=True)
+    try:
+        return _attempts(args, record, project, base, name, engine, builder_model, reviewer_model)
+    except KeyboardInterrupt:
+        finish(record, "ERROR", "Interrupted; the agent's process group was stopped")
+        return 130
+    except Exception as error:  # noqa: BLE001 - every failure ends in a recorded status
+        return finish(record, "ERROR", f"{type(error).__name__}: {error}")
 
+
+def _attempts(args, record, project, base, name, engine, builder_model, reviewer_model):
+    run_dir = Path(record["run_dir"])
     workspace, branch = prepare_workspace(project, base, name, args.in_place)
     record.update(workspace=str(workspace), branch=branch)
     framework = verifier.detect_framework(workspace, python=args.python)
@@ -631,9 +717,9 @@ def run(args) -> int:
     if args.dry_run:
         return finish(record, "UNVERIFIED", "Dry run: baseline recorded, no model was called")
 
-    issue_text = issues.render(issue)
+    issue_text = issues.render(record["issue"])
     session, report, verification, review, feedback = None, None, None, None, None
-    blocking = []
+    verified = None  # the latest candidate the runner proved, kept if a later attempt breaks it
     for attempt in range(1, args.max_attempts + 1):
         final = attempt == args.max_attempts
         escalate = bool(args.escalate_model and final and attempt > 1)
@@ -655,25 +741,19 @@ def run(args) -> int:
         session = new_session
         entry["build"] = {"problem": call.get("problem"), "report_status": (report or {}).get("status")}
         record["last_summary"] = (report or {}).get("summary")
-        if call.get("timed_out") and not verifier.changed_files(workspace, base):
-            return finish(record, "ERROR", call["problem"], workspace=workspace)
         changes = verifier.changed_files(workspace, base)
-        if report and report.get("status") in ("CANNOT_REPRODUCE", "NEEDS_INPUT") and not changes:
+        source_changes = [p for p in changes if not verifier.is_test_path(p)]
+        if report and report.get("status") in ("CANNOT_REPRODUCE", "NEEDS_INPUT") and not source_changes:
             record["question"] = report.get("question") or report.get("summary")
             return finish(record, "NEEDS_INPUT", f"Builder: {report['status']}: {record['question']}",
-                          workspace=workspace, report=report)
-        if call.get("problem") and call.get("exit_code") not in (0, None) and not changes:
+                          workspace=workspace, report=report, verification=_unverified(changes, base))
+        if call.get("problem") and not changes and (call.get("timed_out") or call.get("exit_code") not in (0, None)):
             return finish(record, "ERROR", call["problem"], workspace=workspace)
 
-        started = time.monotonic()
-        verification = verifier.verify(workspace, base, attempt_dir / "verify", framework=framework,
-                                       suite_command=args.test_command, regression_command=args.regression_command,
-                                       reported=report, base_suite=base_suite, timeout=args.test_timeout,
-                                       dependencies_from=project, allow_no_test=args.allow_no_test)
-        record["verify_seconds"] += time.monotonic() - started
-        support.atomic_json(attempt_dir / "verification.json", verification)
+        verification = _verify(args, record, workspace, base, attempt_dir, framework, report, base_suite, project)
         entry["verification"] = {"verdict": verification["verdict"], "failures": verification["failures"],
-                                 "unverified": verification["unverified"], "path": str(attempt_dir / "verification.json"),
+                                 "unverified": verification["unverified"],
+                                 "path": str(attempt_dir / "verification.json"),
                                  "source_revision": verification["source_revision"]}
         save(run_dir, record)
         print(f"verify: {verification['verdict']}"
@@ -685,7 +765,10 @@ def run(args) -> int:
             feedback = verifier.feedback(verification)
             continue
 
-        if not needs_review(args.review, verification):
+        candidate = attempt_dir / "candidate.patch"
+        candidate.write_bytes(patch_bytes(workspace, base, verification["changes"]))
+        verified = {"attempt": attempt, "patch": candidate, "report": report, "review": None}
+        if not needs_review(args.review, verification, reviewed_before=record.get("last_review") is not None):
             why = "review disabled (--review never)" if args.review == "never" else \
                 "review not required for a tiny single-file change"
             return finish(record, "READY", f"Regression proven and no suite regressions; {why}",
@@ -709,24 +792,58 @@ def run(args) -> int:
                           f"{call.get('problem')}", workspace=workspace, report=report, verification=verification)
         support.atomic_json(attempt_dir / "review.json", review)
         record["last_review"] = review
-        blocking = [f for f in review.get("findings", []) if f.get("severity") in BLOCKING]
+        verified["review"] = review
+        blocking = blocking_findings(review)
         entry["review"] = {"verdict": review.get("verdict"), "blocking": len(blocking),
-                           "findings": len(review.get("findings", []))}
+                           "findings": len(review.get("findings") or [])}
         save(run_dir, record)
-        print(f"review: {review.get('verdict')} ({len(blocking)} blocking of {len(review.get('findings', []))})",
+        print(f"review: {review.get('verdict')} ({len(blocking)} blocking of {len(review.get('findings') or [])})",
               flush=True)
         if not blocking:
             return finish(record, "READY", "Regression proven, no suite regressions, and the independent review "
-                          "found nothing blocking", workspace=workspace, report=report,
-                          verification=verification, review=review)
+                          "approved", workspace=workspace, report=report, verification=verification, review=review)
         feedback = findings_feedback(review)
+
     if verification and verification["verdict"] == verifier.PASS:
-        return finish(record, "NEEDS_REVIEW", f"Tests prove the fix, but {len(blocking)} blocking review finding(s) "
-                      "remain after the attempt budget", workspace=workspace, report=report,
+        return finish(record, "NEEDS_REVIEW", f"Tests prove the fix, but {len(blocking_findings(review))} blocking "
+                      "review finding(s) remain after the attempt budget", workspace=workspace, report=report,
                       verification=verification, review=review)
+    if verified and record.get("branch"):
+        # A later attempt broke a candidate the runner had proven: keep the proven one.
+        failed_patch = run_dir / "attempts" / f"{args.max_attempts:02d}" / "candidate.patch"
+        failed_patch.write_bytes(patch_bytes(workspace, base, verifier.changed_files(workspace, base)))
+        restore(workspace, base, verified["patch"], verifier.changed_files(workspace, base))
+        again = _verify(args, record, workspace, base, run_dir / "attempts" / "restored", framework,
+                        verified["report"], base_suite, project)
+        if again["verdict"] == verifier.PASS:
+            return finish(record, "NEEDS_REVIEW",
+                          f"Attempt {verified['attempt']} was proven by tests but not approved in review, and later "
+                          f"attempts did not produce a better verified fix; the worktree holds attempt "
+                          f"{verified['attempt']} (the last attempt is saved at {failed_patch})",
+                          workspace=workspace, report=verified["report"], verification=again,
+                          review=verified["review"])
     return finish(record, "FAILED", f"No verified fix within {args.max_attempts} attempt(s): "
                   + "; ".join((verification or {}).get("failures") or ["no candidate"]),
                   workspace=workspace, report=report, verification=verification)
+
+
+def _verify(args, record, workspace, base, attempt_dir, framework, report, base_suite, project):
+    started = time.monotonic()
+    verification = verifier.verify(workspace, base, attempt_dir / "verify", framework=framework,
+                                   suite_command=args.test_command, regression_command=args.regression_command,
+                                   reported=report, base_suite=base_suite, timeout=args.test_timeout,
+                                   dependencies_from=project, allow_no_test=args.allow_no_test)
+    record["verify_seconds"] += time.monotonic() - started
+    support.atomic_json(attempt_dir / "verification.json", verification)
+    return verification
+
+
+def _unverified(changes, base):
+    """A minimal verification record for a stop that ran no tests (so the patch is still written)."""
+    return {"verdict": verifier.UNVERIFIED, "failures": [], "unverified": ["No tests were run"], "notes": [],
+            "review_reasons": [], "base": base, "changes": changes, "checks": {},
+            "commands": {"suite": None, "suite_source": None, "regression": None, "regression_source": None},
+            "fail_to_pass": None}
 
 
 def status(run_dir) -> int:
