@@ -45,6 +45,7 @@ class InvestigationReviewTests(EpisodeCase):
         self.apply("astra_discovery", discovery(clarification_only([question("Q2", "decision")]),
                    machine_resolutions=[{"question_id": "Q1", "resolution": "Set in config.py",
                                          "source_refs": ["config.py:1"], "handoff_hash": handoff_hash}]))
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         self.assertEqual(["Q2"], [q["id"] for q in self.state["pending_questions"]])
         goals.answer(self.state, "Q2", "Use the default route")
         self.apply("astra_discovery", discovery(body()))
@@ -62,6 +63,7 @@ class ObligationReviewTests(ObligationCase):
     def test_2_mentioning_an_obligation_in_feedback_does_not_resolve_it(self):
         oid = self.reject(category="cost")
         self.apply("astra_discovery", self.discovery(plan([decision_question(oid)])))
+        self.publish()
         goals.feedback(self.state, f"{oid} is still unresolved. Investigate another approach.")
         self.assertEqual("open", self.obligation(oid)["status"])
 
@@ -69,6 +71,7 @@ class ObligationReviewTests(ObligationCase):
         oid = self.reject(category="cost")
         question = {**decision_question(oid), "proposed_default": "Prefer the paid provider"}
         self.apply("astra_discovery", self.discovery(plan([question])))
+        self.publish()
         before = copy.deepcopy(self.state)
         with self.assertRaisesRegex(ValueError, "cannot be delegated"):
             goals.answer(self.state, oid, "accept default", delegated=True)
@@ -79,6 +82,7 @@ class ObligationReviewTests(ObligationCase):
     def test_6_new_intent_invalidates_a_carried_remediation(self):
         oid = self.reject()
         self.apply("astra_discovery", self.discovery(plan([decision_question("Q2")]), [self.record(oid)]))
+        self.publish()
         old_hash = self.obligation(oid)["remediation_hash"]
         self.assertEqual("pending_review", self.obligation(oid)["status"])
         goals.answer(self.state, "Q2", "stdin, not argv")
@@ -124,9 +128,12 @@ class DelegationReviewTests(ObligationCase):
                 self.setUp()
                 self.draft({**decision_question("Q0"), "category": "behavior", "proposed_default": "CLI",
                             "delegable": True})
+                displayed = shown(self.state)
+                # A protected question slipped into the pending list (validation refuses it in
+                # a draft, see below); bulk delegation must still refuse the whole call.
                 self.state["pending_questions"].append(protected)
                 with self.assertRaisesRegex(ValueError, "Q1"):
-                    goals.delegate_all(self.state, shown(self.state))
+                    goals.delegate_all(self.state, displayed)
                 self.assertEqual({}, self.state["answers"])
 
     def test_4_validation_rejects_delegable_protected_questions(self):

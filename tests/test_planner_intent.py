@@ -32,6 +32,9 @@ class PlannerIntentTests(unittest.TestCase):
         value["contract"]["milestones"] = []
         value["contract"]["technical_approach"] = []
         autopilot.apply_planning(current, "astra_discovery", value, {"output": "questions.json"})
+        # The question is queued; the runner's writer boundary publishes it to the user.
+        self.assertEqual("RESOLVER_PENDING", current["status"])
+        goals.human.evaluate(current)
         self.assertEqual("WAITING_FOR_USER", current["status"])
         self.assertEqual([], current["goal_contract"]["body"]["milestones"])
         goals.answer(current, "Q1", "CLI")
@@ -48,6 +51,8 @@ class PlannerIntentTests(unittest.TestCase):
         value = {"contract": draft, "summary": "Need a decision", "code_refs": [],
                  "responses": [], "contract_changes": [], "requirement_trace": []}
         autopilot.apply_planning(current, "glm_revise", value, {"output": "revision.json"})
+        self.assertEqual("RESOLVER_PENDING", current["status"])
+        goals.human.evaluate(current)
         self.assertEqual("WAITING_FOR_USER", current["status"])
         self.assertEqual("Q1", current["pending_questions"][0]["id"])
         self.assertNotEqual("astra_finalize", current["next_stage"])
