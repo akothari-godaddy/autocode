@@ -25,8 +25,8 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install runtime dependency
-        run: python3 -m pip install "psutil>=7.0,<8"
+      - name: Install package and runtime dependencies
+        run: python3 -m pip install -e .
 
       - name: Run the suite gate
         # tools/run_suite.py wraps the same discovery as

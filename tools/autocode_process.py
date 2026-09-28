@@ -27,6 +27,13 @@ def process_ids():
     raise ProcessError("Cannot enumerate provider processes; refusing an unsafe launch or cleanup") from last_error
 
 
+def _birth_identity(process):
+    # On macOS psutil 7's PID identity is the raw kernel epoch timestamp, unlike
+    # public create_time() with its import-time clock adjustment. Linux's _ident
+    # is boot-relative, so retain its epoch timestamp to distinguish reboots.
+    return process._ident[1] if psutil.OSX else process.create_time()
+
+
 def process_table(pids=None):
     """Read native process metadata; never inspect command arguments."""
     selected = process_ids() if pids is None else set(pids)
@@ -36,6 +43,7 @@ def process_table(pids=None):
             process = psutil.Process(pid)
             with process.oneshot():
                 born = process.create_time()
+                birth_identity = _birth_identity(process)
                 parent = process.ppid()
                 status = process.status()
                 group = os.getpgid(pid)
@@ -51,6 +59,7 @@ def process_table(pids=None):
             table[pid] = {"pid": pid, "parent": parent, "group": group,
                           "started": " ".join(time.ctime(born).split()),
                           "birth_time": born,
+                          "birth_identity": birth_identity,
                           "state": "Z" if status == psutil.STATUS_ZOMBIE else status,
                           "executable": executable}
         except (psutil.NoSuchProcess, ProcessLookupError):
@@ -64,13 +73,19 @@ def process_table(pids=None):
 
 
 def identity(row):
-    return {key: row[key] for key in ("pid", "started", "group", "birth_time") if key in row}
+    return {key: row[key] for key in ("pid", "started", "group", "birth_time", "birth_identity") if key in row}
 
 
 def matches(saved, current):
-    if not current or saved["pid"] != current["pid"] or saved["started"] != current["started"]:
+    if not current or saved["pid"] != current["pid"]:
         return False
-    return "birth_time" not in saved or saved["birth_time"] == current.get("birth_time")
+    if "birth_identity" in saved:
+        born = saved["birth_identity"]
+        return type(born) in (int, float) and born == current.get("birth_identity")
+    # Old checkpoints have no stable identity; keep their stricter checks rather
+    # than guessing whether a timestamp mismatch means clock drift or PID reuse.
+    return (saved["started"] == current["started"]
+            and ("birth_time" not in saved or saved["birth_time"] == current.get("birth_time")))
 
 
 def live_processes(saved, table=None):
@@ -121,10 +136,10 @@ class ProcessTree:
                 continue
             try:
                 parent = psutil.Process(pid)
-                if parent.create_time() != table[pid].get("birth_time"):
+                if _birth_identity(parent) != table[pid].get("birth_identity"):
                     continue
                 descendants = parent.children(recursive=True)
-                candidates = {child.pid: child.create_time() for child in descendants}
+                candidates = {child.pid: _birth_identity(child) for child in descendants}
             except psutil.NoSuchProcess:
                 continue
             except PermissionError:
@@ -136,12 +151,12 @@ class ProcessTree:
                     try:
                         child = psutil.Process(candidate)
                         if child.ppid() == pid:
-                            candidates[candidate] = child.create_time()
+                            candidates[candidate] = _birth_identity(child)
                     except (psutil.NoSuchProcess, psutil.AccessDenied):
                         continue
                 found = process_table(candidates)
                 found = {child_pid: row for child_pid, row in found.items()
-                         if row["birth_time"] == candidates[child_pid]}
+                          if row["birth_identity"] == candidates[child_pid]}
                 table.update(found)
                 owned.update(found)
                 covered.update(found)
@@ -149,7 +164,7 @@ class ProcessTree:
                 raise ProcessError(f"Cannot inspect descendants of owned process {pid}: {type(error).__name__}") from error
             found = process_table(candidates)
             found = {child_pid: row for child_pid, row in found.items()
-                     if row["birth_time"] == candidates[child_pid]}
+                      if row["birth_identity"] == candidates[child_pid]}
             table.update(found)
             owned.update(found)
             covered.update(found)
