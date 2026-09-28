@@ -14,7 +14,7 @@ import time
 from urllib.parse import urlencode
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_console import Console, Handler, ThreadingHTTPServer
+from agent_console import Console, Handler, LoopbackHTTPServer
 
 
 FIXTURE_NOW = '2026-09-22T12:41:00Z'
@@ -555,7 +555,7 @@ def main():
         console = FixtureConsole([workspace], root / 'no-runner', lambda: False,
                                  conversation_root=root / 'conversations', project_store_root=root / 'dashboard',
                                  catalogue_command=(sys.executable, str(catalogue)))
-        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server = LoopbackHTTPServer(('127.0.0.1', 0), Handler)
         server.console = console
         server.hosts = {f'127.0.0.1:{server.server_port}', f'localhost:{server.server_port}'}
         base_url = f'http://127.0.0.1:{server.server_port}/'

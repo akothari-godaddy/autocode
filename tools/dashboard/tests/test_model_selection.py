@@ -11,7 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from agent_console import Console, Handler, ModelCatalogue, ThreadingHTTPServer, saved_models
+from agent_console import Console, Handler, ModelCatalogue, LoopbackHTTPServer, saved_models
 
 
 class ModelSelectionTests(unittest.TestCase):
@@ -322,7 +322,7 @@ run.mkdir(parents=True,exist_ok=True)
             self.console.create({'project': str(self.workspace), 'goal': 'reject', 'engine': 'codex', 'glm_model': 'zai-coding-plan/glm-5.3'})
 
     def test_catalogue_retry_requires_same_origin_and_polling_does_not_invoke_it(self):
-        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        server = LoopbackHTTPServer(('127.0.0.1', 0), Handler)
         server.console = self.console
         authority = '127.0.0.1:' + str(server.server_port)
         server.hosts = {authority}

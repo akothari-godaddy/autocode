@@ -3,7 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import tempfile
-from .dashboard.agent_console import Console, Handler, ThreadingHTTPServer
+from .dashboard.agent_console import Console, Handler, LoopbackHTTPServer
 
 
 if __name__ == '__main__':
@@ -16,7 +16,7 @@ if __name__ == '__main__':
         os.environ['AUTOCODE_HOME']=str(root/'registry')
         console=Console([args.workspace],Path(__file__).with_name('autocode.py'),
             conversation_root=root/'conversations',project_store_root=root/'dashboard')
-        server=ThreadingHTTPServer(('127.0.0.1',args.port),Handler)
+        server=LoopbackHTTPServer(('127.0.0.1',args.port),Handler)
         server.console=console;server.hosts={f'127.0.0.1:{args.port}'}
         print(f'http://127.0.0.1:{args.port}',flush=True)
         try: server.serve_forever()

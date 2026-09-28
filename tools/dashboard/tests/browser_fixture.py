@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parents[1]))
-from agent_console import Console, Handler, ThreadingHTTPServer
+from agent_console import Console, Handler, LoopbackHTTPServer
 
 STATE = {
     "task": "Browser lifecycle fixture",
@@ -130,7 +130,7 @@ def main():
         fake = root / "fake_runner.py"
         fake.write_text(FAKE)
         console = Console([left, right], fake, lambda: None, watch_roots=[legacy_root])
-        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        server = LoopbackHTTPServer(("127.0.0.1", 0), Handler)
         server.console = console
         server.hosts = {"127.0.0.1:" + str(server.server_port), "localhost:" + str(server.server_port)}
         threading.Thread(target=server.serve_forever, daemon=True).start()
