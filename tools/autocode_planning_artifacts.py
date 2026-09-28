@@ -306,6 +306,17 @@ def flush_pending(state, run_dir):
     return created
 
 
+def commit_pending(state, run_dir, persist):
+    """Publish artifact bytes and state as one rollback-safe runner transaction."""
+    created = flush_pending(state, run_dir)
+    try:
+        persist(state)
+    except Exception:
+        rollback_created(created, run_dir)
+        raise
+    return created
+
+
 def rollback_created(created, run_dir):
     """Remove only planning files created by the current unpublished commit."""
     directories = set()
@@ -356,6 +367,12 @@ def reconcile_orphans(state, run_dir):
             continue
         archive.mkdir(parents=True, exist_ok=True)
         destination = archive / f"{path.stem}-{support.file_hash(path)[:12]}{path.suffix}"
+        if destination.exists():
+            if not destination.is_file() or support.file_hash(destination) != support.file_hash(path):
+                raise ValueError(f"Refusing to overwrite orphan archive {destination.relative_to(run_dir)}")
+            path.unlink()
+            reconciled.append({"path": relative, "archive": str(destination.relative_to(run_dir)), "action": "archived"})
+            continue
         os.replace(path, destination)
         reconciled.append({"path": relative, "archive": str(destination.relative_to(run_dir)), "action": "archived"})
     if reconciled:

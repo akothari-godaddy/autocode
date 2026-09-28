@@ -7,6 +7,12 @@ from pathlib import Path
 from socketserver import TCPServer
 from urllib.parse import parse_qs,urlparse
 sys.dont_write_bytecode=True
+try:
+ from .. import autocode_resolver_human as resolver_human
+except ImportError:
+ tools=str(Path(__file__).resolve().parents[1])
+ if tools not in sys.path:sys.path.insert(0,tools)
+ import autocode_resolver_human as resolver_human
 CODEX_DEFAULT_MODELS={'astra':'gpt-5.6-sol','terra':'gpt-5.6-terra','sol':'gpt-5.6-sol','completion':'gpt-5.6-sol'}
 GLM_MODELS={'astra':'glm-5.3','terra':'glm-5.3-flash','sol':'glm-5.3','completion':'glm-5.3'}
 DEFAULT_REASONING_EFFORTS={'astra':'high','terra':'medium','sol':'high','completion':'medium'}
@@ -16,32 +22,17 @@ MODEL_ID=re.compile(r'^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._:/-]{0,120}$',re.I)
 def obj(x): return x if isinstance(x,dict) else {}
 def items(x): return x if isinstance(x,list) else []
 def pending_decisions(state):
- """Project unresolved decisions without changing the saved checkpoint."""
- questions=[q for q in items(state.get('pending_questions')) if isinstance(q,dict)]
- answers=obj(state.get('answers'));request=obj(state.get('user_request'))
- def answered(question):
-  ident=question.get('id')
-  answer=obj(answers.get(ident)) if isinstance(ident,str) else {}
-  return bool(answer.get('text')) and (not answer.get('question') or answer['question']==question)
- pending=[q for q in questions if not answered(q)]
- request_resolved=bool(request.get('decision_needed')) and any(
-  q not in pending and q.get('question')==request['decision_needed'] for q in questions)
- # Permission decisions record provenance and the exact approved contract scope.
- # Older checkpoints can still retain a duplicate question under a new ID.
- contract=obj(state.get('goal_contract'))
- token=f"r{contract.get('revision')}:{contract.get('hash')}"
- if request.get('kind')=='permission' and contract.get('approval_status')=='approved':
-  for raw in answers.values():
-   answer=obj(raw)
-   if (answer.get('kind')=='permission_answer' and answer.get('actor')=='user_cli'
-       and answer.get('text') and answer in items(state.get('user_events'))
-       and answer.get('contract_token')==token and answer.get('request')==request):
-    pending=[q for q in pending if q.get('question')!=request.get('decision_needed')]
-    request_resolved=True
-    break
- if request_resolved:
-  request={}
- return pending,request or None
+ """Only a current durable AutoResolver receipt can expose a decision."""
+ public=resolver_human.projection(state)
+ return public['pending_questions'],public['user_request'] or None
+def require_human_response(view,data,scopes):
+ public=obj(view.get('human_escalation'))
+ if (view.get('human_request_authorized') is not True or public.get('scope') not in scopes
+     or not public.get('request_id') or not public.get('request_token')
+     or data.get('resolver_request')!=public['request_id']
+     or data.get('resolver_token')!=public['request_token']):
+  raise ValueError('Response requires the exact current AutoResolver request and token. Refresh the task.')
+ return public
 def json_file(p):
  try:
   x=json.loads(p.read_text(encoding='utf8'));return x if isinstance(x,dict) else {'_console_error':'state is not a JSON object'}
@@ -262,6 +253,7 @@ def astra_plan_state(s):
   'current_plan_approval':contract.get('approval_status') if isinstance(contract.get('approval_status'),str) else None,
   'current_assignment':current,'history':history,'briefs':briefs,'decisions':decisions,'revision_history':revisions}
 class LegacyConsole:
+ require_human_response=staticmethod(require_human_response)
  def __init__(self,workspaces,runner,zai_probe=configured_zai,watch_roots=(),watch_depth=3,watch_ttl=4.0,catalogue_command=('opencode','models'),run_provider='opencode'):
   self.run_provider=run_provider
   if run_provider=='opencode':self.catalogue=ModelCatalogue(catalogue_command)
@@ -355,8 +347,8 @@ class LegacyConsole:
   s=obj(s) if s is not None else json_file(run/'state.json');contract=obj(s.get('goal_contract'));body=obj(contract.get('body'));criteria=items(body.get('acceptance_criteria')) or items(s.get('acceptance_criteria'));result={str(x.get('id')):str(x.get('status','unknown')).lower() for x in items(obj(s.get('validation')).get('criterion_results')) if isinstance(x,dict)};counts={'pass':0,'fail':0,'unknown':0}
   for c in criteria:
    status=result.get(str(obj(c).get('id')),'unknown');counts['pass' if status in ('pass','verified') else 'fail' if status in ('fail','blocked') else 'unknown']+=1
-  active=obj(s.get('active_stage'));questions,request=pending_decisions(s)
-  return {'workspace':str(ws),'project_workspace':s.get('project_workspace',str(ws)),'task_branch':s.get('task_branch'),'run':str(run),'created_at':s.get('created_at'),'task':s.get('task','unavailable'),'phase':s.get('phase','unavailable'),'status':s.get('status','unavailable'),'completed_at':s.get('completed_at') if isinstance(s.get('completed_at'),str) else None,'stage':active.get('stage') or s.get('stage') or s.get('next_stage') or 'unavailable','iteration':s.get('iteration','unavailable'),'state_error':s.get('_console_error'),'stop_reason':s.get('stop_reason'),'goal':contract,'goal_token':s.get('displayed_goal') if isinstance(s.get('displayed_goal'),str) else '','criteria':criteria,'counts':counts,'questions':questions,'answers':obj(s.get('answers')),'discovery_summary':s.get('discovery_summary') if isinstance(s.get('discovery_summary'),str) else '','discovery_role':discovery_role(s),'stages':[x for x in items(s.get('stages')) if isinstance(x,dict)],'active_stage':active,'progress_messages':items(s.get('progress_messages')),'plan':items(s.get('plan')),'astra_plan':astra_plan_state(s),'user_request':request,'review_token':s.get('displayed_review') if isinstance(s.get('displayed_review'),str) else '','review_criteria':[obj(c) for c in criteria if obj(c).get('human_review')],'human_reviews':obj(s.get('human_reviews')),'reasoning_escalations':items(s.get('reasoning_escalations')),'zai':bool(self.zai_probe()),'model_settings':saved_models(s)}
+  public=resolver_human.projection(s);active=obj(s.get('active_stage'));questions,request=public['pending_questions'],public['user_request'] or None
+  return {**public,'workspace':str(ws),'project_workspace':s.get('project_workspace',str(ws)),'task_branch':s.get('task_branch'),'run':str(run),'created_at':s.get('created_at'),'task':s.get('task','unavailable'),'phase':s.get('phase','unavailable'),'status':s.get('status','unavailable'),'completed_at':s.get('completed_at') if isinstance(s.get('completed_at'),str) else None,'stage':active.get('stage') or s.get('stage') or s.get('next_stage') or 'unavailable','iteration':s.get('iteration','unavailable'),'state_error':s.get('_console_error'),'stop_reason':s.get('stop_reason'),'goal':contract,'goal_token':s.get('displayed_goal') if isinstance(s.get('displayed_goal'),str) else '','criteria':criteria,'counts':counts,'questions':questions,'answers':obj(s.get('answers')),'discovery_summary':s.get('discovery_summary') if isinstance(s.get('discovery_summary'),str) else '','discovery_role':discovery_role(s),'stages':[x for x in items(s.get('stages')) if isinstance(x,dict)],'active_stage':active,'progress_messages':items(s.get('progress_messages')),'plan':items(s.get('plan')),'astra_plan':astra_plan_state(s),'user_request':request,'review_token':s.get('displayed_review') if isinstance(s.get('displayed_review'),str) else '','review_criteria':[obj(c) for c in criteria if obj(c).get('human_review')],'human_reviews':obj(s.get('human_reviews')),'reasoning_escalations':items(s.get('reasoning_escalations')),'zai':bool(self.zai_probe()),'model_settings':saved_models(s)}
  def discover(self):
   rows=self.root_error_rows()
   for ws in self.workspaces:
@@ -489,21 +481,34 @@ class LegacyConsole:
   ws=self.workspace_for(d.get('workspace',''));run=self.run_for(ws,d.get('run',''))
   if not run:raise ValueError('Run does not belong to the selected watched workspace')
   v=self.view(ws,run);action=d.get('action');pending={str(obj(q).get('id')) for q in v['questions']}
+  if action=='resolver_response':
+   public=require_human_response(v,d,('operational_exhaustion','blocker'))
+   response,text=d.get('resolver_response'),d.get('resolver_message','')
+   if (response not in ('provide_information','leave_paused') or not isinstance(text,str)
+       or len(text)>16000 or (response=='provide_information' and not text.strip())):
+    raise ValueError('Provide corrective information or leave the task paused')
+   extra=['--resolver-request',public['request_id'],'--resolver-token',public['request_token'],'--resolver-response',response]
+   if text:extra+=['--resolver-message',text]
+   return self.enqueue(ws,run,'Respond to AutoResolver',extra+['--no-chat'])
   if action=='answer':
+   public=require_human_response(v,d,('clarification','permission','goal_change'))
    ident,text=str(d.get('id','')),d.get('text','')
    if ident not in pending or not isinstance(text,str) or not text.strip():raise ValueError('Question is not currently pending')
-   return self.enqueue(ws,run,'Answer '+ident,['--answer',ident+'='+text])
+   return self.enqueue(ws,run,'Answer '+ident,['--answer',ident+'='+text,'--resolver-token',public['request_token']])
   if action=='delegate':
+   public=require_human_response(v,d,('clarification','permission','goal_change'))
    ident=str(d.get('id',''))
    if ident not in pending:raise ValueError('Question is not currently pending')
-   return self.enqueue(ws,run,'Delegate '+ident,['--delegate',ident])
+   return self.enqueue(ws,run,'Delegate '+ident,['--delegate',ident,'--resolver-token',public['request_token']])
   if action=='approve_goal':
+   require_human_response(v,d,('goal_approval',))
    token=d.get('token','')
-   if not isinstance(token,str) or token!=v['goal_token'] or d.get('confirmation')!=token:raise ValueError('Displayed goal token changed or confirmation does not match')
+   if not isinstance(token,str) or not token or token!=v['goal_token'] or token!=f"r{v['goal'].get('revision')}:{v['goal'].get('hash')}" or d.get('confirmation')!=token:raise ValueError('Displayed goal token changed or confirmation does not match')
    return self.enqueue(ws,run,'Approve goal',['--approve-goal',token])
   if action=='approve_review':
+   public=require_human_response(v,d,('human_review',))
    ident,token=str(d.get('id','')),d.get('token','')
-   if ident not in {str(c.get('id')) for c in v['review_criteria']} or not isinstance(token,str) or token!=v['review_token']:raise ValueError('Displayed review token changed or criterion is not eligible')
+   if ident not in public['request'].get('criteria',[]) or ident not in {str(c.get('id')) for c in v['review_criteria']} or not isinstance(token,str) or not token or token!=v['review_token']:raise ValueError('Displayed review token changed or criterion is not eligible')
    return self.enqueue(ws,run,'Approve review '+ident,['--approve-review',ident,'--review-token',token])
   if action=='set_reasoning':
    efforts=self.joint_efforts(d)

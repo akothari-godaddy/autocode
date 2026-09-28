@@ -6,6 +6,8 @@ profile fields match, or when the profile is the variable under test. Keep the
 """
 from __future__ import annotations
 
+import copy
+
 # Effort keys are semantic roles, not stage ids: the driver maps stages to these
 # so a profile stays valid when internal stage names change.
 EFFORT_ROLES = ("requirements", "planner", "reviewer", "builder", "validator",
@@ -74,7 +76,41 @@ PROFILES = {
             "resolver": "high",
         },
     },
+    # User-authorized OpenAI-only campaign route (2026-09-28). Distinct model
+    # families keep plan and implementation verification independent.
+    "openai-independent": {
+        "provider": "opencode",
+        "role_models": {
+            "requirements": "openai/gpt-5.6-sol",
+            "planner": "openai/gpt-5.6-sol",
+            "reviewer": "openai/gpt-6-astra",
+            "builder": "openai/gpt-5.6-terra",
+            "validator": "openai/gpt-5.6-sol",
+            "completion": "openai/gpt-5.6-sol",
+            "resolver": "openai/gpt-6-astra",
+        },
+        "effort": {
+            "requirements": "medium", "planner": "medium", "reviewer": "high",
+            "builder": "medium", "validator": "high", "completion": "high", "resolver": "high",
+        },
+        "note": "OpenAI-only campaign: Sol plans/verifies, Astra reviews/resolves, Terra builds.",
+    },
 }
+
+
+for _name, _glm, _mimo in (
+    ('glm53-mimo-low', 'low', 'low'),
+    ('glm53-mimo-high', 'high', 'high'),
+    ('glm53-max-mimo-high', 'max', 'high'),
+    ('glm53-high-mimo-medium', 'high', 'medium'),
+):
+    # Advertised by these configured OpenCode routes on 2026-09-26. In
+    # particular GLM-5.3 does not advertise the old profile's medium variant.
+    _profile = copy.deepcopy(PROFILES['glm53-mimo'])
+    _profile['effort'] = {role: _glm if model.startswith('zai-coding-plan/') else _mimo
+                          for role, model in _profile['role_models'].items()}
+    _profile['note'] = f'Campaign: GLM-5.3 {_glm}, MiMo 2.6 Pro {_mimo}; independent producer/verifier roles.'
+    PROFILES[_name] = _profile
 
 
 def resolve(name: str) -> dict:

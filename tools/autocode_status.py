@@ -2,6 +2,10 @@
 import datetime as dt
 import hashlib
 import json
+try:
+    from . import autocode_resolver_human as human
+except ImportError:
+    import autocode_resolver_human as human
 
 ROLES = {'astra_resolve': 'Autoresolver', 'terra': 'Builder', 'sol': 'Validator', 'astra_review': 'Completion Owner',
          'astra_checkpoint': 'Completion Owner', 'astra_discovery': 'Requirements Planner',
@@ -23,11 +27,13 @@ def record(state, *, timestamp=None):
     activity = active.get('activity') or {}
     batch = state.get('orchestration_batch') or {}
     workers = [(w.get('milestone_id'), w.get('status')) for w in batch.get('workers', [])]
-    request = state.get('user_request') or {}
+    public = human.current(state)
+    request = public['request'] if public else {}
+    questions = public['questions'] if public else []
     status = state['status']
     signature = hashlib.sha256(json.dumps([status, stage, state.get('iteration'), task.get('id'),
         task.get('objective'), bool(active), active.get('started_at'), active.get('name'), workers, state.get('stop_reason'), request,
-        state.get('pending_questions')], sort_keys=True).encode()).hexdigest()
+        questions, public.get('request_id') if public else None], sort_keys=True).encode()).hexdigest()
     previous = state.get('progress_checkpoint') or {}
     changed = previous.get('signature') != signature
     heartbeat = status == 'RUNNING' and (bool(active) or batch.get('status') == 'BUILDING') and timestamp - previous.get('at', 0) >= 60
@@ -39,15 +45,26 @@ def record(state, *, timestamp=None):
         text = 'Dry run complete. No providers were launched.'
     elif status.endswith('REWORK_REQUIRED'):
         text = 'Design rework limit reached. Inspect the saved review before continuing.'
+    elif status == 'RESOLVER_PENDING' or (status in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL') and not public):
+        role = 'AutoResolver'
+        text = 'AutoResolver is evaluating an internal decision; no human request has been authorized.'
     elif status.startswith('PAUSED') or status in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL', 'BLOCKED'):
         detail = (request.get('question') or request.get('decision_needed') or state.get('error') or state.get('stop_reason')
-                  or '; '.join(q.get('question', '') for q in state.get('pending_questions', []))
+                  or '; '.join(q.get('question', '') for q in questions)
                   or ('Review the proposed brief.' if status == 'AWAITING_GOAL_APPROVAL'
                       else 'Inspect the saved checkpoint.'))
         text = f'{status.replace("_", " ").title()}: {detail}'
-        text += (' Next: answer the pending request in this task.' if status == 'WAITING_FOR_USER' else
-                 ' Next: review the brief and approve or give feedback.' if status == 'AWAITING_GOAL_APPROVAL' else
-                 ' Next: resolve the recorded blocker, then explicitly resume this run.')
+        last = (state.get('stages') or [{}])[-1]
+        operational_hold = (last.get('runner_owned') and last.get('decision', {}).get('action') == 'hold'
+                            and last.get('receipt', {}).get('scope') == 'operational_diagnostic'
+                            and not state.get('pending_questions') and request.get('kind', 'none') == 'none')
+        if public:
+            role = 'AutoResolver'
+            text = 'AutoResolver: ' + detail
+            text += (' Review the proposed plan and use its exact approval token.'
+                     if public['scope'] == 'goal_approval' else ' Respond to the issued AutoResolver request.')
+        elif operational_hold:
+            text += ' AutoResolver must evaluate human escalation before any request is shown.'
     else:
         text = f'{role}{" started" if active else " queued"}: ' + (task.get('objective') or 'Working on the task.')
         if activity:

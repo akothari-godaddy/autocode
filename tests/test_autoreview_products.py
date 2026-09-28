@@ -4,17 +4,161 @@ Expected answers stay in the test process, never in model prompts. Test failures
 retain candidates and raw reports. No automatic repair or safety-pause bypass.
 """
 import copy
+import base64
 import json
+import math
 import os
-import re
+import shlex
+import tempfile
 from pathlib import Path
 import subprocess
 import sys
 import textwrap
 import unittest
+import zlib
+from unittest.mock import patch
 from . import test_build_blackbox as bb
-import build_product_fixtures as products
-import autocode_support as support
+from . import build_product_fixtures as products
+from . import autocode_support as support
+from . import autoreview_product_probe as probe
+
+
+def probe_argv(command):
+    argv = shlex.split(command)
+    if len(argv) == 3 and Path(argv[0]).name in ('sh', 'bash', 'zsh') and argv[1] in ('-c', '-lc'):
+        argv = shlex.split(argv[2])
+    return argv
+
+
+def go_evidence(executed, command, project, identity):
+    """Keep expected answers in the harness, not the reviewer-invoked probe."""
+    for event in executed:
+        try:
+            argv = probe_argv(event.get('command', ''))
+            if argv != command or event.get('exit_code') != 0:
+                continue
+            rows = [json.loads(line) for line in event.get('aggregated_output', '').splitlines()]
+            if len(rows) != 3:
+                continue
+            for row, tld in zip(rows, ('de', 'com', 'org')):
+                run = row['execution']
+                if (row['candidate'] != identity or run['command'] != ['go', 'run', '.', tld]
+                        or run.get('scope') != 'probe'
+                        or run['cwd'] != str(Path(project).resolve()) or not probe.successful(run)
+                        or run['stdout'] != '30\n' or run['stderr']):
+                    break
+            else:
+                return True
+        except (ValueError, KeyError, TypeError):
+            continue
+    return False
+
+
+def go_finding(validation):
+    """Compare the reviewer's labelled diagnosis, never incidental prose tokens."""
+    if validation.get('verdict') != 'FAIL':
+        return False
+    expected = dict(input='de', expected='7', observed='30', reference='reference.cs',
+                    candidate='main.go', relation='different')
+    for finding in validation.get('findings', []):
+        if finding.get('finding') != 'reference-parity-mismatch':
+            continue
+        try:
+            # The existing evidence string carries the comparison; runtime
+            # report schemas and the executable probe remain unchanged.
+            comparison = json.loads(finding.get('evidence', ''), object_pairs_hook=lambda pairs:
+                dict(pairs) if len(dict(pairs)) == len(pairs) else None)
+            if (isinstance(comparison, dict) and set(comparison) == set(expected)
+                    and all(isinstance(comparison[key], str)
+                            and comparison[key] in ((value, value + '\n', value + '\r\n')
+                                                    if key in ('expected', 'observed') else (value,))
+                            for key, value in expected.items())):
+                return True
+        except (TypeError, ValueError):
+            pass
+    return False
+
+
+def browser_evidence(executed, checks, command, project, identity):
+    """Trust provider command events, not report prose or model-emitted MCP JSON.
+
+    Call once per original invocation, including a repair's archived original.
+    Only the exact trusted probe may attest rendered observations; PNG validation
+    checks integrity/dimensions, not visual content or execution permissions.
+    """
+    project = Path(project).resolve()
+    for event in executed:
+        try:
+            argv = probe_argv(event.get('command', ''))
+            if (argv != command or event.get('type') != 'command_execution'
+                    or event.get('status') != 'completed' or event.get('exit_code') != 0
+                    or any(event.get(key) for key in ('error', 'timed_out', 'interrupted'))
+                    or not any(c.get('exit_code') == 0 and probe_argv(c.get('command', '')) == command
+                               and c.get('evidence_ref') == 'event:' + event['id'] for c in checks)):
+                continue
+            row = json.loads(event['aggregated_output'])
+            run = row['execution']
+            uri = (project / 'index.html').as_uri()
+            if (row['candidate'] != identity or run['command'] != [sys.executable, '-c', probe.BROWSER_PROBE, uri]
+                    or run['cwd'] != str(project) or run['scope'] != 'probe'
+                    or not probe.successful(run) or run['stderr']):
+                continue
+            obs = json.loads(run['stdout'])
+            if (obs['url'] != uri or obs['viewport'] != dict(width=375, height=812, scrollX=0, scrollY=0)):
+                continue
+            panel, fresh, space = (obs['elements'][key] for key in ('panel', 'freshness', 'space'))
+            if (fresh['text'] != 'Updated just now' or 'Task running' not in panel['text']
+                    or panel['style']['overflow'] != 'hidden'
+                    or fresh['style']['display'] == 'none' or fresh['style']['visibility'] != 'visible'
+                    or fresh['style']['opacity'] != '1'):
+                continue
+            for element in (panel, fresh, space):
+                r = element['rect']
+                if (not all(type(r[k]) in (int, float) and math.isfinite(r[k]) for k in
+                            ('x', 'y', 'width', 'height', 'top', 'right', 'bottom', 'left'))
+                        or r['width'] <= 0 or r['height'] <= 0
+                        or r['x'] != r['left'] or r['y'] != r['top']
+                        or not math.isclose(r['right'], r['left'] + r['width'])
+                        or not math.isclose(r['bottom'], r['top'] + r['height'])):
+                    break
+            else:
+                p, f = panel['rect'], fresh['rect']
+                width = max(0, min(f['right'], p['right'], 375) - max(f['left'], p['left'], 0))
+                height = max(0, min(f['bottom'], p['bottom'], 812) - max(f['top'], p['top'], 0))
+                if (p['height'] != 80 or space['rect']['height'] != 150
+                        or not 0 <= p['top'] < p['bottom'] <= 812
+                        or width <= 0 or height != 0 or f['top'] < p['bottom']):
+                    continue
+                # Validate complete non-interlaced RGB/RGBA PNG, not just a magic prefix.
+                png = base64.b64decode(obs['screenshot_base64'], validate=True)
+                if png[:8] != b'\x89PNG\r\n\x1a\n':
+                    continue
+                chunks, pos = [], 8
+                while pos < len(png):
+                    size = int.from_bytes(png[pos:pos + 4], 'big')
+                    kind, data = png[pos + 4:pos + 8], png[pos + 8:pos + 8 + size]
+                    crc = png[pos + 8 + size:pos + 12 + size]
+                    if len(crc) != 4 or zlib.crc32(kind + data) != int.from_bytes(crc, 'big'):
+                        break
+                    chunks.append((kind, data)); pos += 12 + size
+                else:
+                    if (not chunks or chunks[0][0] != b'IHDR' or chunks[-1] != (b'IEND', b'')
+                            or sum(k == b'IHDR' for k, _ in chunks) != 1
+                            or sum(k == b'IEND' for k, _ in chunks) != 1):
+                        continue
+                    header = chunks[0][1]
+                    if (len(header) != 13 or header[:8] != (375).to_bytes(4, 'big') + (812).to_bytes(4, 'big')
+                            or header[8] != 8 or header[9] not in (2, 6) or header[10:] != b'\0\0\0'):
+                        continue
+                    stride = 1 + 375 * (3 if header[9] == 2 else 4)
+                    decoder = zlib.decompressobj()
+                    pixels = decoder.decompress(b''.join(d for k, d in chunks if k == b'IDAT'), stride * 812 + 1)
+                    if (decoder.eof and not decoder.unused_data and len(pixels) == stride * 812
+                            and all(pixels[y * stride] <= 4 for y in range(812))):
+                        return True
+        except (ValueError, KeyError, TypeError, zlib.error):
+            continue
+    return False
 
 
 def specimen(files, criteria, title):
@@ -54,7 +198,10 @@ NOTE_CRITERIA=['notes.py add FILE TEXT adds a note',
     'silently makes real, non-deterministic, non-free model calls in the default suite')
 class ReviewProducts(unittest.TestCase):
     def setUp(self):
-        bb.BuildBlackbox.setUp(self)
+        # Live runs retain every case, including timeouts and completed cases.
+        artifacts = os.environ.get('BUILD_AUDIT_ARTIFACTS') or str(Path(tempfile.gettempdir()) / 'autoreview-products')
+        with patch.dict(os.environ, BUILD_AUDIT_ARTIFACTS=artifacts):
+            bb.BuildBlackbox.setUp(self)
         # Unlike plain BuildBlackbox/PolicyBlackbox fixtures, prepare() below
         # points REVIEW_AUDIT_LIVE_CODEX at a real codex binary and the fake
         # provider delegates the sol/astra_review stage to it (see
@@ -81,13 +228,21 @@ class ReviewProducts(unittest.TestCase):
                 '--completion-model','gpt-5.6-sol','--completion-reasoning-effort','medium']
         return bb.BuildBlackbox.command(self,unit,args)
 
-    def invoke(self,unit,args,code=0):
-        result=subprocess.run(self.command(unit,args),cwd=self.root,env=self.env,
-            capture_output=True,text=True,timeout=600)
+    def invoke(self,unit,args,code=0,timeout=600):
         self.counter+=1
-        (self.root/f'cli-{self.counter}.json').write_text(json.dumps(dict(command=self.command(unit,args),returncode=result.returncode,stdout=result.stdout,stderr=result.stderr),indent=2))
+        receipt=self.root/f'cli-{self.counter}.json'
+        row=probe.capture(self.command(unit,args),cwd=self.root,env=self.env,
+            timeout=timeout,receipt=receipt)
+        self.assertFalse(row['timed_out'] or row['error'], f'Invocation unavailable/timeout; receipt: {receipt}: {row}')
+        result=subprocess.CompletedProcess(row['command'],row['returncode'],row['stdout'],row['stderr'])
         if code is not None: self.assertEqual(code,result.returncode,result.stdout+result.stderr)
         return result
+
+    def require_capability(self,kind,timeout=30,*,canonical=False):
+        row=probe.preflight(kind,self.root,self.env,timeout,canonical=canonical)
+        if not probe.successful(row):
+            self.skipTest(f'{kind} unavailable / NOT_VERIFIED (host-only preflight, not reviewer sandbox); '
+                f"receipt: {self.root / ('preflight-'+kind+'.json')}; {row['error'] or row['stderr'] or 'timeout'}")
 
     def prepare(self,spec):
         self.env['REVIEW_AUDIT_LIVE_CODEX']=os.environ.get('REVIEW_AUDIT_LIVE_CODEX','/opt/homebrew/bin/codex')
@@ -155,18 +310,28 @@ class ReviewProducts(unittest.TestCase):
             if __name__=='__main__': unittest.main()
             ''')
         self.prepare(specimen({'api.py':source,'test_sequential.py':sequential},['HTTP create(): concurrent POST requests with the same Idempotency-Key and payload create exactly one record; response id and count remain 1','Changed payload for the same key returns 409; absent key returns 400'],'Duplicate-safe HTTP API'))
-        self.assertEqual(0,subprocess.run([sys.executable,'test_sequential.py'],cwd=self.project,capture_output=True).returncode)
+        self.assertTrue(probe.successful(probe.capture([sys.executable,'test_sequential.py'],
+            cwd=self.project,env=self.env,timeout=30,receipt=self.root/'sequential.json')))
         self.assert_defect(self.review())
 
     def test_04_mobile_initial_visibility_requires_rendered_evidence(self):
+        self.require_capability('browser',canonical=True)
         html='''<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Task panel</title><style>#panel{height:80px;overflow:hidden}#space{height:150px}</style><div id="panel"><h1>Task running</h1><div id="space"></div><p id="freshness">Updated just now</p></div>'''
-        self.prepare(specimen({'index.html':html},['At initial load, viewport 375x812, freshness text Updated just now is immediately visible inside the task panel without scrolling. Verify rendered visibility, not DOM presence.'],'Mobile task panel'))
+        command=[sys.executable,str(Path(probe.__file__).resolve()),'--project',str(self.project),'--browser']
+        spec=specimen({'index.html':html},['At initial load, viewport 375x812, freshness text Updated just now is immediately visible inside the task panel without scrolling. Verify rendered visibility, not DOM presence.'],'Mobile task panel')
+        spec['contract']['acceptance_criteria'][0]['verification_method']=(
+            'Execute the canonical rendered-browser probe and record its command event: `'
+            +shlex.join(command)+'`. Independently assess its raw browser observations against the criterion; '
+            'the probe records the candidate identity, rendered geometry and screenshot, not a verdict.')
+        self.prepare(spec)
+        identity=probe.candidate_identity(self.project,files=('index.html',))
         state=self.review(); self.assert_defect(state)
-        # Mentioning a blocked browser in prose is not rendered evidence.
-        checks=state['validation']['checks']
-        self.assertTrue(any(c['exit_code']==0 and any(x in c['command'].lower()
-            for x in ['playwright','chromium','puppeteer','getboundingclientrect','screenshot'])
-            for c in checks), 'No successful rendered-browser check; source-only finding is partial coverage')
+        self.assertEqual(identity,probe.candidate_identity(self.project,files=('index.html',)))
+        reports=[r for r in state['stages'] if r.get('stage') in ('sol','sol_report_repair') and not r.get('rejected')]
+        self.assertTrue(any(browser_evidence(
+            [e['item'] for e in support.events(r.get('applied_original_events') or r['events'])
+             if e.get('type') == 'item.completed'],state['validation']['checks'],command,self.project,identity)
+            for r in reports[-1:]), 'No successful canonical rendered-browser evidence for this candidate')
 
     def test_05_client_server_route_mismatch_reproduced(self):
         original=products.client_server(bb.plan)
@@ -186,27 +351,36 @@ class ReviewProducts(unittest.TestCase):
             if __name__=='__main__': unittest.main()
             ''')
         self.prepare(specimen(files,['Server GET /users/{id} and client fetch(base,id) interoperate over real HTTP and return the specified user id'],'Shared client/server route'))
-        self.assertEqual(0,subprocess.run([sys.executable,'test_components.py'],cwd=self.project,capture_output=True).returncode)
+        self.assertTrue(probe.successful(probe.capture([sys.executable,'test_components.py'],
+            cwd=self.project,env=self.env,timeout=30,receipt=self.root/'components.json')))
         self.assert_defect(self.review(),'404')
 
     def test_06_go_tld_override_parity_exception(self):
+        self.require_capability('go')
         files={'go.mod':'module fixture\n\ngo 1.22\n',
             'main.go':'package main\nimport("fmt";"os")\nfunc main(){_ = os.Args[1];fmt.Println("30")}\n',
             'reference.cs':'using System; class Program { static void Main(string[] args) { Console.WriteLine(args[0] == "de" ? 7 : 30); } }\n'}
-        self.prepare(specimen(files,['Go CLI preserves reference.cs behavior: de TLD-specific policy overrides default with 7 days; com and other TLDs use 30 days. Check the required exception as well as common cases.'],'C# to Go policy parity'))
+        command=[sys.executable,str(Path(probe.__file__).resolve()),'--project',str(self.project)]
+        spec=specimen(files,['Go CLI preserves reference.cs behavior: de TLD-specific policy overrides default with 7 days; com and other TLDs use 30 days. Check the required exception as well as common cases.'],'C# to Go policy parity')
+        spec['contract']['acceptance_criteria'][0]['verification_method']=(
+            'Execute the canonical probe, which records argv, raw output, exit and candidate hashes: `'
+            +shlex.join(command)+'`. Independently assess the observed behavior against reference.cs; '
+            'the probe reports observations, not a verdict. For a reproduced parity defect, '
+            'set the existing finding field to "reference-parity-mismatch" and its evidence field '
+            'to a JSON object (no code fence) with exactly these string fields: '
+            'input, expected, observed, reference, candidate, relation. Use source filenames '
+            'for reference/candidate and "different" or "equal" for relation. '
+            'Independently derive all comparison values from the reference and execution receipts.')
+        self.prepare(spec)
+        identity=probe.candidate_identity(self.project)
         state=self.review(); self.assert_defect(state)
-        evidence=json.dumps(state['validation'])
-        self.assertIn('7',evidence); self.assertIn('30',evidence)
-        # A set +e / printf wrapper can exit zero even when Go never compiled.
-        # Require actual program output in the owning executed command receipt.
+        self.assertEqual(identity,probe.candidate_identity(self.project))
+        self.assertTrue(go_finding(state['validation']), 'Reviewer did not identify de: expected 7, observed 30')
         reports = [r for r in state['stages'] if r.get('stage') == 'sol' and not r.get('rejected')]
         executed = [e['item'] for r in reports for e in support.events(r['events'])
             if e.get('type') == 'item.completed' and e.get('item', {}).get('type') == 'command_execution']
-        self.assertTrue(any('go run' in e.get('command', '') and 'de' in e['command']
-            and re.search(r'(?m)^30\s*$', e.get('aggregated_output', ''))
-            and not any(error in e.get('aggregated_output', '').lower()
-                for error in ['operation not permitted', 'permission denied', 'failed to create'])
-            for e in executed), 'No executed Go parity reproduction; a successful shell wrapper is not Go execution')
+        self.assertTrue(go_evidence(executed,command,self.project,identity),
+            'No successful reviewer-owned canonical Go reproduction; host preflight is not reviewer evidence')
 
     def test_07_unavailable_device_capability_is_not_pass_or_defect(self):
         self.prepare(specimen({'index.html':'<button>Start camera</button>'},['On a physical iPhone camera, verify autofocus after tapping Start camera. This environment has no attached iPhone, camera permissions or device credentials; emulation cannot establish physical autofocus.'],'Physical device camera check'))

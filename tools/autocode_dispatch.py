@@ -536,6 +536,11 @@ def request_retry(state, run_dir, selected):
         result = Path(rows[mid]["run_dir"]) / "result.json"
         if result.exists() and s.read(result).get("status") == "BUILT":
             raise ValueError(f"Builder {mid} already completed; its work will be retained")
+    try:
+        from . import autocode_resolver_human as human
+    except ImportError:
+        import autocode_resolver_human as human
+    human.supersede_operational(state, 'Operator explicitly selected stopped Builder members for retry')
     for mid in selected:
         rows[mid]["retry_requested"] = True
     state.setdefault("user_events", []).append({"kind": "builder_retry", "actor": "user_cli",

@@ -5,62 +5,83 @@ Reads provider event logs (`*.jsonl`) under the run directory and extracts each
 `step_finish` token block as a sample. Finer-grained than the per-stage rollup
 in `score_autocode_run.py` — this is the stream you watch while a stage is live.
 
-Subscription note: OpenCode reports `cost: 0` on Z.AI Coding Plan and Xiaomi
-Token Plan. We still emit an API-equivalent estimate so steps and stages are
-comparable across models and runs.
+These are observed steps, not a complete run invoice. USD values use the
+scorer's historical flat comparison rates; missing data stays unknown.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from pathlib import Path
 
-from score_autocode_run import estimate_cost
+try:
+    from .score_autocode_run import estimate_cost, recorded_model, known_sum, token_count, money, count_text
+except ImportError:
+    from score_autocode_run import estimate_cost, recorded_model, known_sum, token_count, money, count_text
 
 
-def parse_step_samples(run_dir: Path) -> list[dict]:
-    """One sample per provider step_finish across every stage log in the run."""
-    samples: list[dict] = []
-    for jl in sorted(run_dir.rglob("*.jsonl")):
-        # keep only stage event logs (skip nested fixture state under evidence/)
-        if "evidence" in jl.parts or "fixture-state" in jl.parts:
+def event_records(state: dict, run_dir: Path) -> dict:
+    """Only recorded event paths inside this run; never scan copied evidence."""
+    records = {}
+    stages = list(state.get("stages") or [])
+    if state.get("active_stage"):
+        stages.append(state["active_stage"])
+    for record in stages:
+        path = record.get("events")
+        if not isinstance(path, str) or not path:
             continue
-        stage = jl.name.split("-")[0] if "-" in jl.name else jl.stem
-        # stem like requirements_gather-01.jsonl -> requirements_gather
-        stem = jl.stem
-        stage = stem.rsplit("-", 1)[0] if stem[-2:].isdigit() or stem[-3:-2] == "-" else stem
-        step = 0
-        for line_no, line in enumerate(jl.open(), 1):
+        path = Path(path)
+        path = path.resolve() if path.is_absolute() else (run_dir / path).resolve()
+        if path.is_relative_to(run_dir.resolve()):
+            records.setdefault(path, []).append(record)
+    return records
+
+
+def parse_step_samples(run_dir: Path, state: dict | None = None) -> list[dict]:
+    """Last update of each (session, part) in the recorded stage event logs."""
+    if state is None:
+        state = json.loads((run_dir / "state.json").read_text())
+    samples: list[dict] = []
+    for jl, records in sorted(event_records(state, run_dir).items()):
+        if not jl.is_file():
+            continue
+        stage_names = {r.get("stage") for r in records if r.get("stage")}
+        stage = next(iter(stage_names)) if len(stage_names) == 1 else re.sub(r"-\d+$", "", jl.stem)
+        parts = {}
+        for line_no, line in enumerate(jl.read_text(errors="replace").splitlines(), 1):
             try:
                 row = json.loads(line)
-            except Exception:
+            except ValueError:
+                continue
+            if not isinstance(row, dict):
                 continue
             part = row.get("part") if isinstance(row.get("part"), dict) else row
-            if not isinstance(part, dict):
-                continue
             ptype = part.get("type") or row.get("type")
             if ptype not in ("step_finish", "step-finish"):
                 continue
-            tokens = part.get("tokens") or {}
-            if not isinstance(tokens, dict):
-                continue
-            step += 1
+            session, ident = row.get("sessionID"), part.get("id")
+            key = (session, ident) if isinstance(session, str) and isinstance(ident, str) and ident else ("line", line_no)
+            parts[key] = (line_no, row, part)
+        for step, (line_no, row, part) in enumerate(parts.values(), 1):
+            tokens = part.get("tokens") if isinstance(part.get("tokens"), dict) else {}
+            cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
             samples.append({
-                "ts": time.time(),
-                "log": str(jl.relative_to(run_dir)),
+                "ts": row.get("timestamp"),
+                "log": str(jl.relative_to(run_dir.resolve())),
                 "stage": stage,
                 "step": step,
                 "line": line_no,
                 "reason": part.get("reason"),
                 "cost_reported": part.get("cost"),
                 "tokens": {
-                    "input": tokens.get("input"),
-                    "output": tokens.get("output"),
-                    "reasoning": tokens.get("reasoning"),
-                    "cache_read": (tokens.get("cache") or {}).get("read"),
-                    "cache_write": (tokens.get("cache") or {}).get("write"),
-                    "total": tokens.get("total"),
+                    "input": token_count(tokens.get("input")),
+                    "output": token_count(tokens.get("output")),
+                    "reasoning": token_count(tokens.get("reasoning")),
+                    "cache_read": token_count(cache.get("read")),
+                    "cache_write": token_count(cache.get("write")),
+                    "total": token_count(tokens.get("total")),
                 },
             })
     return samples
@@ -68,95 +89,85 @@ def parse_step_samples(run_dir: Path) -> list[dict]:
 
 def attach_cost(samples: list[dict], model_for_stage) -> list[dict]:
     for s in samples:
-        model = model_for_stage(s.get("stage") or "")
+        model = model_for_stage(s.get("stage") or "", s.get("log"))
         # estimate_cost expects the provider token dict shape
         t = s.get("tokens") or {}
         flat = {
-            "input": t.get("input") or 0,
-            "output": t.get("output") or 0,
-            "reasoning": t.get("reasoning") or 0,
-            "cache": {"read": t.get("cache_read") or 0, "write": t.get("cache_write") or 0},
+            "input": t.get("input"),
+            "output": t.get("output"),
+            "reasoning": t.get("reasoning"),
+            "cache": {"read": t.get("cache_read"), "write": t.get("cache_write")},
         }
         s["model"] = model
         s["est_usd"] = estimate_cost(model, flat)
     return samples
 
 
-def model_resolver(state: dict):
-    roles = (state.get("settings") or {}).get("roles") or {}
-    role_model = {k: (v or {}).get("model") for k, v in roles.items()}
-    stage_role = {
-        "requirements_gather": "requirements",
-        "requirements_gather_report_repair": "requirements",
-        "astra_discovery": "astra", "astra_challenge": "plan_reviewer",
-        "glm_revise": "glm", "astra_finalize": "plan_reviewer",
-        "terra": "terra", "sol": "sol", "astra_review": "astra",
-        "astra_checkpoint": "astra", "astra_resolve": "resolver",
-        "astra_plan": "astra",
-    }
+def model_resolver(state: dict, run_dir: Path):
+    records = event_records(state, run_dir)
 
-    def resolve(stage: str) -> str:
-        return role_model.get(stage_role.get(stage, ""), "") or ""
+    def resolve(stage: str, log: str | None = None) -> str:
+        matches = records.get((run_dir / log).resolve(), []) if log else [
+            r for rows in records.values() for r in rows if r.get("stage") == stage]
+        models = {recorded_model(r) for r in matches}
+        return next(iter(models)) if len(models) == 1 else ""
 
     return resolve
 
 
 def summarize(samples: list[dict]) -> dict:
-    by_stage: dict[str, dict] = {}
-    for s in samples:
-        bag = by_stage.setdefault(s["stage"], {
-            "steps": 0, "input": 0, "output": 0, "reasoning": 0,
-            "cache_read": 0, "est_usd": 0.0, "model": s.get("model"),
-        })
-        bag["steps"] += 1
-        t = s.get("tokens") or {}
-        for k in ("input", "output", "reasoning", "cache_read"):
-            bag[k] += t.get(k) or 0
-        bag["est_usd"] = round(bag["est_usd"] + (s.get("est_usd") or 0.0), 4)
-    total = {
-        "steps": sum(b["steps"] for b in by_stage.values()),
-        "input": sum(b["input"] for b in by_stage.values()),
-        "output": sum(b["output"] for b in by_stage.values()),
-        "reasoning": sum(b["reasoning"] for b in by_stage.values()),
-        "cache_read": sum(b["cache_read"] for b in by_stage.values()),
-        "est_usd": round(sum(b["est_usd"] for b in by_stage.values()), 4),
-    }
-    return {"per_stage": by_stage, "total": total}
+    def rollup(rows):
+        return {"steps": len(rows),
+                **{k: known_sum((r.get("tokens") or {}).get(k) for r in rows)
+                   for k in ("input", "output", "reasoning", "cache_read", "cache_write")},
+                "est_usd": known_sum(r.get("est_usd") for r in rows),
+                "known_est_usd": sum(r["est_usd"] for r in rows if r.get("est_usd") is not None),
+                "unpriced_steps": sum(r.get("est_usd") is None for r in rows),
+                "models": sorted({r.get("model") or "unknown" for r in rows})}
+
+    grouped: dict[str, list] = {}
+    for sample in samples:
+        grouped.setdefault(sample["stage"], []).append(sample)
+    return {"scope": "observed_steps_only", "per_stage": {k: rollup(v) for k, v in grouped.items()},
+            "total": rollup(samples)}
 
 
 def render_stream(samples: list[dict]) -> str:
-    lines = ["stage | step | reason | in | cache | out | reason_tok | est_usd | model",
-             "--- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---"]
+    lines = ["stage | step | reason | in | cache read | cache write | out | reason_tok | est_usd | model",
+             "--- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---"]
     for s in samples[-40:]:
         t = s.get("tokens") or {}
         lines.append(
-            f"{s.get('stage')} | {s.get('step')} | {s.get('reason') or '—'} | {t.get('input') or 0} "
-            f"| {t.get('cache_read') or 0} | {t.get('output') or 0} | {t.get('reasoning') or 0} "
-            f"| {s.get('est_usd') or 0:.4f} | `{s.get('model') or '—'}`"
+            f"{s.get('stage')} | {s.get('step')} | {s.get('reason') or '—'} | {count_text(t.get('input'))} "
+            f"| {count_text(t.get('cache_read'))} | {count_text(t.get('cache_write'))} "
+            f"| {count_text(t.get('output'))} | {count_text(t.get('reasoning'))} "
+            f"| {money(s.get('est_usd'))} | `{s.get('model') or 'unknown'}`"
         )
     return "\n".join(lines) + "\n"
 
 
 def render_summary(summary: dict) -> str:
-    lines = ["## Per-step sampler rollup", "",
-             "| Stage | Steps | Input | Cached | Output | Reasoning | Est. USD | Model |",
-             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
+    lines = ["## Observed provider steps (partial coverage)", "",
+             "| Stage | Steps | Input | Cache read | Cache write | Output | Reasoning | Est. USD | Models |",
+             "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |"]
     for stage, bag in summary["per_stage"].items():
         lines.append(
-            f"| {stage} | {bag['steps']} | {bag['input']} | {bag['cache_read']} | {bag['output']} "
-            f"| {bag['reasoning']} | {bag['est_usd']:.4f} | `{bag.get('model') or '—'}` |"
+            f"| {stage} | {bag['steps']} | {count_text(bag['input'])} | {count_text(bag['cache_read'])} "
+            f"| {count_text(bag['cache_write'])} | {count_text(bag['output'])} "
+            f"| {count_text(bag['reasoning'])} | {money(bag['est_usd'])} | {', '.join(bag['models'])} |"
         )
     t = summary["total"]
     lines.append("")
-    lines.append(f"**Total:** {t['steps']} steps · in={t['input']} cached={t['cache_read']} "
-                 f"out={t['output']} reason={t['reasoning']} · est. ${t['est_usd']:.4f} API-equivalent "
-                 f"(subscription routes report cost=0 per call)")
+    lines.append(f"**Observed:** {t['steps']} steps · estimate {money(t['est_usd'])}; "
+                 f"known subtotal {money(t['known_est_usd'])}, {t['unpriced_steps']} unpriced steps. "
+                 "Historical flat comparison rates, not current prices or actual billing. "
+                 "Unfinished calls and missing logs can consume additional tokens.")
     return "\n".join(lines) + "\n"
 
 
 def sample_run(run_dir: Path) -> tuple[list[dict], dict]:
     state = json.loads((run_dir / "state.json").read_text())
-    samples = attach_cost(parse_step_samples(run_dir), model_resolver(state))
+    samples = attach_cost(parse_step_samples(run_dir, state), model_resolver(state, run_dir))
     return samples, summarize(samples)
 
 

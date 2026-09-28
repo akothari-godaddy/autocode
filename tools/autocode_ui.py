@@ -50,6 +50,8 @@ def prompt(role, task, run_dir, target, inputs):
               'Load the applicable Figma skills before using its tools. Build native editable Figma nodes, '
               'components and variables. Figma Make is not assumed to be callable. '
               'Only the Figma Builder may modify Figma. Do not build a local application or change project source. '
+              'Report blockers as internal diagnostics, not questions or requests for human approval. '
+              'Only AutoResolver may issue a human request; a role report does not authorize one. '
               'Return the complete deliverable in your final response; the runner saves it. '
               'Do not replace the deliverable with a completion note or a link to a file. '
               'Only write temporary evidence under the run directory.\n'
@@ -291,6 +293,8 @@ def execute(args, workspace, run_dir):
     try:
         orchestrator.drive(state, dispatch, apply=apply, persist=lambda _: save())
     except (OSError, ValueError, KeyError, KeyboardInterrupt) as error:
+        # Standalone design has no saved-run human response/resume API. Keep
+        # diagnostics internal rather than minting an unanswerable request.
         state.update(status='BLOCKED', error=str(error), finished_at=support.now())
         save()
         print(f'Autocode UI stopped: {error}. Saved artifacts: {run_dir}', file=sys.stderr)

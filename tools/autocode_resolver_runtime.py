@@ -8,15 +8,401 @@ from collections.abc import Mapping
 from pathlib import Path
 import time
 import uuid
+import os
+import copy
 
 try:
     from . import autocode_resolver as policy, autocode_support as support
     from . import autocode_goals as goals, autocode_failures as failures
+    from . import autocode_resolver_human as human
 except ImportError:
     import autocode_resolver as policy
     import autocode_support as support
     import autocode_goals as goals
     import autocode_failures as failures
+    import autocode_resolver_human as human
+
+
+REVIEW_STAGES = ('astra_challenge', 'astra_finalize')
+MAX_PLANNING_RECOVERY_GRANTS = 2
+OPERATIONAL_INSTRUCTION = (
+    'AutoResolver authorized only this read-only planning report recovery. Reuse retained '
+    'evidence and the saved planning exchange; do not repeat exploratory tools or restart '
+    'repository discovery. Finish the required structured report promptly. If evidence is '
+    'insufficient, state the concern or unresolved question in the report. Do not change '
+    'requirements, permissions, models, deadlines or budgets, fabricate approval, or add '
+    'another debate round. The exact final plan still requires human approval.')
+
+
+def _operational_stop(message):
+    raise support.Paused('PAUSED_RESOLVER_OPERATIONAL', message)
+
+
+def _planning_binding(state, stage, workspace):
+    planning = state['planning']
+    discovery = planning['reports']['astra_discovery']['output']
+    contract = state['goal_contract']
+    accepted = next(row for row in reversed(state['stages'])
+                    if (row.get('stage') == 'astra_discovery' or
+                        (row.get('report_only') and row.get('original_stage') == 'astra_discovery'
+                         and row.get('stage') == 'astra_discovery_report_repair'))
+                    and not row.get('rejected') and not row.get('abandoned'))
+    if (accepted.get('output') != discovery or any(
+            old.get('reports', {}).get('astra_discovery', {}).get('output') == discovery
+            for old in state.get('planning_history', []))):
+        raise ValueError('Discovery does not belong to the current planning cycle')
+    inputs = {}
+    for entry in [*planning['reports'].values(), state.get('requirements_handoff') or {}]:
+        if entry.get('output'):
+            path = entry['output']
+            if not Path(path).is_file():
+                raise ValueError('Missing planning input')
+            inputs[path] = support.file_hash(path)
+    cycle = support.digest({'discovery': discovery, 'history': len(state.get('planning_history', [])),
+                            'task_id': contract['task_id']})
+    return {'cycle': cycle, 'discovery_record_hash': support.digest(accepted),
+            'stage': stage, 'contract_token': goals.token(contract),
+            'contract_hash': contract['hash'], 'contract_digest': support.digest(contract),
+            'source_revision': support.snapshot(workspace)['revision'],
+            'settings_hash': support.digest(state['settings']), 'inputs': inputs,
+            'ordinary_limit': planning.get('review_call_limit', 2),
+            'astra_calls': planning['astra_calls'],
+            'recovery_calls_used': planning.get('recovery_review_calls_used', 0),
+            'planning_inputs_hash': support.digest({'reports': planning['reports'],
+                'requirements': state.get('requirements_handoff'), 'task': state.get('task'),
+                'answers': state.get('answers'), 'user_events': state.get('user_events')})}
+
+
+def _operational_blocked(state, run_dir):
+    request = state.get('user_request') or (state.get('agent_request') or {}).get('request')
+    return (any(state.get(key) for key in ('active_stage', 'pending_report_repair',
+                'uncertain_artifacts', 'pending_questions'))
+            or (request and request.get('kind') != 'none')
+            or (state.get('goal_contract') or {}).get('body', {}).get('open_blocking_questions')
+            or (Path(run_dir) / 'pause-requested').exists())
+
+
+def _timeout_evidence(state, record, revision):
+    """Read archive evidence only; never repair or rewrite a failed attempt."""
+    if (record.get('stage') not in REVIEW_STAGES or not record.get('timed_out')
+            or not all(record.get(key) for key in ('accounted', 'automatic_recovery', 'abandoned', 'rejected'))
+            or record.get('changed_files') != [] or record.get('source_revision') != revision
+            or record.get('planning_recovery_grant') or record.get('report_only')
+            or record.get('exit_code') is None):
+        return None
+    paths = [Path(record.get(key) or '') for key in ('events', 'before_ref', 'after_ref')]
+    if (not all(path.is_file() for path in paths)
+            or len({str(path.parent) for path in paths}) != 1
+            or not any(note.get('archived') == str(paths[0].parent)
+                       and note.get('stage') == record['stage']
+                       and note.get('iteration') == record.get('iteration')
+                       for note in state.get('reconciliation_notes', []))):
+        return None
+    if any(event.get('type') == 'turn.completed' for event in support.events(paths[0])):
+        return None
+    before, after = (support.read(path) for path in paths[1:])
+    if (before.get('revision') != revision or after.get('revision') != revision
+            or support.changed_paths(before, after)):
+        return None
+    try:
+        from . import autocode_process as processes
+    except ImportError:
+        import autocode_process as processes
+    if record.get('processes') and processes.live_processes(record['processes']):
+        return None
+    if record.get('pid') and not record.get('processes'):
+        try:
+            os.kill(record['pid'], 0)
+        except ProcessLookupError:
+            pass
+        else:
+            return None
+    return {str(path): support.file_hash(path) for path in paths}
+
+
+def validate_operational_grant(state, stage, workspace):
+    """Admission-time validation. No grant is consumed by preparing a prompt."""
+    try:
+        planning = state['planning']
+        origin = planning.get('review_call_limit_origin', 'runner_default' if 'review_call_limit' not in planning else None)
+        if origin != 'runner_default':
+            _operational_stop('An explicit or unmarked planning cap cannot be exceeded by automatic recovery')
+        grants = state['planning'].get('recovery_review_grants', [])
+        pending = [grant for grant in grants if not grant.get('consumed')]
+        if (len(pending) != 1 or len(grants) > MAX_PLANNING_RECOVERY_GRANTS
+                or sum(bool(grant.get('consumed')) for grant in grants)
+                != state['planning'].get('recovery_review_calls_used', 0)):
+            _operational_stop('No single reserved planning recovery remains; no provider will launch')
+        grant = pending[0]
+        if (_operational_blocked(state, grant['run_dir'])
+                or grant['binding'] != _planning_binding(state, stage, workspace)):
+            _operational_stop('Planning recovery scope or inputs changed; no provider will launch')
+        origin = next(row for row in state['stages'] if row.get('output') == grant['origin_output'])
+        if (_timeout_evidence(state, origin, grant['binding']['source_revision']) != grant['pins']
+                or support.digest(origin) != grant['origin_hash']):
+            _operational_stop('Archived planning recovery evidence changed; no provider will launch')
+        receipt = Path(grant['receipt_output'])
+        if not receipt.is_file() or support.file_hash(receipt) != grant['receipt_hash']:
+            _operational_stop('Planning recovery receipt changed; no provider will launch')
+        saved = support.read(receipt)['receipt']
+        if (saved['id'] != grant['id'] or saved['binding'] != grant['binding']
+                or saved['origin_output'] != grant['origin_output'] or saved['pins'] != grant['pins']):
+            _operational_stop('Planning recovery grant differs from its receipt; no provider will launch')
+        return grant
+    except (KeyError, TypeError, ValueError, OSError, StopIteration, AttributeError) as error:
+        _operational_stop(f'Planning recovery cannot be validated: {error}')
+
+
+def operational_boundary(runner, state, run_dir, workspace, *, persist=True):
+    """Reserve at most two one-use reports for proven ordinary planning timeouts."""
+    stage = state.get('next_stage')
+    planning = state.get('planning') or {}
+    if (not state.get('settings', {}).get('joint_planning') or stage not in REVIEW_STAGES
+            or state.get('status') not in ('RUNNING', 'PAUSED_PLANNING_BUDGET')
+            or _operational_blocked(state, run_dir)):
+        return False
+    limit = runner.planning.review_call_limit(state)
+    if limit == 0 or planning.get('astra_calls', 0) < limit:
+        return False
+    origin = planning.get('review_call_limit_origin', 'runner_default' if 'review_call_limit' not in planning else None)
+    if origin != 'runner_default':
+        return False
+    grants = planning.get('recovery_review_grants', [])
+    if not isinstance(grants, list) or any(not isinstance(grant, dict) for grant in grants):
+        _operational_stop('Saved planning recovery grants are malformed; no provider will launch')
+    if (any(not grant.get('id') or not grant.get('origin_output') for grant in grants)
+            or len({grant['origin_output'] for grant in grants}) != len(grants)
+            or sum(bool(grant.get('consumed')) for grant in grants)
+            != planning.get('recovery_review_calls_used', 0)):
+        _operational_stop('Saved planning recovery accounting is inconsistent; no provider will launch')
+    if any(not grant.get('consumed') for grant in grants):
+        validate_operational_grant(state, stage, workspace)
+        runner.timeout_recovery_guard(state)
+        return True
+    try:
+        binding = _planning_binding(state, stage, workspace)
+        discovery = planning['reports']['astra_discovery']['output']
+        start = next(i for i, row in enumerate(state['stages'])
+                     if (row.get('stage') == 'astra_discovery' or
+                         (row.get('report_only') and row.get('original_stage') == 'astra_discovery'
+                          and row.get('stage') == 'astra_discovery_report_repair'))
+                     and row.get('output') == discovery
+                     and not row.get('rejected') and not row.get('abandoned'))
+        reviews = [row for row in state['stages'][start + 1:]
+                   if row.get('stage') in REVIEW_STAGES and not row.get('runner_owned')
+                   and not row.get('report_only')]
+        # Only ordinary attempts can fund recovery. Failed grants never mint grants.
+        ordinary = [row for row in reviews if not row.get('planning_recovery_grant')][:limit]
+        eligible = [(row, pins) for row in ordinary
+                    if (pins := _timeout_evidence(state, row, binding['source_revision']))]
+    except (KeyError, TypeError, ValueError, OSError, StopIteration, AttributeError):
+        return False
+    if not eligible:
+        return False
+    if (len(grants) >= MAX_PLANNING_RECOVERY_GRANTS
+            or planning['astra_calls'] >= limit + MAX_PLANNING_RECOVERY_GRANTS):
+        _operational_stop('Reserved planning recovery exhausted; no provider will launch')
+    used = {grant['origin_output'] for grant in grants}
+    remaining = [(row, pins) for row, pins in eligible if row['output'] not in used]
+    if not remaining:
+        _operational_stop('Every proven ordinary timeout has used its recovery; no provider will launch')
+    # A completed challenge cannot be challenged again using the reserve.
+    if stage in planning['reports']:
+        _operational_stop('Planning recovery cannot authorize another debate round')
+    runner.timeout_recovery_guard(state)
+    origin, pins = remaining[0]
+    identity = support.digest({'binding': binding, 'origin': origin['output'], 'pins': pins})
+    path = Path(run_dir) / 'resolver' / (identity + '.json')
+    receipt = {'stage': 'resolver', 'role': 'resolver', 'engine': 'runner', 'runner_owned': True,
+               'iteration': state['iteration'], 'finished_at': support.now(), 'exit_code': 0,
+               'runner_calls': 0, 'output': str(path),
+               'metrics': {'provider_tokens': {'input_tokens': 0, 'output_tokens': 0}},
+               'decision': {'action': 'retry', 'rationale': OPERATIONAL_INSTRUCTION},
+               'receipt': {'id': identity, 'callbacks_used': [], 'scope': 'planning_operational_recovery',
+                           'binding': binding, 'origin_output': origin['output'], 'pins': pins}}
+    support.atomic_json(path, receipt)
+    planning.setdefault('recovery_review_grants', []).append({
+        'id': identity, 'binding': binding, 'pins': pins, 'origin_output': origin['output'],
+        'origin_hash': support.digest(origin), 'run_dir': str(run_dir), 'consumed': False,
+        'receipt_output': str(path), 'receipt_hash': support.file_hash(path)})
+    state.setdefault('stages', []).append(receipt)
+    state.setdefault('history', []).append(receipt)
+    if persist:
+        runner.write_json(Path(run_dir) / 'state.json', state)
+    return True
+
+
+def reconsider_operational_request(runner, state, run_dir, workspace):
+    """Withdraw an unanswered planning-cap ask only with proven existing credit.
+
+    The caller owns the writer lock. Admission covers receipt verification, proof
+    and the single state commit; operational_boundary must not save halfway through.
+    """
+    try:
+        with runner.interventions.admission(run_dir):
+            public = human.current(state)
+            if not public or public['scope'] != 'operational_exhaustion':
+                return False
+            saved = state.get('resolver') or {}
+            entry = saved['human_escalations'][public['request_id']]
+            proposal = entry['identity']['proposal']
+            if (proposal['origin'].get('pause_status') != 'PAUSED_PLANNING_BUDGET'
+                    or proposal['origin'].get('stage') != state.get('next_stage')
+                    or entry.get('response') or saved.get('pending_human_response')
+                    or saved.get('human_response_frontier')
+                    or any(response.get('request_id') == public['request_id']
+                           for response in saved.get('human_responses', []))
+                    or state.get(human.PRIVATE)
+                    or any(state.get(key) for key in ('active_stage', 'uncertain_artifacts', 'pending_report_repair'))
+                    or (state.get('goal_contract') or {}).get('body', {}).get('open_blocking_questions')
+                    or (state.get('pause_intent') and not state['pause_intent'].get('acknowledged_at'))
+                    or (Path(run_dir) / 'pause-requested').exists()):
+                return False
+            candidate = copy.deepcopy(state)
+            if not human.supersede_operational(candidate,
+                    'AutoResolver reconsidered the unchanged planning boundary and proved existing recovery credit'):
+                return False
+            if not operational_boundary(runner, candidate, run_dir, workspace, persist=False):
+                return False
+            candidate.update(status='RUNNING', phase='PLANNING')
+            candidate.pop('stop_reason', None)
+            runner.write_json(Path(run_dir) / 'state.json', candidate)
+            state.clear()
+            state.update(candidate)
+            return True
+    except (support.Paused, KeyError, TypeError, ValueError, OSError, RuntimeError):
+        # A failed speculative proof never withdraws or republishes the old ask.
+        return False
+
+
+def _operational_receipt(state, run_dir, action, detail, evidence):
+    state['run_dir'] = str(Path(run_dir).resolve())
+    binding = human._binding(state)
+    identity = support.digest({'scope': 'operational_diagnostic', 'action': action,
+                               'detail': detail, 'evidence': evidence, 'binding': binding})
+    saved = state.setdefault('resolver', {})
+    receipts = saved.setdefault('operational_receipts', {})
+    if identity in receipts:
+        return identity
+    path = Path(run_dir) / 'resolver' / (identity + '.json')
+    record = {'stage': 'resolver', 'role': 'resolver', 'engine': 'runner', 'runner_owned': True,
+              'iteration': state['iteration'], 'finished_at': support.now(), 'exit_code': 0,
+              'runner_calls': 0, 'output': str(path), 'summary': detail,
+              'metrics': {'provider_tokens': {'input_tokens': 0, 'output_tokens': 0}},
+              'decision': {'action': action, 'rationale': detail},
+              'receipt': {'id': identity, 'callbacks_used': [],
+                           'scope': 'operational_diagnostic', 'evidence': evidence,
+                           'evaluation_binding': binding}}
+    support.atomic_json(path, record)
+    state.setdefault('stages', []).append(record)
+    state.setdefault('history', []).append(record)
+    receipts[identity] = copy.deepcopy(record)
+    saved.setdefault('operational_diagnostics', []).append(identity)
+    return identity
+
+
+def observe_operational_recovery(runner, state, run_dir, workspace, recovery):
+    """Own a runner-established recovery diagnosis, without expanding authority."""
+    if _operational_blocked(state, run_dir):
+        return False
+    histories = ('automatic_timeout_recoveries', 'automatic_capacity_recoveries',
+                 'automatic_permission_recoveries')
+    if not any(recovery in state.get(name, []) for name in histories):
+        return False
+    try:
+        origin = next(row for row in reversed(state['stages'])
+                      if row.get('events') == recovery.get('events') and not row.get('runner_owned'))
+        if not all(origin.get(key) for key in ('accounted', 'automatic_recovery', 'abandoned', 'rejected')):
+            return False
+        runner.assert_stage_stopped(origin)
+        paths = [Path(origin[key]) for key in ('events', 'before_ref', 'after_ref')]
+        if not all(path.is_file() for path in paths):
+            return False
+        pins = {str(path): support.file_hash(path) for path in paths}
+    except (KeyError, TypeError, ValueError, OSError, StopIteration, support.Paused):
+        return False
+    instruction = (OPERATIONAL_INSTRUCTION if recovery.get('stage') in REVIEW_STAGES else
+                   'AutoResolver retained the stopped attempt and its diagnosis. Continue only '
+                   'through the existing bounded recovery route; preserve requirements, permissions, '
+                   'failure counts, independent validation and retained partial work.')
+    return _operational_receipt(state, run_dir, 'retry', instruction,
+                                 {'origin_output': origin['output'], 'pins': pins,
+                                  'source_revision': recovery.get('source_revision'),
+                                  'next_stage': recovery.get('next_stage'),
+                                  'timeout_kind': recovery.get('timeout_kind'),
+                                  'timeout_reason': recovery.get('timeout_reason'),
+                                  'capacity_error': recovery.get('capacity_error')})
+
+
+def record_operational_exhaustion(runner, state, run_dir, error):
+    """Retain exhaustion and stage a resolver-owned, request-only escalation."""
+    if (error.status not in ('PAUSED_RESOLVER_OPERATIONAL', 'PAUSED_TIMEOUT_RECOVERY',
+                             'PAUSED_PROVIDER_CAPACITY', 'PAUSED_PLANNING_BUDGET', 'PAUSED_RATE_LIMIT',
+                             'PAUSED_TIME_LIMIT', 'PAUSED_ITERATION_LIMIT', 'PAUSED_BUDGET',
+                             'PAUSED_USAGE_UNKNOWN', 'PAUSED_REPORT_REPAIR_LIMIT',
+                             'PAUSED_REPEATED_FAILURE', 'PAUSED_RESOLVER',
+                             'PAUSED_ORCHESTRATOR_WORKER', 'PAUSED_BUILDER_RETRY_LIMIT',
+                             'PAUSED_MILESTONE_STALLED', 'PAUSED_MILESTONE_BUDGET',
+                             'PAUSED_MILESTONE_TIME_LIMIT',
+                             'PAUSED_PROVIDER_UNCERTAIN', 'PAUSED_UNCERTAIN_STAGE', 'PAUSED_WORKSPACE_BUSY',
+                             'PAUSED_NO_PROGRESS')
+            or state.get('pending_questions')
+            or (Path(run_dir) / 'pause-requested').exists()):
+        return False
+    request = state.get('user_request') or (state.get('agent_request') or {}).get('request')
+    if request and request.get('kind') != 'none':
+        return False
+    kind = {'PAUSED_ITERATION_LIMIT': 'iteration_ceiling', 'PAUSED_TIME_LIMIT': 'max_seconds',
+            'PAUSED_PLANNING_BUDGET': 'planning_review_call_limit',
+            'PAUSED_MILESTONE_TIME_LIMIT': 'milestone_max_seconds',
+            'PAUSED_USAGE_UNKNOWN': 'max_reported_tokens', 'PAUSED_NO_PROGRESS': 'no_progress_batches'}.get(error.status)
+    settings = state.get('settings', {})
+    if error.status == 'PAUSED_BUDGET':
+        if 'reported-token limit' in str(error) and settings.get('limits', {}).get('max_reported_tokens'):
+            kind = 'max_reported_tokens'
+        try:
+            support.enforce_reported_token_limit(state)
+        except support.Paused as spending:
+            if spending.status == 'PAUSED_BUDGET':
+                kind = 'max_reported_tokens'
+    origin = settings.get('budget_origins', {}).get(kind, 'unknown')
+    limit = settings.get('limits', {}).get(kind)
+    if kind == 'planning_review_call_limit':
+        planning = state.get('planning', {})
+        origin = planning.get('review_call_limit_origin', 'runner_default' if 'review_call_limit' not in planning else 'unknown')
+        limit = planning.get('review_call_limit', 2)
+    elif kind == 'milestone_max_seconds':
+        limit = settings.get('milestone_checkpoints', {}).get('max_seconds')
+    category = ('usage_verification' if error.status == 'PAUSED_USAGE_UNKNOWN' else
+                'no_progress' if error.status == 'PAUSED_NO_PROGRESS' else
+                'internal_default' if origin in ('runner_default', 'resolver_delegated') else
+                'explicit_user_cap' if origin == 'user_explicit' else 'protected_saved_limit') if kind else (
+                'usage_verification' if error.status == 'PAUSED_USAGE_UNKNOWN' else
+                'provider_or_spending_guard' if error.status in ('PAUSED_BUDGET', 'PAUSED_RATE_LIMIT') else 'operational_recovery')
+    budget = {'category': category, 'kind': kind, 'origin': origin, 'limit': limit}
+    receipt = _operational_receipt(state, run_dir, 'hold',
+        'AutoResolver cannot safely resolve this blocker under the current authority. ' + str(error), {
+        'status': error.status, 'stage': state.get('next_stage'), 'budget': budget,
+        'astra_calls': state.get('planning', {}).get('astra_calls'),
+        'recovery_calls_used': state.get('planning', {}).get('recovery_review_calls_used', 0)})
+    attempts = sum(len(state.get(name, [])) for name in ('automatic_timeout_recoveries', 'automatic_capacity_recoveries',
+                                                       'automatic_permission_recoveries'))
+    decision = (f'AutoResolver could not resolve {category} after {attempts} recorded operational recoveries. '
+                'Provide corrective information or leave the run paused.')
+    options = ['Provide corrective information', 'Leave paused']
+    if error.status == 'PAUSED_TIMEOUT_RECOVERY':
+        decision += (' After fixing the cause, authorize more automatic recoveries with '
+                     '--resume-paused --grant-recovery N.')
+        options.append('Authorize more recoveries with --grant-recovery N')
+    request = {'kind': 'blocker', 'discovered': str(error),
+               'impact': 'AutoResolver retained the attempts, work and evidence but cannot continue safely.',
+               'decision_needed': decision,
+               'options': options,
+               'proposed_delta': 'Answering does not authorize a retry, approval, permission or budget change.'}
+    human.queue(state, 'operational_exhaustion',
+                {'stage': state.get('next_stage') or 'operational_recovery', 'pause_status': error.status, 'budget': budget},
+                request=request, evidence={'resolver_receipt_id': receipt}, next_stage=state.get('next_stage'))
+    return True
 
 
 def plain(value):
@@ -130,6 +516,8 @@ def _evaluate(state, run_dir, blocker, context, evidence, boundaries, proposal):
 
 def boundary(runner, state, run_dir, workspace):
     """Record one deterministic decision at a stopped, approved stage boundary."""
+    if human.current(state):
+        return True
     if (state.get('active_stage') or state.get('version', 2) < 3
             or state.get('status') not in ('RUNNING', 'WAITING_FOR_USER')
             or not goals.approved(state)):

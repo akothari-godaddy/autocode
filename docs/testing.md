@@ -7,8 +7,9 @@
 See the [progressive testing plan](testing-plan.md) for the simple-to-complex
 task ladder, independent pass criteria, failure-injection matrix, evidence format,
 and promotion gates. It separates offline runner checks from authorized live-model
-delivery trials and identifies current harness hazards. In particular, unrestricted
-source test discovery is not currently an offline-only command.
+delivery trials and records harness hazards and their verification status. Do not
+assume unrestricted discovery is offline: use `tools/run_suite.py` with live-provider
+toggles unset, and report its skipped and excluded cases separately from passes.
 
 ## Tests and evidence
 

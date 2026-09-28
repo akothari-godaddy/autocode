@@ -1,5 +1,4 @@
 import copy
-import copy
 import hashlib
 import json
 from pathlib import Path
@@ -31,10 +30,10 @@ def plan_body(*, second_dependency=None):
     value["initial_task"] = {"objective": "Deliver greeting", "affected_paths": ["greet.py"],
                              "kind": "implement", "milestone_id": "M1", "requirements": ["Deliver CLI"],
                              "acceptance_criteria": ["C1"], "validation_plan": ["Run tests"]}
-    value["milestones"][0]["boundaries"] = ["greet.py"]
+    value["milestones"][0]["affected_paths"] = ["greet.py"]
     if second_dependency is not None:
         value["milestones"].append({"id": "M2", "objective": "Document greeting", "acceptance_criteria": ["C1"],
-                                    "depends_on": second_dependency, "boundaries": ["README.md"]})
+                                    "depends_on": second_dependency, "affected_paths": ["README.md"]})
     return value
 
 
@@ -49,8 +48,8 @@ class PlanningArtifactTests(unittest.TestCase):
         self.state = {"task_id": "task", "task": "Task", "workspace": str(self.root), "answers": {},
                       "user_events": [], "acceptance_criteria": [], "settings": {"joint_planning": True,
                       "planning_flow": "v2", "roles": {
-                          "requirements_planner": {"engine": "opencode", "model": "zai-coding-plan/glm-5.3"},
-                          "technical_planner": {"engine": "opencode", "model": "zai-coding-plan/glm-5.3"},
+                          "requirements": {"engine": "opencode", "model": "zai-coding-plan/glm-5.3"},
+                          "glm": {"engine": "opencode", "model": "zai-coding-plan/glm-5.3"},
                           "plan_reviewer": {"engine": "opencode", "model": planning.PINNED_REVIEWER_MODEL,
                                               "model_pinned": True}}}}
 
@@ -135,14 +134,17 @@ class PlanningArtifactTests(unittest.TestCase):
         graph_path.write_bytes(original)
 
         pending_feedback = copy.deepcopy(self.state)
-        goals.feedback(pending_feedback, "Reconsider the dependency")
+        goals.invalidate(pending_feedback, "Reconsider the dependency")
         self.assertEqual("stale", planning_graph.consume(pending_feedback, self.run)["status"])
         self.assertNotIn("planning_final", pending_feedback)
         self.assertEqual(final["final_token"], pending_feedback["planning_final_archive"][-1]["final_token"])
 
         self.state["iteration"] = 1
-        goals.present(self.state)
+        self.state["stages"] = [{"stage": "plan_finalize", "output": "plan_finalize.json",
+                                  "source_revision": "fixture", "rejected": False}]
         with patch.object(support, "snapshot", return_value={"revision": "fixture"}):
+            self.assertEqual("escalate", goals.human.evaluate(self.state))
+            goals.present(self.state)
             goals.approve(self.state, final["final_token"])
         self.assertEqual("ready", planning_graph.consume(self.state, self.run)["status"])
 
@@ -177,19 +179,17 @@ class PlanningArtifactTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not state-recorded"):
             artifacts.verify_predecessor(self.state, "plan", self.run)
 
-    def test_orphan_reconciliation_never_promotes_artifact_written_before_state_persistence(self):
+    def test_artifact_transaction_rolls_back_files_when_state_persistence_fails(self):
         support.atomic_json(self.run / "state.json", self.state)
-        with patch.object(runner, "write_json", side_effect=OSError("state persistence failed")):
-            with self.assertRaisesRegex(OSError, "state persistence failed"):
-                runner.commit_stage_result(self.state, "requirements",
-                                           {"requirements": requirements(), "summary": "ready"},
-                                           {"output": "requirements.json"}, self.root, self.run)
+        candidate = copy.deepcopy(self.state)
+        planning.apply(candidate, "requirements", {"requirements": requirements(), "summary": "ready"},
+                       {"stage": "requirements", "output": "requirements.json"}, run_dir=self.run)
+        with self.assertRaisesRegex(OSError, "state persistence failed"):
+            artifacts.commit_pending(candidate, self.run,
+                                     lambda _candidate: (_ for _ in ()).throw(OSError("state persistence failed")))
         persisted = support.read(self.run / "state.json")
-        self.assertTrue((self.run / "planning" / "requirements-1.json").is_file())
-        reconciled = artifacts.reconcile_orphans(persisted, self.run)
-        self.assertEqual(2, len(reconciled))
         self.assertFalse((self.run / "planning" / "requirements-1.json").exists())
-        self.assertTrue((self.run / reconciled[0]["archive"]).is_file())
+        self.assertEqual([], artifacts.reconcile_orphans(persisted, self.run))
         with self.assertRaisesRegex(ValueError, "not state-recorded"):
             artifacts.verify_predecessor(persisted, "plan", self.run)
 
@@ -233,7 +233,8 @@ class PlanningArtifactTests(unittest.TestCase):
         edited["required_behaviors"].append("Document the command")
         goals.install_draft(candidate, edited, origin="user_cli_edit")
         artifacts.prepare_user_cli_edit(candidate, run_dir=self.run)
-        runner.commit_user_action(self.state, candidate, self.run)
+        artifacts.commit_pending(candidate, self.run, lambda value: support.atomic_json(self.run / "state.json", value))
+        self.state.clear(); self.state.update(candidate)
         entry = self.state["planning_artifacts"]["plan"]
         delta = json.loads((self.run / entry["delta"]["path"]).read_text())
         self.assertEqual(original["sha256"], delta["input_sha256"])
@@ -265,9 +266,9 @@ class PlanningArtifactTests(unittest.TestCase):
         goals.install_draft(candidate, edited, origin="user_cli_edit")
         artifacts.prepare_user_cli_edit(candidate, run_dir=self.run)
 
-        with patch.object(runner, "write_json", side_effect=OSError("state persistence failed")):
-            with self.assertRaisesRegex(OSError, "state persistence failed"):
-                runner.commit_user_action(self.state, candidate, self.run)
+        with self.assertRaisesRegex(OSError, "state persistence failed"):
+            artifacts.commit_pending(candidate, self.run,
+                                     lambda _candidate: (_ for _ in ()).throw(OSError("state persistence failed")))
 
         self.assertEqual(before_state, self.state)
         self.assertEqual(before_state_file, (self.run / "state.json").read_bytes())

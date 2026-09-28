@@ -45,22 +45,24 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | --- | --- |
 | `--chat` | Interactive chat mode (default in a terminal). |
 | `--no-chat` | One command per turn (default for non-interactive). |
-| `--answer 'Q1=…'` | Answer a requirements question (repeatable). |
+| `--answer 'Q1=…'` | Answer a requirements question (repeatable). Requires the current `--resolver-token` shown by AutoResolver. |
 | `--feedback '…'` | Send a correction; returns to discovery and requires fresh approval. |
-| `--delegate Q1` | Accept a question's proposed default. |
+| `--delegate Q1` | Accept a question's proposed default. Requires the current `--resolver-token` shown by AutoResolver. |
 | `--delegate-all --review-token 'r3:<hash>'` | Delegate every pending question marked `delegable` with a proposed default, on the exact displayed revision. Refuses the whole call if any question lacks a default, is not delegable, has a protected or missing category (cost, quota, permission, external side effect, requested outcome), or asks about a rejected assumption. Never approves; invalidates any existing approval. |
 | `--reject-assumption A1 --review-token 'r3:<hash>'` | Reject a structured assumption from the displayed requirements handoff (repeatable). A stale token, or a handoff refreshed since display, is refused. Never approves; invalidates any existing approval. |
 | `--show-goal` | Display the current contract/revision. |
 | `--approve-goal 'r3:<hash>'` | Approve the exact displayed revision. |
 | `--edit-goal body.json` | Load a full contract body as a new draft revision. |
 | `--approve-review C1 --review-token '…'` | Record a human-review decision for criterion `C1`. |
+| `--resolver-response provide_information --resolver-request ID --resolver-token '…'` | Answer an AutoResolver operational request with corrective information. `--resolver-response` requires both `--resolver-request` and `--resolver-token`; the response itself authorizes no retry, approval or budget change. |
 
 ### Execution and recovery
 
 | Flag | Meaning |
 | --- | --- |
-| `--resume-paused` | Acknowledge an operational pause and continue. Does not approve a draft. |
+| `--resume-paused` | Acknowledge an operational pause and continue. Does not approve a draft, and does not restore a spent recovery allowance. |
 | `--diagnose-failed-stage` | With `--resume-paused`, request bounded read-only diagnosis of a recorded repeated Builder report failure. Alternative to `--retry-failed-stage`; not a permission or budget override. |
+| `--grant-recovery N` | With `--resume-paused`, authorize N more automatic timeout recoveries for a run paused at `PAUSED_TIMEOUT_RECOVERY` after its cause was fixed. Audited as a `recovery_grant` user event; recovery history is retained. |
 | `--planning-review-call-limit N` | At a reconciled planning-budget pause, save a total allowance for the current cycle. `0` disables the cap for this and future cycles while preserving usage history; it can also be saved at a requested pause or after abandoning a stopped stage. No model launch or approval; resume separately. |
 | `--pause-after-stage` | Stop at the next saved boundary. |
 | `--retry-builder M2` | Explicitly retry a failed milestone Builder (after all workers stopped). |
