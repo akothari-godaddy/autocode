@@ -384,6 +384,7 @@ class ControllerFindingCases(FindingCase):
                   "source_revision": support.snapshot(self.root)["revision"]}
         with self.forbid_real_launches(runner):
             runner.apply_result(self.state, "astra_review", blocked, record, self.root, self.run)
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.check("paused_waiting_for_user", "WAITING_FOR_USER", self.state["status"])
         open_astra = [row["finding"] for row in findings.open_entries(self.state, "astra")]
         self.check("new_finding_recorded", True, "Missing authorization check" in open_astra)
@@ -456,6 +457,8 @@ class ControllerFindingCases(FindingCase):
         diagnosis["acceptance_criteria"][0].update(status="verified", evidence="resolver claim")
         self.state["acceptance_criteria"][0].update(status="unverified", evidence="")
         resolve_record = {"output": str(self.run / "resolve-01.json"), "source_revision": record["source_revision"]}
+        # The resolver diagnosis must be backed by its saved read-only output.
+        support.atomic_json(Path(resolve_record["output"]), diagnosis)
         with self.forbid_real_launches(runner):
             runner.apply_result(self.state, "astra_resolve", diagnosis, resolve_record, self.root, self.run)
         fid = findings.open_entries(self.state, "astra")[0]["id"]

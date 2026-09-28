@@ -18,9 +18,9 @@ import unittest
 import zlib
 from unittest.mock import patch
 from . import test_build_blackbox as bb
-from . import build_product_fixtures as products
-from . import autocode_support as support
-from . import autoreview_product_probe as probe
+import build_product_fixtures as products
+import autocode_support as support
+import autoreview_product_probe as probe
 
 
 def probe_argv(command):

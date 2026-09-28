@@ -136,6 +136,7 @@ class ControllerFindingsTests(unittest.TestCase):
                                     "decision_needed": "Provide test credentials", "options": [], "proposed_delta": ""}
         record = {"output": str(self.run / "blocked.json"), "source_revision": support.snapshot(self.root)["revision"]}
         runner.apply_result(self.state, "astra_review", decision, record, self.root, self.run)
+        runner.goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual(["Missing authorization check"],
                          [row["finding"] for row in findings.open_entries(self.state, "astra")])

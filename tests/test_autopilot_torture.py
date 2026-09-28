@@ -33,7 +33,13 @@ def command_event(event_id, command="python3 -m unittest", exit_code=0, output="
 class TortureBase(unittest.TestCase):
     decision = test_goals.GoalTests.decision
     draft = test_goals.GoalTests.draft
-    approve = test_goals.GoalTests.approve
+
+    def approve(self, **kwargs):
+        # The runner's writer boundary publishes the approval request before it is shown.
+        self.draft(**kwargs)
+        goals.human.evaluate(self.state)
+        goals.present(self.state)
+        goals.approve(self.state, goals.token(self.state["goal_contract"]))
 
     def setUp(self):
         test_goals.GoalTests.setUp(self)
@@ -330,6 +336,9 @@ class StaleAndDisagreementTests(TortureBase):
                                  "proposed_delta": ""}
         value["status"] = "BLOCKED"
         self.apply("astra_review", value, record)
+        # The request is queued by the result and published at the runner's writer boundary.
+        self.assertEqual("RESOLVER_PENDING", self.state["status"])
+        self.assertEqual("escalate", goals.human.evaluate(self.state))
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertTrue(any(row["finding"] == "Credentials missing" for row in findings.open_entries(self.state)))
         self.assertNotEqual("TASK_COMPLETE", self.state["status"])

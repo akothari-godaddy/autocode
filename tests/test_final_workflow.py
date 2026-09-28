@@ -100,7 +100,11 @@ class FinalWorkflowTests(unittest.TestCase):
         value['user_request'].update(kind='permission',discovered='Needs external access',impact='Cannot continue',
             decision_needed='Approve external access?',options=['Approve','Decline'])
         self.implement(value)
+        # The request is queued, then published by the runner's writer boundary.
+        self.assertEqual('RESOLVER_PENDING',self.state['status'])
+        runner.goals.human.evaluate(self.state)
         self.assertEqual('WAITING_FOR_USER',self.state['status'])
+        self.assertEqual('permission',runner.goals.human.current(self.state)['scope'])
 
     def test_final_audit_cannot_dispatch_sol(self):
         self.enable();self.implement(self.implementation('REQUEST_FINAL_AUDIT'))

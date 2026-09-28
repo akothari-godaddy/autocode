@@ -259,6 +259,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
 
     def test_human_review_blocks_only_current_milestone_and_resumes_after_approval(self):
         self.start(human=True); self.validate(); self.assign('M2')
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the review request
         self.assertEqual('WAITING_FOR_USER', self.state['status'])
         self.assertEqual(['C1'], self.state['user_request']['criteria'])
         goals.human.evaluate(self.state)

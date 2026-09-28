@@ -196,6 +196,7 @@ class RepairScenarios(RepairCase):
                                 {"output": str(output),
                                  "source_revision": support.snapshot(self.root)["revision"]},
                                 self.root, self.run)
+        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.check("waiting_for_user", "WAITING_FOR_USER", self.state["status"])
         self.check("specific_permission_request", "Provide the fixture credential",
                    self.state["user_request"]["decision_needed"])

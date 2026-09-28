@@ -1,5 +1,6 @@
 """Revision reuse with real source snapshots and pinned offline Validator evidence."""
 import copy
+import json
 import unittest
 from pathlib import Path
 
@@ -196,7 +197,18 @@ class CarryForwardTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'already carried forward'):
             self.assign('M1')
         self.assertEqual(before, self.state)
-        self.assign('M1', status='REWORK')
+        # A reviewer REWORK now needs a current task for the AutoResolver diagnosis; right after
+        # re-approval no task exists, so the explicit rework arrives from the dispatched plan stage.
+        with self.assertRaisesRegex(s.Paused, 'current approved task'):
+            self.assign('M1', status='REWORK')
+        self.assertEqual(before, self.state)
+        self.assertEqual('astra_plan', self.state['next_stage'])
+        decision = self.decision('M1', 'REWORK')
+        output = self.run / 'astra-plan-rework.json'
+        output.write_text(json.dumps(decision))
+        fixtures.runner.apply_result(self.state, 'astra_plan', decision,
+                                     {'output': str(output), 'source_revision': s.snapshot(self.root)['revision']},
+                                     self.root, self.run)
         self.assertEqual(set(), m.accepted_ids(self.state))
         self.assertTrue(m.progress(self.state)['carry_revoked'])
 
@@ -252,9 +264,16 @@ class CarryForwardTests(unittest.TestCase):
                    'validation_plan': ['Run tests']}
         self.revise(lambda body: body.update(initial_task=initial), approve=False)
         self.state['settings']['joint_planning'] = True
-        goals.human.evaluate(self.state)
+        # Joint approval is only requested once the final planning report matches the current source.
+        final = self.run / 'astra_finalize.json'
+        final.write_text('{}')
+        self.state['stages'].append({'stage': 'astra_finalize', 'output': str(final), 'exit_code': 0,
+                                     'source_revision': s.snapshot(self.root)['revision']})
+        self.state['planning'] = {'astra_calls': 0, 'final_token': goals.token(self.state['goal_contract']),
+                                  'reports': {'astra_finalize': {'output': str(final)}}}
+        self.assertEqual('escalate', goals.human.evaluate(self.state))
         goals.present(self.state)
-        self.state['planning'] = {'final_token': self.state['displayed_goal']}
+        self.assertEqual(self.state['planning']['final_token'], self.state['displayed_goal'])
         goals.approve(self.state, self.state['displayed_goal'])
         self.assertEqual({'M1'}, m.accepted_ids(self.state))
         self.assertEqual('astra_review', self.state['next_stage'])

@@ -133,6 +133,8 @@ class SessionScenarios(SessionCase):
                          evidence=["event:check"])
         diagnosis["acceptance_criteria"][0].update(status="verified", evidence="resolver claim")
         self.state["acceptance_criteria"][0].update(status="unverified", evidence="")
+        # The resolver diagnosis must be backed by its saved read-only output.
+        support.atomic_json(self.run / "resolve-01.json", diagnosis)
         with self.forbid_real_launches(runner):
             runner.apply_result(self.state, "astra_resolve", diagnosis,
                                 {"output": str(self.run / "resolve-01.json"),

@@ -228,6 +228,8 @@ class ReviewCase(t06.SolControllerCase):
         with self.forbid_real_launches(runner):
             runner.apply_result(self.state, "astra_review", complete,
                                 {"output": str(self.run / "complete.json")}, self.root, self.run)
+        # The runner's writer boundary publishes the queued review request.
+        goals.human.evaluate(self.state)
         self.check("waiting_for_human", "WAITING_FOR_USER", self.state["status"])
         self.check("acceptance_request_names_criteria", ["C1"],
                    self.state["user_request"].get("criteria", []))
@@ -248,6 +250,12 @@ class ReviewCase(t06.SolControllerCase):
         self.restart_with_human_contract()
         report = self.sol_report()
         self.apply_sol(report)
+        # Acceptance is only displayed for a published AutoResolver review request.
+        complete = self.complete_decision()
+        support.atomic_json(self.run / "complete.json", complete)
+        with self.forbid_real_launches(runner):
+            runner.apply_result(self.state, "astra_review", complete,
+                                {"output": str(self.run / "complete.json")}, self.root, self.run)
         current = support.snapshot(self.root)
         goals.human.evaluate(self.state)
         goals.present(self.state)
@@ -295,6 +303,8 @@ class ReviewCase(t06.SolControllerCase):
                          evidence=["event:check"])
         diagnosis["acceptance_criteria"][0].update(status="verified", evidence="resolver claim")
         self.state["acceptance_criteria"][0].update(status="unverified", evidence="")
+        # The resolver diagnosis must be backed by its saved read-only output.
+        support.atomic_json(self.run / "resolve.json", diagnosis)
         with self.forbid_real_launches(runner):
             runner.apply_result(self.state, "astra_resolve", diagnosis,
                                 {"output": str(self.run / "resolve.json"),

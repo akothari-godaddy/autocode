@@ -144,7 +144,6 @@ class PlanningArtifactTests(unittest.TestCase):
                                   "source_revision": "fixture", "rejected": False}]
         with patch.object(support, "snapshot", return_value={"revision": "fixture"}):
             self.assertEqual("escalate", goals.human.evaluate(self.state))
-            goals.human.evaluate(self.state)
             goals.present(self.state)
             goals.approve(self.state, final["final_token"])
         self.assertEqual("ready", planning_graph.consume(self.state, self.run)["status"])
