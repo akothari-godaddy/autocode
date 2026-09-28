@@ -184,6 +184,19 @@ class SmallCorrectionTests(unittest.TestCase):
                                        "astra_discovery", Path(state["workspace"]) / "state.json")
         self.assertNotIn(autoplanner.BUG_DIAGNOSIS_RULE, small)
 
+    def test_planning_is_told_how_execution_captures_evidence(self):
+        from units import autoplanner
+        state = self.start(fix_size="large")
+        state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+        state_path = Path(state["workspace"]) / "state.json"
+        for stage in ("astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
+            prompt, _ = autoplanner.context(state, stage, state_path)
+            self.assertIn(autoplanner.EVIDENCE_FACTS, prompt, stage)
+            self.assertIn('"capture_command"', prompt, stage)
+            self.assertIn(" capture", json.loads(prompt.split("CURRENT HANDOFF DATA\n", 1)[1])["capture_command"])
+        requirements, _ = autoplanner.context(state, "requirements_gather", state_path)
+        self.assertNotIn(autoplanner.EVIDENCE_FACTS, requirements)
+
     def test_the_policy_actor_cannot_approve_an_ordinary_contract(self):
         import autocode_goals as goals
         state = self.start()

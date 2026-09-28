@@ -35,6 +35,19 @@ Every plan must uphold its invariant as an acceptance criterion, with a regressi
 original code and passes after the fix, and must keep the project's existing tests passing. Fix the cause,
 not the symptom, and do not widen the change beyond what the root cause needs. Do not ask the user what the
 fix should achieve; ask only about a genuine choice the diagnosis leaves open.
+Cite the diagnosis in code_refs as exactly its note_path; explanations go in summaries, never inside a path.
+"""
+# Planning is otherwise never told how execution captures test evidence, so plans invented
+# scratch copies outside the workspace and reviewers blocked them for a "missing capture
+# command" (bugfix-cent-drift, 2026-09-28: three planning rounds).
+EVIDENCE_FACTS = """
+TEST EVIDENCE (how execution works; plan within it, do not re-derive it): the runner gives every Builder
+and Validator the capture_command shown in the handoff. It runs a command in the workspace and saves the
+full output as evidence in the run's own directory under .autocode/, which the runner owns: evidence is
+never a deliverable, never an affected path and needs no permission. A fail-first criterion is met in the
+workspace itself: add the regression test, capture it failing against the unmodified code, make the fix,
+capture it passing. Do not plan scratch copies outside the workspace, and do not treat capture as a
+missing prerequisite or ask the user to authorize it.
 """
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
@@ -432,6 +445,13 @@ def workspace_inventory(workspace, task, limit=40, scan_limit=5000):
             "instruction": "File names are navigation hints, not evidence of behavior. Read relevant files."}
 
 
+def capture_command():
+    """The command execution stages are given (autocode_support.context_packet), shown to planning too."""
+    import shlex
+    import sys
+    return shlex.join([sys.executable, str(Path(s.__file__).with_name("autocode.py")), "capture"])
+
+
 def context(state, stage, state_path):
     exchange = copy.deepcopy(state.get("planning", {}))
     for entry in exchange.get("reports", {}).values():
@@ -482,7 +502,9 @@ def context(state, stage, state_path):
         import autocode_figma as figma
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
-        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY)
+        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY + EVIDENCE_FACTS)
+    if stage != "requirements_gather":
+        packet["capture_command"] = capture_command()
     clarification_policy = ("" if stage == "astra_challenge" else QUESTION_POLICY) + (
         ASSUMPTION_POLICY if stage == "requirements_gather" else "")
     if stage != "requirements_gather":
