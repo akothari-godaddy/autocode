@@ -41,7 +41,7 @@ reads no credentials.
 ## Run the tests
 
 The suite gate is what CI runs. It discovers the tests, applies the recorded
-exclusions in `tools/suite_exclusions.json`, and fails if any non-excluded test
+exclusions in `tests/suite_exclusions.json`, and fails if any non-excluded test
 fails:
 
 ```sh
@@ -51,8 +51,8 @@ python3 tools/run_suite.py
 The full gate takes 7–8 minutes. While iterating, run one module:
 
 ```sh
-python3 -m unittest tools.test_goals
-python3 -m unittest -k approval tools.test_autocode
+python3 -m unittest tests.test_goals
+python3 -m unittest -k approval tests.test_autocode
 ```
 
 Dashboard tests (need localhost socket access):
@@ -70,10 +70,6 @@ Known limits of the current suite, so you are not surprised:
   error without them.
 - The suite writes scenario bundles under `.tmp-autopilot-testkit/`; that
   directory is ignored by Git.
-- There are currently two copies of the test tree (`tools/test_*.py`, which the
-  gate runs, and `tests/`). They are being consolidated. Until then, put new
-  tests where the module you are testing already has its tests, and mention
-  it in the pull request.
 
 ## Make a change
 
@@ -82,7 +78,7 @@ Known limits of the current suite, so you are not surprised:
 2. **Branch from `master`.** Any name is fine.
 3. **Write the test first** when fixing a bug. The test should fail before your
    fix and pass after. Fixture tests with fake providers are the standard;
-   see the existing `tools/test_*.py` modules for the patterns and
+   see the existing `tests/test_*.py` modules for the patterns and
    `tools/fake_codex.py` / `tools/fake_opencode.py` for the fake providers.
 4. **Keep the change small.** One fix or one feature per pull request. A
    250-line diff gets reviewed this week; a 2,500-line diff may not get

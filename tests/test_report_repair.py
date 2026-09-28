@@ -1,32 +1,54 @@
 """Report-only recovery tests: fixtures and mocked providers, no live model calls."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import shutil
 from pathlib import Path
 from unittest.mock import patch
 import unittest
-try:
-    from . import test_autocode as base
-    from . import test_subprocess
-except ImportError:
-    import test_autocode as base
-    import test_subprocess
+from . import test_autocode as base
+from . import test_subprocess
 
 runner, support = base.runner, base.s
 
 
 class RepairTests(unittest.TestCase):
     setUp = base.RetrofitTest.setUp
+
+    def test_plan_review_missing_blocking_is_preserved_as_blocking(self):
+        schema = self.run / 'plan-review.schema.json'
+        schema.write_text(json.dumps(runner.planning.SCHEMAS['astra_challenge']))
+        concern = {'id': 'C-1', 'concern': 'The build gate is premature',
+                   'evidence_refs': ['goal_contract.body'],
+                   'requested_change': 'Move the gate',
+                   'acceptance_test': 'Review happens after build'}
+        raw = {'summary': 'Rework is needed', 'concerns': [concern, {
+            **concern, 'id': 'C-2', 'blocking': False}]}
+        for stage in ('astra_challenge', 'astra_challenge_report_repair'):
+            with self.subTest(stage=stage):
+                output = self.run / f'{stage}.json'
+                record = {'stage': stage, 'engine': 'opencode',
+                          'events': str(self.run / f'{stage}.jsonl'),
+                          'output': str(output), 'schema': str(schema)}
+                with patch.object(runner.opencode, 'final_report', return_value=raw):
+                    result = runner.load_stage_report(record)
+                self.assertEqual([True, False], [row['blocking'] for row in result['concerns']])
+                self.assertEqual(raw, json.loads(output.with_suffix('.reported.json').read_text()))
+                self.assertEqual(result, json.loads(output.read_text()))
+                self.assertEqual(str(output.with_suffix('.reported.json')), record['reported_output'])
+
+    def test_plan_review_normalization_does_not_hide_other_schema_errors(self):
+        schema = self.run / 'plan-review.schema.json'
+        schema.write_text(json.dumps(runner.planning.SCHEMAS['astra_challenge']))
+        record = {'stage': 'astra_challenge', 'engine': 'opencode',
+                  'events': str(self.run / 'plan-review.jsonl'),
+                  'output': str(self.run / 'plan-review.json'), 'schema': str(schema)}
+        raw = {'summary': 'Rework is needed', 'concerns': [{
+            'id': 'C-1', 'concern': 'Missing requested change',
+            'evidence_refs': ['goal_contract.body'], 'acceptance_test': 'Gate passes'}]}
+        with patch.object(runner.opencode, 'final_report', return_value=raw):
+            with self.assertRaises(ValueError):
+                runner.load_stage_report(record)
+        self.assertFalse(Path(record['output']).exists())
 
     def test_builder_repair_preserves_failed_results_commands_and_user_decisions(self):
         report = self.run / 'original-builder.json'
@@ -243,7 +265,7 @@ class RepairTests(unittest.TestCase):
         launch.assert_not_called()
 
     def test_invalid_or_unbounded_repair_configuration_is_rejected(self):
-        for value in (-1,3,True,'2'):
+        for value in (-1,7,True,'2'):
                 self.state['settings']['report_repair']={'max_attempts':value}
                 with self.subTest(value=value),self.assertRaises(ValueError):
                     runner.repair_limit(self.state)

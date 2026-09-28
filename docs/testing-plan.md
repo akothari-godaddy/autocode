@@ -61,7 +61,7 @@ These are test-infrastructure findings to resolve or isolate, not completed fixe
 
 | Finding | Required handling |
 | --- | --- |
-| `tools/test_autoreview_products.py` defaults to a real Codex executable without an explicit live opt-in. | Do not run unrestricted `unittest discover -s tools -t .` as an offline suite. Introduce a genuine live opt-in or separate live suite before restoring broad discovery. Unsetting an environment variable alone does not disable this module's default. |
+| `tests/test_autoreview_products.py` defaults to a real Codex executable without an explicit live opt-in. | Do not run unrestricted `unittest discover -s tests -t .` as an offline suite. Introduce a genuine live opt-in or separate live suite before restoring broad discovery. Unsetting an environment variable alone does not disable this module's default. |
 | The blackbox fixture can use either `BUILD_AUDIT_LIVE_CODEX` or `REVIEW_AUDIT_LIVE_CODEX`. | Unset both for offline runs and verify fake launch identities. The build-audit entry point's single-variable guard is not sufficient on its own. |
 | `test-scenarios/run-all.sh` includes crash and mutation scenarios, writes a shared `/tmp/autocode-results.tsv`, and scenario 03 uses a broad `pkill` pattern. | Quarantine blanket execution until process cleanup and result paths are case-local. Do not run it alongside active user tasks. |
 | The shell harness treats any nonempty `AUTOCODE_LIVE`, including `0`, as live and can prefer an installed CLI over source. | Unset the variable for offline use; explicitly verify executable provenance before admitting this harness. |
@@ -243,15 +243,15 @@ fixture_python() {
 }
 
 fixture_python -m unittest \
-  tools.test_autocode tools.test_goals tools.test_findings tools.test_workflow \
-  tools.test_units tools.test_subprocess tools.test_planning \
-  tools.test_runtime_reports tools.test_command_provider
+  tests.test_autocode tests.test_goals tests.test_findings tests.test_workflow \
+  tests.test_units tests.test_subprocess tests.test_planning \
+  tests.test_runtime_reports tests.test_command_provider
 
 fixture_python -m unittest \
-  tools.test_builder_policy tools.test_dispatch tools.test_orchestrator \
-  tools.test_process tools.test_activity_runtime tools.test_report_repair \
-  tools.test_execution_checkpoints tools.test_milestone_checkpoints \
-  tools.test_interventions tools.test_intervention_ordering tools.test_carryforward
+  tests.test_builder_policy tests.test_dispatch tests.test_orchestrator \
+  tests.test_process tests.test_activity_runtime tests.test_report_repair \
+  tests.test_execution_checkpoints tests.test_milestone_checkpoints \
+  tests.test_interventions tests.test_intervention_ordering tests.test_carryforward
 
 fixture_python -m tools.run_build_blackbox_audit \
   --artifacts "$TEST_ROOT/build-audit"

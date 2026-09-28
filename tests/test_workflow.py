@@ -1,24 +1,11 @@
 """Builder-first routing uses fake providers; tests never contact subscription services."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-try:
-    from . import test_autocode, test_subprocess
-except ImportError:
-    import test_autocode, test_subprocess
+from . import test_autocode, test_subprocess
 import autocode as runner
 import autocode_support as s
 import autocode_goals as goals

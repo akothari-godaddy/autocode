@@ -1,14 +1,4 @@
 """Goal gates in isolated Git workspaces. No real model or live run is used."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import contextlib
 import io
@@ -21,11 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
 import autocode_interventions as interventions
 import autocode_support as s
@@ -151,6 +137,110 @@ class GoalTests(unittest.TestCase):
         self.assertEqual("astra_review", self.state["next_stage"])
         self.assertNotIn("user_request", self.state)
         self.assertEqual("permission_answer", self.state["answers"]["decision-limit"]["kind"])
+
+    def test_is_operational_response_classifies_permission_and_scoped_blocker_only(self):
+        # kind="permission" is always operational, regardless of proposed_delta.
+        self.assertTrue(g.is_operational_response({"kind": "permission", "proposed_delta": ""}))
+        self.assertTrue(g.is_operational_response({"kind": "permission"}))
+        # kind="blocker" is operational only with one of the two exact canonical
+        # no-scope-change prefixes.
+        self.assertTrue(g.is_operational_response({"kind": "blocker",
+            "proposed_delta": "No goal, scope, criterion, or behavior change. Extend the tool timeout."}))
+        self.assertTrue(g.is_operational_response({"kind": "blocker",
+            "proposed_delta": "No contract, product, acceptance-criterion, implementation-scope, "
+                               "filesystem, provider or spending change. Raise the milestone budget."}))
+        # Negative controls: a criterion relaxation, scope change, permission
+        # grant phrased as a blocker without the exact prefix, a stale/generic
+        # blocker, and every other kind must all still require reapproval.
+        self.assertFalse(g.is_operational_response({"kind": "blocker", "proposed_delta": "Extend the tool timeout"}))
+        self.assertFalse(g.is_operational_response({"kind": "blocker", "proposed_delta": ""}))
+        self.assertFalse(g.is_operational_response({"kind": "blocker"}))
+        for kind in ("goal_change", "contradiction", "infeasible", "clarification", "none"):
+            self.assertFalse(g.is_operational_response({"kind": kind, "proposed_delta": ""}))
+        self.assertFalse(g.is_operational_response({}))
+        self.assertFalse(g.is_operational_response(None))
+
+    def test_astra_decisions_prompt_tells_the_model_when_to_use_permission_kind(self):
+        # Without this guidance a model has no way to know the runtime treats
+        # "permission" and "blocker" differently, so it can only reach the
+        # non-invalidating route by chance (see issue #78). Guard the text
+        # that actually gives it that instruction.
+        self.assertIn('kind="permission"', s.ASTRA_DECISIONS)
+        self.assertIn("never choose it merely", s.ASTRA_DECISIONS)
+
+    def operational_limit_request(self):
+        """The issue #78 scenario: a stopped operational exhaustion request presenting
+        only the option to extend finite execution limits, with no product delta."""
+        return {"kind": "permission", "decision_needed": "Extend milestone/tool limits to finish verification?",
+                "impact": "Verification stopped at the current execution/tool budget",
+                "options": ["Extend milestone/tool execution limits and finish verification",
+                            "Accept the current failing verification"],
+                "discovered": "The milestone active-time budget was exhausted mid-verification",
+                "proposed_delta": ""}
+
+    def test_cli_answer_to_an_operational_limit_request_preserves_approval_and_does_not_replan(self):
+        self.approve()
+        contract = copy.deepcopy(self.state["goal_contract"])
+        self.state["validation"] = {"verdict": "FAIL", "source_revision": "pinned"}
+        validation = copy.deepcopy(self.state["validation"])
+        request = self.operational_limit_request()
+        self.state.update(status="WAITING_FOR_USER", phase="WAITING_FOR_USER", next_stage="astra_review",
+                          user_request=request,
+                          pending_questions=[{"id": "decision-limit", "question": request["decision_needed"],
+                                               "why": request["impact"], "options": request["options"],
+                                               "proposed_default": ""}])
+        self.assertEqual(0, self.invoke("--answer",
+            "decision-limit=Extend milestone/tool execution limits and finish verification"))
+        self.assertEqual(contract, self.state["goal_contract"])
+        self.assertEqual(validation, self.state["validation"])
+        self.assertEqual("RUNNING", self.state["status"])
+        self.assertEqual("astra_review", self.state["next_stage"])
+        self.assertNotIn("user_request", self.state)
+        self.assertEqual("permission_answer", self.state["answers"]["decision-limit"]["kind"])
+
+    def test_chat_answer_to_an_operational_limit_request_preserves_approval_and_does_not_replan(self):
+        self.approve()
+        contract = copy.deepcopy(self.state["goal_contract"])
+        self.state["validation"] = {"verdict": "FAIL", "source_revision": "pinned"}
+        validation = copy.deepcopy(self.state["validation"])
+        request = self.operational_limit_request()
+        self.state.update(status="WAITING_FOR_USER", phase="WAITING_FOR_USER", next_stage="astra_review",
+                          user_request=request,
+                          pending_questions=[{"id": "decision-limit", "question": request["decision_needed"],
+                                               "why": request["impact"], "options": request["options"],
+                                               "proposed_default": ""}])
+        with patch("builtins.input", side_effect=["Extend milestone/tool execution limits and finish verification"]):
+            result = runner.chat_checkpoint(self.state, None)
+        self.assertTrue(result)
+        self.assertEqual(contract, self.state["goal_contract"])
+        self.assertEqual(validation, self.state["validation"])
+        self.assertEqual("RUNNING", self.state["status"])
+        self.assertEqual("astra_review", self.state["next_stage"])
+        self.assertNotIn("user_request", self.state)
+        self.assertEqual("permission_answer", self.state["answers"]["decision-limit"]["kind"])
+
+    def test_chat_answer_to_a_genuine_blocker_still_requires_reapproval(self):
+        # Negative control: an unrelated blocker/goal_change decision, or a
+        # blocker whose own proposed_delta does not state the exact no-scope-change
+        # prefix, must still invalidate approval and route back through discovery.
+        for request in (
+            {"kind": "blocker", "decision_needed": "Relax the timeout criterion?", "impact": "Tests are slow",
+             "options": ["Relax it", "Keep it"], "discovered": "Slow CI", "proposed_delta": "Relax criterion C1"},
+            {"kind": "goal_change", "decision_needed": "Add a new export format?", "impact": "New scope",
+             "options": ["Add it", "Skip it"], "discovered": "User asked for CSV too", "proposed_delta": "Add CSV export"},
+        ):
+            with self.subTest(kind=request["kind"]):
+                self.setUp()
+                self.approve()
+                self.state.update(status="WAITING_FOR_USER", phase="WAITING_FOR_USER", next_stage="astra_review",
+                                  user_request=request,
+                                  pending_questions=[{"id": "decision-1", "question": request["decision_needed"],
+                                                       "why": request["impact"], "options": request["options"],
+                                                       "proposed_default": ""}])
+                with patch("builtins.input", side_effect=[request["options"][0]]):
+                    runner.chat_checkpoint(self.state, None)
+                self.assertEqual("draft", self.state["goal_contract"]["approval_status"])
+                self.assertEqual("astra_discovery", self.state["next_stage"])
 
     def permission_request(self):
         return {"kind": "permission", "decision_needed": "Repair the fallback test?",

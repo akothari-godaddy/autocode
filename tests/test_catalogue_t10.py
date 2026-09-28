@@ -4,16 +4,6 @@ Heavy subprocess-fixture regressions live in test_assignment_scenarios; this
 file re-runs the cited ones programmatically (their result is the evidence)
 and adds compact controller/dispatch-level cases for the gaps.
 """
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import io
 import json
 from pathlib import Path
@@ -21,21 +11,17 @@ import subprocess
 import sys
 import unittest
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_dispatch as dispatch
 import autocode_goals as goals
 import autocode_support as support
-import test_catalogue_t06 as t06
+from . import test_catalogue_t06 as t06
 from goal_fixtures import body, envelope
 
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
 def rerun(test_name):
@@ -67,7 +53,7 @@ class ParallelScenarios(ParallelCase):
 
     def test_par01_disjoint_builders_run_in_isolated_worktrees(self):
         """PAR-01. Existing: test_assignment_scenarios.test_independent_tasks_use_isolated_worktrees."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
+        ok, count = rerun("tests.test_assignment_scenarios.AssignmentScenarios."
                           "test_independent_tasks_use_isolated_worktrees")
         self.check("existing_isolation_regression_passes", (True, 1), (ok, count))
         batch = self.prepare_parallel()
@@ -81,14 +67,14 @@ class ParallelScenarios(ParallelCase):
 
     def test_par02_successful_sibling_survives_another_failure(self):
         """PAR-02. Existing: test_assignment_scenarios.test_partial_success_prose_is_stored_and_not_completion."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
+        ok, count = rerun("tests.test_assignment_scenarios.AssignmentScenarios."
                           "test_partial_success_prose_is_stored_and_not_completion")
         self.check("sibling_partial_success_regression_passes", (True, 1), (ok, count))
         self.finish(summary="RECOVERED_BATCH: existing fixture-level regression rerun green")
 
     def test_par03_edits_outside_owned_paths_detected(self):
         """PAR-03. Existing: test_assignment_scenarios.test_test_edits_outside_the_assignment_are_rejected."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
+        ok, count = rerun("tests.test_assignment_scenarios.AssignmentScenarios."
                           "test_test_edits_outside_the_assignment_are_rejected")
         self.check("ownership_violation_regression_passes", (True, 1), (ok, count))
         outside = sorted(name for name in ("../escape.txt", "/tmp/escape.txt")
@@ -98,7 +84,7 @@ class ParallelScenarios(ParallelCase):
 
     def test_par04_hidden_overlap_not_parallelized(self):
         """PAR-04. Existing: test_assignment_scenarios.test_overlapping_tasks_are_not_parallelized_or_merged."""
-        ok, count = rerun("tools.test_assignment_scenarios.AssignmentScenarios."
+        ok, count = rerun("tests.test_assignment_scenarios.AssignmentScenarios."
                           "test_overlapping_tasks_are_not_parallelized_or_merged")
         self.check("overlap_regression_passes", (True, 1), (ok, count))
         self.check("disjointness_check_exact", False,

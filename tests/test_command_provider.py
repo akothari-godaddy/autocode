@@ -1,14 +1,4 @@
 """Config-registered tools: validation, launch, reports, and drift."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import hashlib
 import json
 import os
@@ -289,6 +279,7 @@ class CommandProviderTests(unittest.TestCase):
             autocode_providers.resolve("missing")
         builtin = autocode_providers.resolve("opencode")
         self.assertEqual("tools.providers.opencode", builtin.__name__)
+
 
     def test_event_final_report_forwards_wrapped_recovery(self):
         write_config(self.home, "events2", 'name = "events2"\ncommand = ["kilo", "run"]\n'

@@ -217,8 +217,8 @@ class CatalogueCase(unittest.TestCase):
     def expect_raises(self, name, exc_type, fn, *args, **kwargs):
         return self.bundle.expect_raises(name, exc_type, fn, *args, **kwargs)
 
-    def finish(self, summary=""):
-        return self.bundle.finish(summary=summary)
+    def finish(self, summary="", status=PASS):
+        return self.bundle.finish(status=status, summary=summary)
 
 
 class FindingsOracle:
