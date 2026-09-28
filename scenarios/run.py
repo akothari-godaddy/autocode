@@ -105,6 +105,16 @@ def cmd_run(args) -> int:
     return 1 if failures else 0
 
 
+def caps_flags(args) -> list[str]:
+    """Run-budget caps forwarded to AutoCode on every launch, so no live run is unbounded."""
+    caps = []
+    for name in ("max_seconds", "max_stage_seconds", "max_reported_tokens", "max_iterations"):
+        value = getattr(args, name, None)
+        if value is not None:
+            caps += [f"--{name.replace('_', '-')}", str(value)]
+    return caps
+
+
 def run_one(scenario, args) -> dict:
     mode = ("fake" if args.fake_solution == "reference" else f"fake-{Path(args.fake_solution).name}") if args.fake else args.profile
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -125,6 +135,7 @@ def run_one(scenario, args) -> dict:
 
     project = materialize(scenario.seed, out / "project")
     flags, env = fake_setup(scenario, out, solution) if args.fake else live_setup(args.profile)
+    flags = [*flags, *caps_flags(args)]
     driver = Driver(project, out, flags, env, autocode=args.autocode or default_autocode(),
                     max_steps=args.max_steps or scenario.max_steps,
                     timeout_seconds=60 * (args.timeout_minutes or scenario.timeout_minutes))
@@ -358,6 +369,10 @@ def main(argv=None) -> int:
     run.add_argument("--autocode", nargs="+", help="AutoCode command to test (default: this checkout)")
     run.add_argument("--max-steps", type=int, help="override the scenario's CLI call budget")
     run.add_argument("--timeout-minutes", type=int, help="override the scenario's time budget")
+    run.add_argument("--max-seconds", type=int, help="forwarded to AutoCode: total active provider time")
+    run.add_argument("--max-stage-seconds", type=int, help="forwarded to AutoCode: per-stage time cap")
+    run.add_argument("--max-reported-tokens", type=int, help="forwarded to AutoCode: total reported-token budget")
+    run.add_argument("--max-iterations", type=int, help="forwarded to AutoCode: iteration ceiling")
     run.set_defaults(func=cmd_run)
     comparison = commands.add_parser("compare", help="run AutoCode and a plain agent on the same scenarios; "
                                                      "judge both with the same oracle")

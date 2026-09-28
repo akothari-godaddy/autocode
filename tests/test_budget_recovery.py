@@ -3,7 +3,7 @@ import copy
 import json
 import unittest
 
-from autocode_budget_recovery import HARD_CEILINGS, PLANNING_KIND, recover
+from autocode_budget_recovery import HARD_CEILINGS, PLANNING_KIND, RUNNER_DEFAULTS, recover
 
 
 NOW = "2026-09-27T10:00:00+00:00"
@@ -58,6 +58,19 @@ class BudgetRecoveryTests(unittest.TestCase):
                 container = state["settings"]["milestone_checkpoints" if kind == "milestone_max_seconds" else "limits"]
                 container["max_seconds" if kind == "milestone_max_seconds" else kind] = entry["from"]
                 self.assertEqual(json.dumps(before, sort_keys=True), json.dumps(state, sort_keys=True))
+
+    def test_new_run_defaults_extend_once_to_their_ceiling(self):
+        for kind, default in RUNNER_DEFAULTS.items():
+            with self.subTest(kind=kind):
+                state = fixture(kind)
+                state["settings"]["limits"][kind] = default
+                if kind == "max_seconds":
+                    state["active_seconds"] = default
+                else:
+                    state["stages"][-1]["duration_seconds"] = state["history"][-1]["duration_seconds"] = default
+                self.assertTrue(recover(state, kind=kind, now=NOW))
+                self.assertEqual(HARD_CEILINGS[kind], state["settings"]["limits"][kind])
+                self.denied(state, kind)
 
     def test_inherited_and_explicit_caps_are_protected(self):
         for kind in HARD_CEILINGS:

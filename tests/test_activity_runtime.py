@@ -49,11 +49,11 @@ class ActivityRuntimeTests(unittest.TestCase):
             code = runner.main()
         return code, output.getvalue(), error.getvalue()
 
-    def test_new_run_limits_separate_idle_and_tool_from_disabled_stage_cap(self):
+    def test_new_run_limits_separate_idle_and_tool_from_the_stage_cap(self):
         fresh = {'workspace': str(self.root), 'iteration': 1}
         with patch.object(support, 'local_settings', return_value=self.local):
             configured = runner.configure(self.args(), fresh)
-        self.assertEqual(0, configured['limits']['stage_timeout_seconds'])
+        self.assertEqual(3600, configured['limits']['stage_timeout_seconds'])
         self.assertEqual(300, configured['limits']['idle_timeout_seconds'])
         self.assertEqual(1800, configured['limits']['tool_timeout_seconds'])
 

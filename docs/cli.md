@@ -22,6 +22,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `autocode-dashboard` | Local browser dashboard. |
 | `autocode --unit autoplanner\|autocode\|autoreview\|autoresolver` | Select one unit; omitting `--unit` runs all. |
 | `autocode compare-baseline` | Compare Vitest failure evidence (see [Execution](execution.md#baseline-comparison)). |
+| `autocode clean-worktrees [--yes]` | List, then with `--yes` remove, task worktrees whose runs are complete and whose branch holds their work; records are archived and branches kept (see [Task lanes](task-lanes.md#when-a-task-finishes)). |
 | `autocode --version` | Print the installed version and, when run from a checkout, its commit. |
 | `autocode doctor [--workspace PATH] [--engine opencode\|codex\|gocode] [--json]` | Check Python, psutil, Git, each engine (OpenCode must be 1.x; Codex must be logged in) and that the workspace is a Git repository with a commit. Prints the fix for anything missing; exits 1 when not ready. Passes when any engine is ready, unless `--engine` names one. Never reads credentials. |
 | `autocode registry location\|list\|import` | Registry API (see [Registry API](registry-api.md)). |
@@ -35,7 +36,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | --- | --- |
 | `--workspace /path` | Committed Git workspace to work in. Defaults to the current directory. |
 | `--run-dir /path` | Resume a specific saved run. Always pair with the same `--workspace`. |
-| `--in-place` | Start a new task in the selected checkout instead of a fresh worktree. |
+| `--in-place` | Start a new task in the selected checkout instead of a fresh worktree. Only one run's agents work in a checkout at a time; a second run exits with status 2 and changes nothing (see [Task lanes](task-lanes.md#multiple-tasks-in-one-project)). |
 | `--status` | Read-only status, including `milestone_checkpoint`, `interventions`, `active_stage.activity`. |
 | `--dry-run` | Read-only preview; never emits an accepted handoff. |
 
@@ -74,7 +75,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--max-milestone-seconds N` | Milestone active-time budget (default 5400; `0` disables). |
 | `--max-milestone-replans N` | Changed-approach replan limit (default 1). |
 | `--max-findings-per-task N` | Cap open findings bundled into one REWORK task. |
-| `--max-idle-seconds` / `--max-tool-seconds` / `--max-stage-seconds` | Watchdog limits (defaults `300` / `1800` / `0`). |
+| `--max-idle-seconds` / `--max-tool-seconds` / `--max-stage-seconds` | Watchdog limits (new-run defaults `300` / `1800` / `3600`; `0` disables). |
+| `--max-seconds N` | Total active provider time for the run (new-run default `43200`, 12 hours; `0` disables). Checked at stage boundaries. |
 | `--no-progress-limit N` | Unchanged-batch limit (`0` disables; never disables the 3-recovery ceiling). |
 | `--max-iterations N` | Optional total iteration ceiling; new runs default to unlimited, and resumes retain their saved limit. |
 | `--test-command CMD` | New runs: the project's test suite command for a bug fix's runner-owned regression proof (default: detected; see [Bug fixes](workflow.md#bug-fixes)). |

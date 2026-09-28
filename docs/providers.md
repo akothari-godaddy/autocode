@@ -44,6 +44,27 @@ does not enable `--auto` or override user-level permission rules with blanket al
 A denied required operation is reported back as a blocker.
 See OpenCode's [permission documentation](https://opencode.ai/docs/permissions/).
 
+### Environment variables agents see
+
+Every provider process, and every test command the runner executes itself, gets
+the runner's environment minus variables that look like credentials: a name word
+such as `TOKEN`, `SECRET`, `PASSWORD`, `KEY` or `AUTH` (`GITHUB_TOKEN`,
+`AWS_SECRET_ACCESS_KEY`, `SSH_AUTH_SOCK`, `OPENAI_API_KEY`), or a URL value with
+an embedded password. Proxy variables and AutoCode's own `AUTOCODE_*` settings are
+kept. Each stage record lists the withheld names (never values) under
+`withheld_env`. The rules are in `tools/autocode_agent_env.py`.
+
+Providers sign in from their own stored logins (OpenCode, Codex and Kilo auth
+files, GoCode's credential bundle), so the default routes need none of these. If
+your provider or your project's tests genuinely need one, name it:
+
+```sh
+AUTOCODE_PASS_ENV=ZHIPU_API_KEY,DATABASE_URL autocode "..."
+```
+
+Withholding variables is not a sandbox: an agent with shell access can still read
+files such as `~/.aws/credentials` or `~/.config/gh/hosts.yml`.
+
 Resuming preserves the saved engine, models and separate role sessions. Start a new
 run when switching between Codex and OpenCode; their session IDs cannot be reused
 across engines. A response with an unexpected session ID pauses the run.
@@ -108,13 +129,17 @@ models_command = ["gocode", "models"] # optional; or a static list: models = [..
 version_command = ["gocode", "--version"]
 
 [roles]
-astra = { model = "gpt-5.6-sol", effort = "high" }
-terra = { model = "gpt-5.6-terra", effort = "medium" }
-sol = { model = "gpt-5.6-sol", effort = "high" }
-completion = { model = "gpt-5.6-sol", effort = "medium" }
-glm = { model = "gpt-5.6-sol", effort = "medium" }
-plan_reviewer = { model = "gpt-5.6-sol", effort = "high" }
+astra = { model = "openai/gpt-6-astra", effort = "high" }
+terra = { model = "openai/gpt-6-sol", effort = "medium" }
+sol = { model = "zai-coding-plan/glm-5.3", effort = "high" }
+completion = { model = "zai-coding-plan/glm-5.3", effort = "medium" }
+glm = { model = "zai-coding-plan/glm-5.3", effort = "medium" }
+plan_reviewer = { model = "openai/gpt-6-sol", effort = "high" }
 ```
+
+`[roles]` must keep each verifier on a different model family from what it checks
+(Planner/Plan Reviewer, Builder/Validator, Builder/Completion Owner); a run whose
+roles break that pauses with `PAUSED_CROSS_MODEL` before any agent is launched.
 
 Placeholders are `{model}`, `{effort}`, `{workspace}`, `{report}`, `{schema}`,
 `{prompt_file}`, `{run_dir}`, `{role}`, and `{sandbox}`. `{sandbox}` is

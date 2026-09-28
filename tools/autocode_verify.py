@@ -37,9 +37,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
 try:
-    from . import autocode_support as support
+    from . import autocode_support as support, autocode_agent_env as agent_env
 except ImportError:
-    import autocode_support as support
+    import autocode_support as support, autocode_agent_env as agent_env
 
 PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"
 # Directories that hold tests wherever they appear, and ones that do only at the repository root:
@@ -282,9 +282,10 @@ def test_environment(tree, env=None):
 
     The tree (and its ``src/``) goes first on PYTHONPATH so an editable install
     of the user's checkout (a ``.pth`` file in a linked venv) cannot shadow the
-    code being tested.
+    code being tested. Credential-like variables are withheld: the tests are
+    model-written code (autocode_agent_env).
     """
-    environment = dict(os.environ if env is None else env, PYTHONDONTWRITEBYTECODE="1", CI="1")
+    environment = dict(agent_env.scrubbed(os.environ if env is None else env), PYTHONDONTWRITEBYTECODE="1", CI="1")
     roots = [str(Path(tree) / "src")] if (Path(tree) / "src").is_dir() else []
     roots.append(str(tree))
     if environment.get("PYTHONPATH"):

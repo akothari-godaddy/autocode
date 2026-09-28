@@ -79,6 +79,28 @@ class TaskWorkspaces(unittest.TestCase):
         self.assertFalse((populated / '.git').exists())
         self.assertEqual('do not version this folder', (populated / 'keep.txt').read_text())
 
+    def untracked(self, tree):
+        return w.git(tree, 'status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none')
+
+    def test_task_worktrees_and_run_files_stay_out_of_the_users_git_status(self):
+        one = w.create(self.project, 'one')
+        tree = Path(one['workspace'])
+        (tree / '.autocode/runs/r1').mkdir(parents=True)
+        (tree / '.autocode/runs/r1/state.json').write_text('{}')
+        self.assertEqual('', self.untracked(self.project))
+        self.assertEqual('', w.git(self.project, 'add', '--all', '--dry-run'))
+        self.assertEqual('', self.untracked(tree))
+
+    def test_an_existing_gitignore_in_the_directory_is_left_alone(self):
+        (self.project / '.autocode').mkdir()
+        (self.project / '.autocode/.gitignore').write_text('runs/\n')
+        w.keep_out_of_git(self.project)
+        self.assertEqual('runs/\n', (self.project / '.autocode/.gitignore').read_text())
+        component = w.keep_out_of_git(self.project, '.autocode-components')
+        (component / 'c1').mkdir()
+        (component / 'c1/app.txt').write_text('component work\n')
+        self.assertNotIn('.autocode-components', self.untracked(self.project))
+
     def test_project_snapshot_excludes_nested_task_edits(self):
         before = support.snapshot(self.project)
         one = w.create(self.project, 'one')
@@ -119,6 +141,22 @@ class IsolatedCli(unittest.TestCase):
         self.assertEqual(2, result.returncode, result.stdout + result.stderr)
         self.assertEqual(['keep.txt'], [p.name for p in folder.iterdir()])
         self.assertFalse(missing.exists())
+
+    def test_runs_leave_the_users_git_status_showing_only_source_changes(self):
+        flow = test_subprocess.SubprocessFlow(); flow.setUp()
+        self.addCleanup(flow.doCleanups)
+        env = {**flow.env, 'AUTOCODE_FIXTURE_MODE': 'no-human'}
+        status = lambda tree: w.git(tree, 'status', '--porcelain', '--untracked-files=all')
+        for extra in ([], ['--in-place']):
+            with self.subTest(extra=extra):
+                result = subprocess.run([*flow.entry, '--workspace', str(flow.project), '--engine', 'codex',
+                                         '--no-chat', *extra, 'Build greeting'], cwd=flow.root, env=env,
+                                        capture_output=True, text=True, timeout=35)
+                self.assertEqual(2, result.returncode, result.stdout + result.stderr)
+                self.assertTrue(list(flow.project.glob('.autocode/**/runs/*/state.json')))
+                self.assertEqual('', status(flow.project))
+        for tree in flow.project.glob('.autocode/worktrees/*'):
+            self.assertEqual('', status(tree))
 
     def test_two_concurrent_cli_tasks_and_resume_from_original_project(self):
         flow = test_subprocess.SubprocessFlow(); flow.setUp()

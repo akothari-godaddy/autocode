@@ -45,8 +45,10 @@ from pathlib import Path
 
 try:
     from .autocode_taskrun import TaskRun, TaskRunError
+    from .autocode_workspaces import keep_out_of_git
 except ImportError:
     from autocode_taskrun import TaskRun, TaskRunError
+    from autocode_workspaces import keep_out_of_git
 
 _WORKTREE_LOCK = threading.Lock()
 GIT_IDENTITY = ("-c", "user.name=AutoCode", "-c", "user.email=autocode@localhost")
@@ -307,6 +309,7 @@ class MultiComponentBuild:
         return view
 
     def _new_worktree(self, result: ComponentResult) -> None:
+        keep_out_of_git(self.repo, ".autocode-components")
         result.workspace.parent.mkdir(parents=True, exist_ok=True)
         result.branch = f"components/{result.component.id}-{uuid.uuid4().hex[:8]}"
         # Components in one batch start in parallel threads, but `git worktree add` on one
@@ -329,7 +332,7 @@ class MultiComponentBuild:
                        for cid, r in sorted(self.results.items())}
             document = {"version": self.MANIFEST_VERSION, "architecture": str(self.architecture.directory),
                         "architecture_fingerprint": self.architecture.fingerprint(), "components": entries}
-            self.manifest_path.parent.mkdir(parents=True, exist_ok=True)
+            keep_out_of_git(self.repo, ".autocode-components")
             scratch = self.manifest_path.with_name(f".manifest-{uuid.uuid4().hex}.json")
             scratch.write_text(json.dumps(document, indent=2) + "\n")
             os.replace(scratch, self.manifest_path)
