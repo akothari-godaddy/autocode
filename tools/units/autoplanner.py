@@ -33,7 +33,10 @@ BUG_DIAGNOSIS_RULE = """
 BUG FIX: bug_diagnosis in the handoff data is the Investigator's diagnosis of a reproduced bug, saved in the
 repository at its note_path. It is the requirements: plan the correction of its root_cause, not a feature.
 Every plan must uphold its invariant as an acceptance criterion, with a regression test that fails on the
-original code and passes after the fix, and must keep the project's existing tests passing. Fix the cause,
+original code and passes after the fix, and must keep the project's existing tests passing. Its test_cases
+are those regression tests in plain English: make each one an acceptance criterion quoting its given, when
+and then, and require one test per case named test_<id>_<what it checks> (T1 -> test_t1_...); the runner
+refuses the fix unless every case has such a test that fails on the original code and passes after it. Fix the cause,
 not the symptom, and do not widen the change beyond what the root cause needs. Do not ask the user what the
 fix should achieve; ask only about a genuine choice the diagnosis leaves open.
 Cite the diagnosis in code_refs as exactly its note_path; explanations go in summaries, never inside a path.

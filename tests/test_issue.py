@@ -114,6 +114,16 @@ class PrBodyTests(unittest.TestCase):
         self.assertIn("dates.py | 2 +-", body)
         self.assertIn("run `run-1` from base commit `0123456789ab`", body)
 
+    def test_body_lists_the_english_regression_tests_and_what_proves_them(self):
+        view = {"workflow": "bugfix", "evidence": {
+            "test_cases": [{"id": "T1", "given": "a timeout", "when": "renew()", "then": "1 mutation"},
+                           {"id": "T2", "given": "no timeout", "when": "renew()", "then": "1 mutation"}],
+            "regression_proof": {"verdict": "FAIL", "case_tests": {"T1": ["tests.test_c.test_t1_once"], "T2": []}}}}
+        body = issue_cli.pr_body(self.RECORD, view, "")
+        self.assertIn("## Regression tests in plain English", body)
+        self.assertIn("| T1 | a timeout | renew() | 1 mutation | `tests.test_c.test_t1_once` |", body)
+        self.assertIn("| T2 | no timeout | renew() | 1 mutation | not proven |", body)
+
     def test_missing_evidence_says_so(self):
         body = issue_cli.pr_body(self.RECORD, {"workflow": None}, "")
         self.assertIn("## Acceptance criteria\n\nNone recorded.", body)

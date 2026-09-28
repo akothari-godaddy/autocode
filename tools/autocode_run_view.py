@@ -44,7 +44,9 @@ def evidence(state: dict) -> dict:
     base_commit       the revision the run started from
     acceptance        one row per criterion: its latest recorded outcome and evidence
     findings          the findings ledger: id, status, severity, finding
-    regression_proof  for bug fixes, the runner's own fail-before/pass-after proof, else None
+    regression_proof  for bug fixes, the runner's own fail-before/pass-after proof, else None;
+                      case_tests maps each English test case to the tests that prove it
+    test_cases        a reproduced bug's regression tests in plain English (id, given, when, then), else []
     """
     contract = (state.get("goal_contract") or {}).get("body") or {}
     criteria = contract.get("acceptance_criteria") or state.get("acceptance_criteria") or []
@@ -60,6 +62,7 @@ def evidence(state: dict) -> dict:
                            "status": outcome.get("status"), "evidence": outcome.get("evidence"),
                            "human_reviewed": item.get("id") in reviewed})
     proof = state.get("regression_proof")
+    investigation = state.get("investigation") if isinstance(state.get("investigation"), dict) else {}
     return {
         "outcome": contract.get("intended_outcome"),
         "base_commit": state.get("base_commit"),
@@ -67,8 +70,12 @@ def evidence(state: dict) -> dict:
         "findings": [{key: row.get(key) for key in ("id", "status", "severity", "finding")}
                      for row in state.get("findings_ledger") or [] if isinstance(row, dict)],
         "regression_proof": {key: proof.get(key) for key in
-                             ("verdict", "fail_to_pass", "failures", "unverified", "commands", "source_revision")}
+                             ("verdict", "fail_to_pass", "failures", "unverified", "commands", "source_revision",
+                              "case_tests")}
                             if isinstance(proof, dict) else None,
+        "test_cases": [{key: case.get(key) for key in ("id", "given", "when", "then")}
+                       for case in investigation.get("test_cases") or [] if isinstance(case, dict)]
+                      if investigation.get("outcome") == "reproduced" else [],
     }
 
 

@@ -118,6 +118,16 @@ def pr_body(record: dict, view: dict, diffstat: str) -> str:
     else:
         lines.append("None recorded.")
     proof = evidence.get("regression_proof")
+    cases = evidence.get("test_cases") or []
+    if cases:
+        proven = (proof or {}).get("case_tests") or {}
+        lines += ["", "## Regression tests in plain English", "",
+                  "Written by AutoCode's Investigator before the fix; each needs its own test that fails on the "
+                  "original code and passes with this change.", "",
+                  "| Case | Given | When | Then | Test |", "| --- | --- | --- | --- | --- |"]
+        lines += [f"| {_cell(case.get('id'))} | {_cell(case.get('given'))} | {_cell(case.get('when'))} "
+                  f"| {_cell(case.get('then'))} | {_cell(', '.join(f'`{t}`' for t in proven.get(case.get('id')) or []) or 'not proven')} |"
+                  for case in cases]
     if proof:
         commands = proof.get("commands") or {}
         lines += ["", "## Regression proof", "",
