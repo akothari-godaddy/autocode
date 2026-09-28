@@ -273,9 +273,13 @@ tool execution and total stage runtime:
 | --- | --- | --- |
 | `--max-idle-seconds` | `300` | Stop a provider with no new recognized activity while no tool is running. |
 | `--max-tool-seconds` | `1800` | Stop a tool that exceeds its fixed deadline, including a quiet test command. Output and repeated starts do not extend this deadline. |
-| `--max-stage-seconds` | `0` (off) | Optional hard cap for the entire stage, enforced even while activity continues. |
+| `--max-stage-seconds` | `3600` | Hard cap for the entire stage, enforced even while activity continues. |
+| `--max-seconds` | `43200` | Total active provider time for the run, checked at stage boundaries. |
 
-Each flag accepts `0` to disable that limit. Saved stage limits are preserved,
+Each flag accepts `0` to disable that limit. The iteration ceiling has no new-run
+default; the two time limits above bound a run's spend instead, and AutoResolver may
+double each once (see [Budget ownership](#budget-ownership-and-human-escalation)).
+Runs created before these defaults keep the limits they saved. Saved stage limits are preserved,
 including an existing five-minute cap or an explicit zero; use
 `--max-stage-seconds 0` to deliberately remove a saved hard cap. Saved runs gain
 the inactivity and tool defaults at their next configured launch. Running worker

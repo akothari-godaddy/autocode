@@ -26,10 +26,10 @@ try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode
     from . import autocode_regression as regression
-    from . import autocode_run_view as run_view, autocode_workflows as workflows
+    from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env
 except ImportError:
     import autocode_regression as regression
-    import autocode_support as support, autocode_jobs as jobs, autocode_workflows as workflows
+    import autocode_support as support, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env
     import autocode_goals as goals
     import autocode_interventions as interventions
     import autocode_providers
@@ -668,14 +668,14 @@ def run_role(
     stage_timeout = limits.get("stage_timeout_seconds")
     idle_timeout = limits.get("idle_timeout_seconds", 300)
     tool_timeout = limits.get("tool_timeout_seconds", 1800)
-    child_options = {"start_new_session": True}
+    child_options = {"start_new_session": True, "env": agent_env.scrubbed(os.environ)}
     if engine == "opencode":
         command, env, overrides = opencode.launch(
             route_role, workspace, run_dir, session, model, effort, allow_write,
             planning=joint_stage or report_only, report=output, schema=schema,
             prompt_file=prompt_file, sandbox=sandbox)
         if env:
-            child_options["env"] = env
+            child_options["env"] = agent_env.scrubbed(env)
         prompt = opencode.prompt_for_schema(prompt, read_json(schema), events)
         if not configured_tool:
             write_json(base.with_suffix(".opencode.json"), overrides)
@@ -707,7 +707,7 @@ def run_role(
               "headroom_enabled": state["settings"].get("headroom", {}).get("enabled", False),
               "stage_timeout_seconds": stage_timeout, "idle_timeout_seconds": idle_timeout,
               "tool_timeout_seconds": tool_timeout, "expected_session": session,
-              "supports_sessions": supports_sessions}
+              "supports_sessions": supports_sessions, "withheld_env": agent_env.withheld(os.environ)}
     if route_role != role:
         record["route_role"] = route_role
     record["engine"] = engine
@@ -2253,9 +2253,9 @@ def configure(args, state):
             "limits": {"iteration_ceiling": args.legacy_iteration_ceiling if args.legacy_iteration_ceiling is not None
                        else (state.get("iteration", 0) + args.max_iterations
                              if args.max_iterations is not None else None),
-                       "max_seconds": args.max_seconds,
-                       "stage_timeout_seconds": (getattr(args, "max_stage_seconds", None)
-                                                 if getattr(args, "max_stage_seconds", None) is not None else 0),
+                       "max_seconds": args.max_seconds if args.max_seconds is not None else budget_recovery.RUNNER_DEFAULTS["max_seconds"],
+                       "stage_timeout_seconds": (getattr(args, "max_stage_seconds", None) if getattr(args, "max_stage_seconds", None)
+                                                 is not None else budget_recovery.RUNNER_DEFAULTS["stage_timeout_seconds"]),
                        "idle_timeout_seconds": (getattr(args, "max_idle_seconds", None)
                                                 if getattr(args, "max_idle_seconds", None) is not None else 300),
                        "tool_timeout_seconds": (getattr(args, "max_tool_seconds", None)
@@ -2908,7 +2908,7 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--context-soft-tokens", type=int)
     parser.add_argument("--rotate-after-input-tokens", type=int, help="0 disables checkpointed session rotation")
     parser.add_argument("--legacy-iteration-ceiling", type=int)
-    parser.add_argument("--max-seconds", type=int)
+    parser.add_argument("--max-seconds", type=int, help="Total active provider time for the run (new-run default: 43200; 0 disables)")
     parser.add_argument("--milestone-checkpoints", action="store_true",
                         help="Enable enforced Builder/Validator/review milestone checkpoints on a saved run; new runs enable them by default")
     parser.add_argument("--request-milestone-checkpoints", action="store_true",
@@ -2920,7 +2920,7 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--max-milestone-stalled-reviews", type=int,
                         help="Reviews without progress before replanning (saved default: 3; 0 disables)")
     parser.add_argument("--max-stage-seconds", type=int,
-                        help="Hard runtime limit for one provider stage (new-run default: 0/off; saved limits persist)")
+                        help="Hard runtime limit for one provider stage (new-run default: 3600; 0 disables; saved limits persist)")
     parser.add_argument("--max-idle-seconds", type=int,
                         help="Maximum provider inactivity outside a running tool (default: 300; 0 disables)")
     parser.add_argument("--max-tool-seconds", type=int,

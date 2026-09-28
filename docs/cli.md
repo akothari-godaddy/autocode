@@ -72,7 +72,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--max-milestone-seconds N` | Milestone active-time budget (default 5400; `0` disables). |
 | `--max-milestone-replans N` | Changed-approach replan limit (default 1). |
 | `--max-findings-per-task N` | Cap open findings bundled into one REWORK task. |
-| `--max-idle-seconds` / `--max-tool-seconds` / `--max-stage-seconds` | Watchdog limits (defaults `300` / `1800` / `0`). |
+| `--max-idle-seconds` / `--max-tool-seconds` / `--max-stage-seconds` | Watchdog limits (new-run defaults `300` / `1800` / `3600`; `0` disables). |
+| `--max-seconds N` | Total active provider time for the run (new-run default `43200`, 12 hours; `0` disables). Checked at stage boundaries. |
 | `--no-progress-limit N` | Unchanged-batch limit (`0` disables; never disables the 3-recovery ceiling). |
 | `--max-iterations N` | Optional total iteration ceiling; new runs default to unlimited, and resumes retain their saved limit. |
 | `--test-command CMD` | New runs: the project's test suite command for a bug fix's runner-owned regression proof (default: detected; see [Bug fixes](workflow.md#bug-fixes)). |
