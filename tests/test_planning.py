@@ -644,10 +644,10 @@ class JointFlow(unittest.TestCase):
         self.assertEqual("WAITING_FOR_USER", state["status"])
         self.assertEqual("P2", state["pending_questions"][0]["id"])
         self.assertEqual(2, state["planning"]["astra_calls"])
-        # A clarification request publishes no approval token; the exact
-        # contract token is still rejected.
-        self.assertNotIn("displayed_goal", state)
-        self.launch(["--run-dir", str(run), "--approve-goal", goals.token(state["goal_contract"])], 2)
+        # The draft is displayed with the clarification request, but approving
+        # that displayed token is refused while the question is open.
+        self.launch(["--run-dir", str(run), "--approve-goal", state["displayed_goal"]], 2)
+        self.assertNotEqual("approved", self.saved()[1]["goal_contract"]["approval_status"])
         self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
         self.assertEqual(6, len(self.saved()[1]["stages"]))
 
