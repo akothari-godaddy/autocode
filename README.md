@@ -1,10 +1,16 @@
 # AutoCode
 
-**One conversation for engineering work. Evidence before “done.”**
+**AutoCode runs your coding agent and won't say "done" without evidence: independent checks, exact-version approval, and a record of what was verified.**
+
+**It is for** developers and teams who need to trust agent output — and for people building things they cannot verify line by line. **It is not for** fastest-possible one-shot app generation.
 
 AutoCode is a local, conversation-first system for coordinating AI-assisted software engineering. It turns a rough request into a reviewed, explicitly approved plan, runs bounded implementation work, independently checks the result, and preserves the findings and evidence needed to decide what happens next.
 
 Today, it provides a working planning/build/review runner, local dashboard, provider adapters, and recovery infrastructure. The larger vision is one engineering workspace for discussing, designing, building, debugging, reviewing, and verifying software—not just generating code.
+
+## How it compares
+
+AutoCode shares its goals with spec-driven and autonomous coding agents: you describe an outcome, and a model plans and implements it. It differs in three ways. No model grades its own work — the runner's checks and reviewers are independent of the writer. "Done" is a record, not a claim — every completion carries the commands, results, and findings that support it. And approval is scoped and exact — you approve a specific plan revision and artifact version, not whatever the agent produced last.
 
 > **Our north star:** Describe the engineering outcome you want in one continuous conversation. AutoCode helps make the requirements clear, breaks the work down appropriately, coordinates specialists, combines their results, and shows what is happening, why work is still open, and what evidence supports calling it ready.
 >
