@@ -30,6 +30,22 @@ PROFILES = {
         "effort": {"requirements": "medium", "planner": "high", "reviewer": "high", "builder": "medium",
                    "validator": "high", "completion": "medium", "resolver": "high"},
     },
+    # Every role on OpenAI via the ChatGPT login (user 2026-09-27, while the Z.AI plan
+    # was out of quota). Each verifier is a different model from its producer
+    # (planner astra / plan reviewer sol; builder sol / validator astra / completion
+    # luna), which AutoCode's cross-model check requires; the independence is weaker
+    # than across vendors, so results are comparable only with other openai-only runs.
+    "openai-only": {
+        "provider": "opencode",
+        "models": {
+            "requirements": "openai/gpt-6-luna", "planner": "openai/gpt-6-astra",
+            "reviewer": "openai/gpt-6-sol", "builder": "openai/gpt-6-sol",
+            "validator": "openai/gpt-6-astra", "completion": "openai/gpt-6-luna",
+            "resolver": "openai/gpt-6-astra",
+        },
+        "effort": {"requirements": "medium", "planner": "high", "reviewer": "high", "builder": "medium",
+                   "validator": "high", "completion": "medium", "resolver": "high"},
+    },
 }
 
 # AutoCode's CLI still names these flags after the internal stage names (see docs/models.md).
