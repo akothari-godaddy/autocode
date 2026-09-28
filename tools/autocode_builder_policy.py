@@ -25,7 +25,10 @@ def lane(state):
     lanes = state.setdefault('builder_retries', {})
     previous = lanes.get(state.get('builder_retry_key'))
     if previous and state.get('builder_retry_key') != ident:
-        state['settings']['roles']['terra'] = copy.deepcopy(previous['initial_route'])
+        # An operator may pin a new route while a revised contract is reviewed.
+        # A prior milestone's retry baseline must never undo that instruction.
+        if not state['settings']['roles']['terra'].get('model_pinned'):
+            state['settings']['roles']['terra'] = copy.deepcopy(previous['initial_route'])
         state.setdefault('sessions', {}).pop('terra', None)
     state['builder_retry_key'] = ident
     return lanes.setdefault(ident, {'initial_route': copy.deepcopy(state['settings']['roles']['terra']),

@@ -38,6 +38,18 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual('gpt-6-luna',state['settings']['roles']['terra']['model'])
         self.assertEqual('retry',policy.failure(state,'e3','f'))
 
+    def test_new_contract_preserves_operator_pinned_route(self):
+        state = self.state()
+        policy.guard(state)
+        selected = {'model': 'openai/gpt-6-sol', 'reasoning_effort': 'max',
+                    'engine': 'opencode', 'provider': None, 'model_pinned': True}
+        state['settings']['roles']['terra'] = copy.deepcopy(selected)
+        state['goal_contract']['hash'] = 'reapproved'
+        state = json.loads(json.dumps(state))
+        policy.guard(state)
+        self.assertEqual(selected, state['settings']['roles']['terra'])
+        self.assertEqual(selected, policy.lane(state)['initial_route'])
+
     def test_configured_strong_model_retains_opencode_transport(self):
         state=self.state(); state['settings']['engine']='opencode'
         state['settings']['builder_retry']['strong_model']='gpt-6-sol'
