@@ -14,8 +14,9 @@ completed, 2 when AutoCode stopped for the operator (or refused the call).
 `--analyze --run-dir RUN [--workspace W] [--out DIR]` launches nothing. It
 reads a saved run and prints what AutoCode did: outcome, acceptance
 criteria, findings, stages with their report files, token use, and the code
-changes against the task's base commit. `--out` also saves the report and
-the full diff.
+changes against the task's base commit, plus a summary of AutoCode's
+activity log. `--out` also saves the report, the full diff and a copy of
+RUN/activity.jsonl.
 """
 from __future__ import annotations
 
@@ -24,6 +25,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -89,6 +91,38 @@ def git(workspace: Path, *args: str) -> str:
     result = subprocess.run(["git", "-C", str(workspace), *args], stdin=subprocess.DEVNULL,
                             capture_output=True, text=True, check=False)
     return result.stdout if result.returncode == 0 else f"(git {' '.join(args)} failed: {result.stderr.strip()})\n"
+
+
+def activity_summary(run_dir: Path) -> list[str]:
+    """Summarize RUN/activity.jsonl, AutoCode's own always-on activity log."""
+    path = run_dir / "activity.jsonl"
+    lines = ["", "## Activity", ""]
+    try:
+        entries = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    except (OSError, ValueError):
+        return lines + ["No activity log (runs before activity logging have none)."]
+    calls = [e for e in entries if e.get("event") == "invocation"]
+    finished = [e for e in entries if e.get("event") == "stage_finished"]
+    stops = [e for e in entries if e.get("event") == "transition" and "status" in e.get("changed", [])
+             and e.get("status") not in ("RUNNING",)]
+    seconds = sum(e.get("duration_seconds") or 0 for e in finished)
+    by_caller: dict[str, int] = {}
+    for call in calls:
+        by_caller[call.get("caller", "direct")] = by_caller.get(call.get("caller", "direct"), 0) + 1
+    lines += [f"Log: `{path.name}` ({len(entries)} events, {entries[0]['at']} to {entries[-1]['at']})" if entries else "Log is empty.",
+              f"- Calls that changed the run: {len(calls)} ("
+              + ", ".join(f"{count} {caller}" for caller, count in sorted(by_caller.items())) + ")",
+              f"- Stages finished: {len(finished)}, {round(seconds, 1)}s in stages, "
+              f"{sum(1 for e in finished if e.get('exit_code') not in (0, None))} nonzero exits, "
+              f"{sum(1 for e in finished if e.get('timed_out'))} timeouts, "
+              f"{sum(1 for e in finished if e.get('rejected'))} rejected",
+              "", "Stops and completion:", ""]
+    lines += [f"- {e['at']}: {e.get('status')}" + (f" ({e['stop_reason']})" if e.get("stop_reason") else "")
+              for e in stops] or ["- none"]
+    lines += ["", "Operator decisions and other flagged calls:", ""]
+    decisions = [c for c in calls if set(c.get("flags", [])) - {"--workspace", "--run-dir", "--no-chat", "--engine"}]
+    lines += [f"- {c['at']} [{c.get('caller', 'direct')}]: {' '.join(c.get('flags', []))}" for c in decisions] or ["- none"]
+    return lines
 
 
 def analyze(run_dir: Path, out: Path | None) -> int:
@@ -157,6 +191,7 @@ def analyze(run_dir: Path, out: Path | None) -> int:
                      f"| {stage.get('finished_at') or stage.get('completed_at') or ''} "
                      f"| {'' if seconds is None else round(seconds, 1)} | {stage.get('exit_code', '')} "
                      f"| {used.get('input_tokens') or 0}/{used.get('output_tokens') or 0} | `{output}` |")
+    lines += activity_summary(run_dir)
     lines += ["", "## Code changes", ""]
     diff = ""
     if base:
@@ -179,6 +214,8 @@ def analyze(run_dir: Path, out: Path | None) -> int:
         out.mkdir(parents=True, exist_ok=True)
         (out / "analysis.md").write_text(text)
         (out / "changes.diff").write_text(diff)
+        if (run_dir / "activity.jsonl").is_file():
+            shutil.copy2(run_dir / "activity.jsonl", out / "activity.jsonl")
         text += f"\nSaved `{out / 'analysis.md'}` and the full diff to `{out / 'changes.diff'}`.\n"
     sys.stdout.write(text)
     return 0
@@ -200,7 +237,9 @@ def run(argv: list[str]) -> int:
     command = autocode_command()
     status_only = "--status" in argv or "--dry-run" in argv
     run_dir = option_value(argv, "--run-dir")
-    with subprocess.Popen([*command, *argv, "--no-chat"], stdin=subprocess.DEVNULL,
+    # AutoCode's activity log records calls made through this wrapper as "unattended".
+    env = {**os.environ, "AUTOCODE_CALLER": "unattended"}
+    with subprocess.Popen([*command, *argv, "--no-chat"], stdin=subprocess.DEVNULL, env=env,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
         assert process.stdout is not None
         for line in process.stdout:

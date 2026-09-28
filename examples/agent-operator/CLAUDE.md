@@ -20,13 +20,15 @@ to analyze a run:
 
 1. Run `autocode-unattended --analyze --run-dir <run>` (add `--out <dir>` if
    the operator wants the report and full diff saved).
-2. Read the changed files in the task workspace and the stage reports it
-   lists (paths are relative to the run directory).
+2. Read the changed files in the task workspace, the stage reports it lists
+   (paths are relative to the run directory), and the run's `activity.jsonl`:
+   AutoCode's own record of every call, transition, stage, stop and approval.
 3. Report to the operator:
    - whether each acceptance criterion is really met, judged from the code
      and the recorded evidence, not from the status alone;
    - bugs, missing cases, or risky changes you see in the diff;
-   - open or repeated findings, and stages that retried or took unusually long;
+   - open or repeated findings, and stages that retried, failed, timed out or
+     took unusually long, from the activity log;
    - anything the run claims that the evidence does not support.
 
 Analysis is read-only. Do not fix what you find; describe it, and the

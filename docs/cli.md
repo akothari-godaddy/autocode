@@ -110,7 +110,8 @@ When a run completes, the wrapper prints the command to analyze it:
 reads the saved run and reports the outcome, each acceptance criterion with its
 recorded status and evidence, findings, stages (role, time, exit, tokens, report
 path), and the code changes against the task's base commit, including new untracked
-files. `--out` saves `analysis.md` and the full `changes.diff`.
+files, plus a summary of the run's always-on [activity log](execution.md#activity-log).
+`--out` saves `analysis.md`, the full `changes.diff` and a copy of `activity.jsonl`.
 
 To lock a Claude Code agent to it, launch the agent from a copy of
 [`examples/agent-operator`](../examples/agent-operator): its `.claude/settings.json`
