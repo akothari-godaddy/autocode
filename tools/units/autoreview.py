@@ -1,8 +1,6 @@
 """Autoreview owns independent verification and evidence validation, the review
 workflow's Reviewer stage (autocode_review_job) and the design workflow's
 Architect stage (autocode_design_job)."""
-import copy
-
 try:
     from .. import autocode_design_job as design_job, autocode_goals as goals, autocode_review_job as review_job
 except ImportError:
@@ -10,11 +8,10 @@ except ImportError:
     import autocode_goals as goals
     import autocode_review_job as review_job
 from . import autoplanner
-from .common import ModelRequest, execution_request
+from .common import ModelRequest, capped_route, execution_request
 
 STAGE = review_job.STAGE
 JOBS = {review_job.STAGE: review_job, design_job.STAGE: design_job}
-EFFORTS = ("low", "medium", "high", "xhigh", "max")
 # The Architect copies the Plan Reviewer's model but not its effort beyond this: at
 # "high", MiMo twice spent its whole reasoning budget on a dense design and returned
 # no report at all (2026-09-27, design-review-sound live runs).
@@ -22,11 +19,7 @@ ARCHITECT_MAX_EFFORT = "medium"
 
 
 def architect_route(roles):
-    route = copy.deepcopy(roles.get("plan_reviewer") or roles["astra"])
-    effort = route.get("reasoning_effort")
-    if effort not in EFFORTS or EFFORTS.index(effort) > EFFORTS.index(ARCHITECT_MAX_EFFORT):
-        route["reasoning_effort"] = ARCHITECT_MAX_EFFORT
-    return route
+    return capped_route(roles.get("plan_reviewer") or roles["astra"], ARCHITECT_MAX_EFFORT)
 
 
 def prepare(state, stage, state_path, schema_dir):

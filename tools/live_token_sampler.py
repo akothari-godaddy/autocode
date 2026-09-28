@@ -86,7 +86,7 @@ def model_resolver(state: dict):
     roles = (state.get("settings") or {}).get("roles") or {}
     role_model = {k: (v or {}).get("model") for k, v in roles.items()}
     stage_role = {
-        "recognize_workflow": "requirements", "review_change": "sol", "investigate_bug": "investigator", "review_design": "architect",
+        "recognize_workflow": "requirements", "review_change": "sol", "investigate_bug": "investigator", "review_design": "architect", "answer_question": "analyst",
         "requirements_gather": "requirements",
         "requirements_gather_report_repair": "requirements",
         "astra_discovery": "astra", "astra_challenge": "plan_reviewer",

@@ -27,7 +27,9 @@ You → Autopilot: recognize the kind of job (build, bugfix, review, design, dis
    design → Architect first: a design review is written to review/design-review.json (goals met,
             blocking/advisory concerns, questions for you), repository untouched, run complete;
             a request for a NEW design → the build pipeline below
-   everything else, for now → the build pipeline below
+   discuss → Analyst only: an answer with evidence tied to repository files (and the note the
+            request asks for, written by the runner), repository untouched, run complete
+   build → the build pipeline below
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG
 Planner → Plan Reviewer → Planner revision → Plan Reviewer final → your approval

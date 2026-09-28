@@ -1,19 +1,35 @@
 """Read-only diagnosis and bounded repair planning; never writes application code.
 
-Owns two stages: ``astra_resolve`` (why did a reviewed build fail, and what bounded
-rework fixes it) and the bug-fix workflow's ``investigate_bug`` (autocode_bug_job:
-reproduce a reported misbehavior and diagnose it before any fix exists)."""
+Owns three stages: ``astra_resolve`` (why did a reviewed build fail, and what bounded
+rework fixes it), the bug-fix workflow's ``investigate_bug`` (autocode_bug_job:
+reproduce a reported misbehavior and diagnose it before any fix exists), and the
+discuss workflow's ``answer_question`` (autocode_discuss_job: answer a question or
+weigh a tradeoff from the repository, building nothing)."""
 import copy
 import json
 from pathlib import Path
 try:
     from .. import autocode_support as support, autocode_goals as goals, autocode_bug_job as bug_job
+    from .. import autocode_discuss_job as discuss_job
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
     import autocode_bug_job as bug_job
+    import autocode_discuss_job as discuss_job
 from . import autoplanner
-from .common import ModelRequest, execution_request
+from .common import ModelRequest, capped_route, execution_request
+
+
+def prepare_answer(state):
+    """The Analyst inherits the planner model on its own route and session, effort capped
+    at medium, with the same scratch-copy rule as the Investigator."""
+    state["phase"] = "INVESTIGATING"
+    state["settings"]["roles"].setdefault("analyst", capped_route(state["settings"]["roles"]["astra"]))
+    prompt, metrics = discuss_job.prompt(
+        state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
+        state["settings"].get("context_soft_tokens", 10000),
+        autoplanner.engine_for(state["settings"], "analyst"))
+    return ModelRequest("astra", "analyst", prompt, metrics, discuss_job.SCHEMA, True)
 
 
 def prepare_investigation(state):
@@ -30,8 +46,11 @@ def prepare_investigation(state):
 
 
 def apply_job(stage, state, value, record, workspace):
-    """Autopilot hands the Investigator's validated report here. A small reproduced bug
-    becomes one Builder task at once; anything else continues where bug_job.apply sent it."""
+    """Autopilot hands a job stage's validated report here. The Analyst's answer completes
+    the run. For the Investigator, a small reproduced bug becomes one Builder task at once;
+    anything else continues where bug_job.apply sent it."""
+    if stage == discuss_job.STAGE:
+        return discuss_job.apply(state, value, record, workspace)
     bug_job.apply(state, value, record, workspace)
     if bug_job.small_correction(state):
         start_small_correction(state, workspace)
@@ -76,6 +95,8 @@ def guard(state, workspace):
 def prepare(state, stage, state_path, schema_dir):
     if stage == bug_job.STAGE:
         return prepare_investigation(state)
+    if stage == discuss_job.STAGE:
+        return prepare_answer(state)
     if stage != 'astra_resolve':
         raise ValueError(f'Autoresolver cannot run {stage}')
     guard(state, Path(state['workspace']))

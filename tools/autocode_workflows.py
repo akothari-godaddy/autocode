@@ -22,7 +22,9 @@ WORKFLOWS = ("build", "bugfix", "review", "design", "discuss")
 REVIEW_STAGE = "review_change"
 INVESTIGATE_STAGE = "investigate_bug"
 DESIGN_STAGE = "review_design"
-FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE, "design": DESIGN_STAGE}
+DISCUSS_STAGE = "answer_question"
+FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE, "design": DESIGN_STAGE,
+               "discuss": DISCUSS_STAGE}
 
 # Who may approve a goal contract. Normally only the user (actor "user_cli"). A
 # contract a workflow built under a policy the user agreed to carries one of these

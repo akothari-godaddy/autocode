@@ -25,17 +25,17 @@ class ModuleTests(unittest.TestCase):
     def test_apply_saves_the_kind_and_hands_over(self):
         state = fresh()
         workflows.begin(state, "requirements_gather")
-        workflows.apply(state, {"workflow": "discuss", "reason": "asks a question", "signals": ["?"]},
+        workflows.apply(state, {"workflow": "build", "reason": "asks for a feature", "signals": ["add"]},
                         {"output": "/run/recognize_workflow-01.json"})
-        self.assertEqual("discuss", workflows.kind(state))
-        self.assertEqual("discuss", run_view.view(state)["workflow"])
-        # Kinds without a first stage of their own continue into the build pipeline for now.
+        self.assertEqual("build", workflows.kind(state))
+        self.assertEqual("build", run_view.view(state)["workflow"])
+        # A build starts with the build pipeline's own entry stage.
         self.assertEqual("requirements_gather", state["next_stage"])
         self.assertEqual("model", state["workflow"]["source"])
 
     def test_review_bugfix_and_design_get_their_own_first_stage_and_keep_the_build_entry(self):
         for kind, stage in (("review", workflows.REVIEW_STAGE), ("bugfix", workflows.INVESTIGATE_STAGE),
-                            ("design", workflows.DESIGN_STAGE)):
+                            ("design", workflows.DESIGN_STAGE), ("discuss", workflows.DISCUSS_STAGE)):
             state = fresh()
             workflows.begin(state, "requirements_gather")
             workflows.apply(state, {"workflow": kind, "reason": "", "signals": []}, {})
@@ -84,8 +84,8 @@ class PlannerUnitTests(unittest.TestCase):
     def test_recognize_applies_and_keeps_the_run_running(self):
         state = fresh()
         workflows.begin(state, "requirements_gather")
-        autoplanner.recognize(state, {"workflow": "discuss", "reason": "r", "signals": []}, {"output": "o"})
-        self.assertEqual("discuss", run_view.view(state)["workflow"])
+        autoplanner.recognize(state, {"workflow": "build", "reason": "r", "signals": []}, {"output": "o"})
+        self.assertEqual("build", run_view.view(state)["workflow"])
         self.assertEqual(("RUNNING", "requirements_gather"), (state["status"], state["next_stage"]))
 
 

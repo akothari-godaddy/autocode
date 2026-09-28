@@ -9,5 +9,3 @@ category = "investigate"
 [fake]
 check = "python3 -c \"import json; json.load(open('docs/notes/caches.json')); print('ok')\""
 
-[run]
-known_failure = "AutoCode has no investigation workflow; every prompt becomes a build brief"

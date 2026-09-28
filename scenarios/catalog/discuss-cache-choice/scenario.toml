@@ -10,5 +10,3 @@ category = "discuss"
 [fake]
 check = "python3 -c \"import json; json.load(open('docs/decisions/metadata-cache.json')); print('ok')\""
 
-[run]
-known_failure = "AutoCode has no discussion workflow; every prompt becomes a build brief"

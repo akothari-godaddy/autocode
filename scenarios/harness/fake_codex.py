@@ -188,9 +188,27 @@ def design() -> dict:
                            "options": [str(o) for o in q.get("options", [])]} for q in saved.get("questions", [])]}
 
 
+def answer() -> dict:
+    """The fake's Analyst: the note in the solution it was told to apply (the one file under docs/),
+    returned as note_path/note_content for the runner to write; stray solution files are applied
+    like a model that edits code it was told not to, so the runner's read-only check is exercised."""
+    root = Path(CONFIG["reference"])
+    notes = sorted(p for p in (root / "docs").rglob("*") if p.is_file() and p.name != "README.md") \
+        if (root / "docs").is_dir() else []
+    stray_edits("docs/")
+    tracked = [ref for ref in source_refs() if ref != "task"]
+    note = notes[0] if notes else None
+    return {"answer": "Scripted answer from the scenario solution",
+            "evidence": [{"claim": "Scripted evidence", "source": tracked[0] if tracked else "README.md"}],
+            "questions": [], "note_path": note.relative_to(root).as_posix() if note else "",
+            "note_content": note.read_text() if note else ""}
+
+
 def report_for(stage: str, data: dict) -> dict:
     if stage == "recognize_workflow":
         return recognize(data.get("task") or CONFIG["brief"])
+    if stage == "answer_question":
+        return answer()
     if stage == "review_change":
         return review()
     if stage == "review_design":
