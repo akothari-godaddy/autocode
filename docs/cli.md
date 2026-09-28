@@ -17,6 +17,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `autoresolver` | Read-only diagnosis of reviewer-requested rework. |
 | `autocode ui` / `autocode-ui` | Figma design (and optional `--build` handoff to implementation). |
 | `autocode tasks` / `autocode-tasks` | Run a multi-lane task flow file. |
+| `autocode program plan\|derive\|run\|status` / `autocode-program` | Plan a large requirement, derive a workstream manifest from the approved plan, run workstreams in parallel worktrees merged onto an integration branch (see [Programs](program.md)). |
 | `autocode-dashboard` | Local browser dashboard. |
 | `autocode --unit autoplanner\|autocode\|autoreview\|autoresolver` | Select one unit; omitting `--unit` runs all. |
 | `autocode compare-baseline` | Compare Vitest failure evidence (see [Execution](execution.md#baseline-comparison)). |
@@ -56,6 +57,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | Flag | Meaning |
 | --- | --- |
 | `--resume-paused` | Acknowledge an operational pause and continue. Does not approve a draft. |
+| `--diagnose-failed-stage` | With `--resume-paused`, request bounded read-only diagnosis of a recorded repeated Builder report failure. Alternative to `--retry-failed-stage`; not a permission or budget override. |
 | `--planning-review-call-limit N` | At a reconciled planning-budget pause, save a finite total allowance for the current cycle only. No model launch or approval; resume separately. |
 | `--pause-after-stage` | Stop at the next saved boundary. |
 | `--retry-builder M2` | Explicitly retry a failed milestone Builder (after all workers stopped). |
@@ -83,6 +85,21 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--<role>-provider` | Per-role Codex provider override (Responses API). |
 | `--reasoning-effort`, `--<role>-reasoning-effort` | Shared / per-role reasoning effort (`low`, `medium`, `high`, `xhigh`, …). |
 | `--migrate-only` | Run the opt-in legacy migration and stop (see [Testing](testing.md#legacy-migration--opt-in-only)). |
+
+### Programs
+
+| Flag | Meaning |
+| --- | --- |
+| `program run MANIFEST --max-parallel N` | Concurrent workstreams (default 2). |
+| `program run MANIFEST --authorize-deployment` | Allow `deployment` workstreams to start or resume; their runs still need plan approval. Descriptor generation is ordinary `code`. |
+| `program run MANIFEST --retry-workstream ID` | Explicitly retry a failed workstream in its existing worktree/checkpoint, without bypassing child gates. Repeat for multiple failed workstreams. |
+| `program run MANIFEST --dry-run` | Validate and preview without creating branches or worktrees. |
+| `program derive --run-dir RUN --output program.json` | Write the manifest from an approved plan; refuses unapproved plans. |
+
+Unrecognized `program run` flags (for example `--engine`, model overrides) are passed through to every child code run.
+
+Program manifests support `code`, `integration`, and `deployment`. UI workstreams are
+deferred until the UI runner supports checkpoint recovery; use `autocode ui` separately.
 
 ### Figma / UI
 

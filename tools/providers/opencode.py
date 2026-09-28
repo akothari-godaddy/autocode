@@ -345,7 +345,7 @@ def _repeated_repair_report(final):
     return reports[0]
 
 
-def final_report(path, *, recover_wrapped=False):
+def final_report(path, *, recover_wrapped=False, response_path=None):
     rows = raw_events(path)
     normalized = normalized_events(rows)
     if not any(row.get("type") == "turn.completed" for row in normalized):
@@ -359,6 +359,10 @@ def final_report(path, *, recover_wrapped=False):
         if row.get("type") == "text" and message and part.get("messageID") == message:
             texts[part["id"]] = part.get("text", "")
     final = "\n".join(texts.values()).strip()
+    if response_path is not None:
+        # Retain only the completed assistant message, not tool output or earlier
+        # turns, even when its JSON is malformed and parsing below must reject it.
+        Path(response_path).write_text(final)
     report = None
     try:
         report = json.loads(final)

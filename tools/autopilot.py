@@ -133,8 +133,6 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     """Call one unit using the runner's durable provider/recovery services."""
     if stage == 'terra':
         builder_policy.guard(state)
-    if stage == 'astra_diagnose':
-        runtime.resolver_runtime.charge_diagnostic_dispatch(runtime, state, run_dir, workspace)
     runtime.milestones.dispatch_guard(state, stage)
     runtime.workflow.dispatch_guard(state, stage, workspace)
     unit = unit_module(stage)
