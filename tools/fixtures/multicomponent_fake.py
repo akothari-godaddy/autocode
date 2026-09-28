@@ -90,7 +90,7 @@ def report_for(stage: str, component_id: str, spec: dict, data: dict) -> dict:
     planning = {"code_refs": source_refs(), "contract_changes": [], "conflict_resolutions": [],
                "requirement_trace": [{"requirement_id": "R1", "disposition": "covered", "evidence": spec["description"]}]}
     if stage == "recognize_workflow":
-        return {"workflow": "build", "reason": "Scripted: component builds are builds", "signals": []}
+        return {"workflow": "build", "reason": "Scripted: component builds are builds", "signals": [], "design_document": ""}
     if stage == "requirements_gather":
         return {"summary": "Scripted component requirements", "intended_outcome": spec["description"],
                 "required_behaviors": [spec["description"]], "constraints": [], "acceptance_tests": [spec["check"]],

@@ -29,7 +29,13 @@ You → Autopilot: recognize the kind of job (build, bugfix, review, design, dis
             a request for a NEW design → the build pipeline below
    discuss → Analyst only: an answer with evidence tied to repository files (and the note the
             request asks for, written by the runner), repository untouched, run complete
-   build → the build pipeline below
+   build → the build pipeline below;
+           implementing an APPROVED design document as written → Architect checks it against the
+             repository first, repository untouched:
+             conflicts (a frozen API, a documented invariant) → written to <design>.blockers.json,
+               run stops (PAUSED_DESIGN_CONFLICT), nothing built, you decide;
+             no conflicts → the design's binding decisions become a constraint and the pipeline starts
+               at the Planner (no requirements gathering; the Planner may not redesign or ask)
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG
 Planner → Plan Reviewer → Planner revision → Plan Reviewer final → your approval

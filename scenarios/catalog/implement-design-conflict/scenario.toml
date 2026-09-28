@@ -11,4 +11,3 @@ check = "python3 -c \"import json; json.load(open('docs/design/rate-limiter-v2.b
 
 [run]
 expected = "stop"
-known_failure = "AutoCode does not treat a supplied design as a constraint or check it against repository constraints before building"

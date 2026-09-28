@@ -185,7 +185,8 @@ def main() -> int:
     }
 
     if stage == "recognize_workflow":
-        report = {"workflow": "build", "reason": "Handwritten fixture: every request is a build", "signals": []}
+        report = {"workflow": "build", "reason": "Handwritten fixture: every request is a build", "signals": [],
+                  "design_document": ""}
     elif stage == "requirements_gather":
         report = {
             "summary": "Handwritten greeting requirements; no model planning",

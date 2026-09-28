@@ -3,7 +3,9 @@ workflow's Reviewer stage (autocode_review_job) and the design workflow's
 Architect stage (autocode_design_job)."""
 try:
     from .. import autocode_design_job as design_job, autocode_goals as goals, autocode_review_job as review_job
+    from .. import autocode_design_check_job as design_check_job
 except ImportError:
+    import autocode_design_check_job as design_check_job
     import autocode_design_job as design_job
     import autocode_goals as goals
     import autocode_review_job as review_job
@@ -11,7 +13,7 @@ from . import autoplanner
 from .common import ModelRequest, capped_route, execution_request
 
 STAGE = review_job.STAGE
-JOBS = {review_job.STAGE: review_job, design_job.STAGE: design_job}
+JOBS = {review_job.STAGE: review_job, design_job.STAGE: design_job, design_check_job.STAGE: design_check_job}
 # The Architect copies the Plan Reviewer's model but not its effort beyond this: at
 # "high", MiMo twice spent its whole reasoning budget on a dense design and returned
 # no report at all (2026-09-27, design-review-sound live runs).
@@ -29,7 +31,7 @@ def prepare(state, stage, state_path, schema_dir):
         # if the workspace itself changed (review_job.apply).
         state["phase"] = "REVIEWING"
         return job_request(state, review_job, "sol", autoplanner.route_for(state, stage, "sol"))
-    if stage == design_job.STAGE:
+    if stage in (design_job.STAGE, design_check_job.STAGE):
         # The Architect inherits the Plan Reviewer's model (the planner's own when
         # there is none), with effort capped at ARCHITECT_MAX_EFFORT, on a route of
         # its own so its session never leaks into later planning. Same
@@ -37,7 +39,7 @@ def prepare(state, stage, state_path, schema_dir):
         state["phase"] = "REVIEWING"
         roles = state["settings"]["roles"]
         roles.setdefault("architect", architect_route(roles))
-        return job_request(state, design_job, "astra", "architect")
+        return job_request(state, JOBS[stage], "astra", "architect")
     if stage not in ("sol", "astra_review", "astra_checkpoint"):
         raise ValueError(f"Autoreview cannot run {stage}")
     request = execution_request(state, stage, state_path, schema_dir)

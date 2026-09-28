@@ -8,6 +8,3 @@ category = "feature"
 
 [fake]
 check = "python3 -m unittest discover -s tests -t ."
-
-[run]
-known_failure = "AutoCode re-gathers requirements and asks about decisions the approved design already makes"

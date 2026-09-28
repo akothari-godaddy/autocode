@@ -15,6 +15,15 @@ except ImportError:
     import autocode_workflows as workflows
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
+# A build that implements an approved design (autocode_design_check_job) skips requirements
+# gathering; every planning stage gets this rule and the design's binding decisions.
+APPROVED_DESIGN_RULE = """
+APPROVED DESIGN: approved_design in the handoff data is a design the user has already approved, checked
+against this repository with no conflicts. It is a constraint, not a suggestion: plan exactly what it
+specifies (module and file layout, names, signatures, rules, rejected alternatives). Do not redesign it,
+do not revisit its rejected alternatives, and do not ask the user about decisions it already makes; ask
+only about something it genuinely leaves open. Trace each of its constraints to a milestone.
+"""
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
 RECOGNIZE = workflows.STAGE
@@ -358,6 +367,8 @@ def context(state, stage, state_path):
     if state["settings"].get("figma_file"):
         packet["figma_file"] = state["settings"]["figma_file"]
     packet['user_events'] = state.get('user_events', [])
+    if state.get('design_constraint'):
+        packet['approved_design'] = state['design_constraint']
     if stage == "requirements_gather":
         packet['previous_requirements_handoff'] = state.get('requirements_handoff')
     if stage in ("requirements_gather", "astra_discovery"):
@@ -369,7 +380,8 @@ def context(state, stage, state_path):
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
         goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY)
-    prompt = PROMPTS[stage] + figma_instruction + planning_policy + s.COMMON + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n" + json.dumps(packet, indent=2)
+    design_rule = APPROVED_DESIGN_RULE if state.get('design_constraint') else ""
+    prompt = PROMPTS[stage] + design_rule + figma_instruction + planning_policy + s.COMMON + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n" + json.dumps(packet, indent=2)
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
                     "soft_budget_tokens": state["settings"].get("context_soft_tokens", 10000)}
 

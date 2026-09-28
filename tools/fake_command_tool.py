@@ -120,7 +120,7 @@ common = {"contract_revision": contract["revision"], "contract_hash": contract["
           "deferred_backlog": ["Optional web UI"], "user_request": {"kind": "none", "discovered": "", "impact": "",
               "decision_needed": "", "options": [], "proposed_delta": ""}}
 if stage == "recognize_workflow":
-    result = {"workflow": "build", "reason": "Offline fixture: every request is treated as a build", "signals": []}
+    result = {"workflow": "build", "reason": "Offline fixture: every request is treated as a build", "signals": [], "design_document": ""}
 elif stage == "requirements_gather":
     draft = body(questions=not data["saved_answers"], human=False)
     result = {

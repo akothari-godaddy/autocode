@@ -108,7 +108,20 @@ def recognize(brief: str) -> dict:
         kind, signal = "discuss", "a question"
     else:
         kind, signal = "build", "no other signal"
-    return {"workflow": kind, "reason": f"Scripted keyword rule: {signal}", "signals": [signal]}
+    named = re.search(r"(docs/design/[\w./-]+\.md)", brief)
+    design = named.group(1) if kind == "build" and named and has(r"approved") else ""
+    return {"workflow": kind, "reason": f"Scripted keyword rule: {signal}", "signals": [signal],
+            "design_document": design}
+
+
+def check_design(data: dict) -> dict:
+    """The fake's design check: the conflicts in the solution's <design>.blockers.json, if it has one
+    (the run must stop), otherwise no conflicts and one binding decision (planning goes ahead)."""
+    design = data.get("design_document") or ""
+    blockers = Path(CONFIG["reference"]) / Path(design).with_suffix(".blockers.json") if design else None
+    conflicts = json.loads(blockers.read_text()).get("conflicts", []) if blockers and blockers.is_file() else []
+    return {"design_document": design, "summary": "Scripted design check from the scenario solution",
+            "constraints": [] if conflicts else [f"Implement {design} exactly as written"], "conflicts": conflicts}
 
 
 def stray_edits(allowed: str) -> None:
@@ -209,6 +222,8 @@ def report_for(stage: str, data: dict) -> dict:
         return recognize(data.get("task") or CONFIG["brief"])
     if stage == "answer_question":
         return answer()
+    if stage == "check_design":
+        return check_design(data)
     if stage == "review_change":
         return review()
     if stage == "review_design":

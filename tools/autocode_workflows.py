@@ -14,6 +14,7 @@ State key written here (and read by autocode_run_view, autopilot):
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 STAGE = "recognize_workflow"
 WORKFLOWS = ("build", "bugfix", "review", "design", "discuss")
@@ -23,6 +24,9 @@ REVIEW_STAGE = "review_change"
 INVESTIGATE_STAGE = "investigate_bug"
 DESIGN_STAGE = "review_design"
 DISCUSS_STAGE = "answer_question"
+# A build that implements an existing, approved design document starts by checking
+# the design against the repository (autocode_design_check_job).
+DESIGN_CHECK_STAGE = "check_design"
 FIRST_STAGE = {"review": REVIEW_STAGE, "bugfix": INVESTIGATE_STAGE, "design": DESIGN_STAGE,
                "discuss": DISCUSS_STAGE}
 
@@ -58,6 +62,8 @@ SCHEMA = {
         "workflow": {"type": "string", "enum": list(WORKFLOWS)},
         "reason": {"type": "string"},
         "signals": {"type": "array", "items": {"type": "string"}},
+        # Optional so older reports stay valid; generation schemas require every field.
+        "design_document": {"type": "string"},
     },
 }
 
@@ -88,8 +94,10 @@ How to decide:
   lead to a build later in the same conversation.
 
 Return JSON only: {"workflow": one of build|bugfix|review|design|discuss, "reason": one sentence,
-"signals": the words or phrases in the request that decided it}. Read nothing but the request and the
-file listing below; do not open files.
+"signals": the words or phrases in the request that decided it, "design_document": for a build that asks
+to implement an EXISTING design document as written (approved, decided, "don't redesign it"), that
+document's path in the repository; otherwise ""}. Read nothing but the request and the file listing
+below; do not open files.
 """
 
 
@@ -99,7 +107,10 @@ def packet(state: dict, inventory: dict | None = None, engine: str | None = None
     # them from the packet.
     return {"stage": STAGE, "task": state["task"], "workspace": state.get("workspace"),
             "execution_engine": engine, "workspace_inventory": inventory or {},
-            "goal_contract": None, "current_task": None, "saved_answers": {}}
+            "goal_contract": None, "current_task": None, "saved_answers": {},
+            # A request with a Figma design is still recognized by what the user wants back.
+            **({"figma_file": state["settings"]["figma_file"]}
+               if (state.get("settings") or {}).get("figma_file") else {})}
 
 
 def prompt(state: dict, inventory: dict | None = None, soft_budget_tokens: int = 10000,
@@ -124,7 +135,22 @@ def apply(state: dict, value: dict, record: dict) -> None:
     state["workflow"] = {"kind": value["workflow"], "reason": value.get("reason", ""),
                          "signals": list(value.get("signals") or []), "source": "model",
                          "output": record.get("output"), "then": then}
-    state.update(status="RUNNING", next_stage=FIRST_STAGE.get(value["workflow"]) or then)
+    design = approved_design(state, value)
+    if design:
+        state["workflow"]["design_document"] = design
+    state.update(status="RUNNING",
+                 next_stage=DESIGN_CHECK_STAGE if design else FIRST_STAGE.get(value["workflow"]) or then)
+
+
+def approved_design(state: dict, value: dict) -> str:
+    """The approved design a build asks to implement, if the recognizer named one that exists."""
+    design = str(value.get("design_document") or "").strip()
+    if value.get("workflow") != "build" or not design:
+        return ""
+    parts = Path(design).parts
+    if Path(design).is_absolute() or ".." in parts or not (Path(state.get("workspace") or ".") / design).is_file():
+        return ""
+    return design
 
 
 def kind(state: dict) -> str | None:
