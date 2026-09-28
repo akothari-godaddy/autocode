@@ -5,7 +5,7 @@ try:
 except ImportError:
     import autocode_support as s
 
-DEFAULTS = {'enabled': True, 'ordinary_retries': 1, 'strong_model': 'xiaomi-token-plan-sgp/mimo-v2.6-pro',
+DEFAULTS = {'enabled': True, 'ordinary_retries': 1, 'strong_model': 'openai/gpt-6-astra',
             'strong_reasoning_effort': 'high'}
 
 

@@ -27,27 +27,32 @@ from pathlib import Path
 # These are not verified current provider prices or subscription charges.
 REFERENCE_PRICES = {
     "zai-coding-plan/glm-5.3": {"input": 0.60, "output": 2.20},
+    # Only for pricing saved runs from before MiMo was dropped (user 2026-09-27); new runs
+    # never use it (FORBIDDEN_MODEL_MARKERS below).
     "xiaomi-token-plan-sgp/mimo-v2.6-pro": {"input": 0.30, "output": 1.20},
 }
 
+# Never MiMo (user 2026-09-27); OpenAI GPT-6 via the ChatGPT login replaces it.
 ALLOWED_MODEL_PREFIXES = (
     "zai-coding-plan/glm-5.3",
-    "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+    "openai/gpt-6-astra",
+    "openai/gpt-6-sol",
+    "openai/gpt-6-luna",
 )
-FORBIDDEN_MODEL_MARKERS = ("-free", "flash", "mimo-token-plan/", "glm-5.2", "gpt-")
+FORBIDDEN_MODEL_MARKERS = ("-free", "flash", "mimo-token-plan/", "xiaomi-token-plan-sgp/", "mimo-", "glm-5.2")
 
 # docs/models.md ladder entry points + user independence rule (2026-09-26):
-# verifier never equals producer. MiMo checks GLM work and GLM checks MiMo work.
+# verifier never equals producer. OpenAI GPT checks GLM work and GLM checks GPT work.
 # Start at the ladder's medium rung; shift to higher reasoning in-stage when needed.
 LADDER = {
     "requirements": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
     "glm": {"model": "zai-coding-plan/glm-5.3", "effort": "high"},
-    "plan_reviewer": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "high"},
-    "terra": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "medium"},
+    "plan_reviewer": {"model": "openai/gpt-6-astra", "effort": "high"},
+    "terra": {"model": "openai/gpt-6-sol", "effort": "medium"},
     "sol": {"model": "zai-coding-plan/glm-5.3", "effort": "high"},
     "completion": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
-    "astra": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "high"},
-    "resolver": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro", "effort": "high"},
+    "astra": {"model": "openai/gpt-6-astra", "effort": "high"},
+    "resolver": {"model": "openai/gpt-6-astra", "effort": "high"},
 }
 
 # producer role -> verifier role(s) that must use a different model family
@@ -134,6 +139,7 @@ def load_state(run_dir: Path) -> dict:
 def stage_token_rows(state: dict) -> list[dict]:
     # stage id -> role key used in settings
     stage_role = {
+        "recognize_workflow": "requirements", "review_change": "sol", "investigate_bug": "investigator", "review_design": "architect", "answer_question": "analyst", "check_design": "architect", "investigate_stuck": "stuck_investigator",
         "requirements_gather": "requirements", "requirements_gather_report_repair": "requirements",
         "astra_discovery": "astra", "astra_challenge": "plan_reviewer",
         "glm_revise": "glm", "astra_finalize": "plan_reviewer",
@@ -226,11 +232,8 @@ def model_route_checks(state: dict, run_dir: Path) -> dict:
     uniq = sorted(set(launched))
     bad = [m for m in uniq if any(f in m for f in FORBIDDEN_MODEL_MARKERS)]
     bad += [m for m in uniq if m.startswith("mimo-token-plan/")]
-    # only accept the two subscription families for this run
-    ok_models = all(
-        m.startswith("zai-coding-plan/glm-5.3") or m.startswith("xiaomi-token-plan-sgp/mimo-v2.6-pro")
-        for m in uniq
-    ) if uniq else False
+    # only accept the subscription models for this run
+    ok_models = all(m.startswith(ALLOWED_MODEL_PREFIXES) for m in uniq) if uniq else False
     return {"launched_models": uniq, "pinned_roles": pinned, "forbidden_seen": sorted(set(bad)),
             "all_subscription_only": ok_models and not bad}
 

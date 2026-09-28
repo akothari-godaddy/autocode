@@ -184,7 +184,12 @@ def main() -> int:
                          "decision_needed": "", "options": [], "proposed_delta": ""},
     }
 
-    if stage == "requirements_gather":
+    if stage == "recognize_workflow":
+        report = {"workflow": "build", "reason": "Handwritten fixture: every request is a build", "signals": [],
+                  "design_document": ""}
+    elif stage == "investigate_stuck":
+        report = {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
+    elif stage == "requirements_gather":
         report = {
             "summary": "Handwritten greeting requirements; no model planning",
             "intended_outcome": "Provide a deterministic greeting CLI",

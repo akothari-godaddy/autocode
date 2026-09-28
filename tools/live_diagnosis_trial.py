@@ -56,7 +56,7 @@ Usage
 
     # On a machine with opencode installed and `opencode auth login` done,
     # using the profile the issue's plan names:
-    python3 tools/live_diagnosis_trial.py --profile glm53-mimo \\
+    python3 tools/live_diagnosis_trial.py --profile glm53-openai \\
         --i-authorize-live-model-spend
 
 Read the printed evidence directory afterward; ``diagnosis-comparison.json``

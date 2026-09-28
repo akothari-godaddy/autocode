@@ -17,5 +17,17 @@ __pycache__/
 # October desktop — local canvas state
 .october/
 
+# Build output
+build/
+dist/
+
+# Other agents' local state and worktrees
+.kilo/
+.zcode/
+.zcodeignore
+
+# Scratch workspaces and evidence from test and harness runs
+.tmp-*/
+.scenario-runs/
 # Default artifact directory written by tools/autopilot_testkit.py during test runs
 .tmp-autopilot-testkit/

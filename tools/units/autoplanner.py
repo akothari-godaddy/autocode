@@ -9,12 +9,50 @@ import re
 
 try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
+    from .. import autocode_bug_job as bug_job, autocode_workflows as workflows
 except ImportError:
     import autocode_goals as goals
     import autocode_planning_artifacts as artifacts
     import autocode_support as s
+    import autocode_bug_job as bug_job
+    import autocode_workflows as workflows
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
+# A build that implements an approved design (autocode_design_check_job) skips requirements
+# gathering; every planning stage gets this rule and the design's binding decisions.
+APPROVED_DESIGN_RULE = """
+APPROVED DESIGN: approved_design in the handoff data is a design the user has already approved, checked
+against this repository with no conflicts. It is a constraint, not a suggestion: plan exactly what it
+specifies (module and file layout, names, signatures, rules, rejected alternatives). Do not redesign it,
+do not revisit its rejected alternatives, and do not ask the user about decisions it already makes; ask
+only about something it genuinely leaves open. Trace each of its constraints to a milestone.
+"""
+# A reproduced bug the Investigator sized large (autocode_bug_job.large_correction) is
+# planned from its diagnosis; requirements gathering is skipped.
+BUG_DIAGNOSIS_RULE = """
+BUG FIX: bug_diagnosis in the handoff data is the Investigator's diagnosis of a reproduced bug, saved in the
+repository at its note_path. It is the requirements: plan the correction of its root_cause, not a feature.
+Every plan must uphold its invariant as an acceptance criterion, with a regression test that fails on the
+original code and passes after the fix, and must keep the project's existing tests passing. Fix the cause,
+not the symptom, and do not widen the change beyond what the root cause needs. Do not ask the user what the
+fix should achieve; ask only about a genuine choice the diagnosis leaves open.
+Cite the diagnosis in code_refs as exactly its note_path; explanations go in summaries, never inside a path.
+"""
+# Planning is otherwise never told how execution captures test evidence, so plans invented
+# scratch copies outside the workspace and reviewers blocked them for a "missing capture
+# command" (bugfix-cent-drift, 2026-09-28: three planning rounds).
+EVIDENCE_FACTS = """
+TEST EVIDENCE (how execution works; plan within it, do not re-derive it): the runner gives every Builder
+and Validator the capture_command shown in the handoff. It runs a command in the workspace and saves the
+full output as evidence in the run's own directory under .autocode/, which the runner owns: evidence is
+never a deliverable, never an affected path and needs no permission. A fail-first criterion is met in the
+workspace itself: add the regression test, capture it failing against the unmodified code, make the fix,
+capture it passing. Do not plan scratch copies outside the workspace, and do not treat capture as a
+missing prerequisite or ask the user to authorize it.
+"""
+# The first stage of every new run: which kind of job this is (autocode_workflows).
+# It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
+RECOGNIZE = workflows.STAGE
 V2_STAGES = ("requirements", "plan", "plan_review", "plan_revise", "plan_finalize")
 V2_STAGE_ROLES = {
     "requirements": "requirements",
@@ -89,6 +127,7 @@ SCHEMAS.update({
 # Optional for old saved reports; new prompts require this whenever intent must change.
 SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
     "type": "array", "items": obj({"requirement_id": S, "proposal": S, "question_id": S})}
+SCHEMAS[RECOGNIZE] = workflows.SCHEMA
 # Optional; required only when a refreshed handoff drops a requirement the
 # previous handoff had (goals.check_requirement_handoff enforces the citation).
 SCHEMAS["requirements_gather"]["properties"]["ignored_requirements"] = {
@@ -129,7 +168,8 @@ def enabled(state):
 
 def is_planning(state, stage):
     stages = V2_STAGES if state.get("settings", {}).get("planning_flow") == "v2" else STAGES
-    return enabled(state) and stage in stages
+    # Recognition is a read-only planning stage on every run, joint or not.
+    return stage == RECOGNIZE or (enabled(state) and stage in stages)
 
 
 def entry_stage(state):
@@ -144,6 +184,8 @@ def next_after(state, stage):
 
 
 def role_for(state, stage):
+    if stage == RECOGNIZE:
+        return "requirements" if "requirements" in state.get("settings", {}).get("roles", {}) else "astra"
     if state.get("settings", {}).get("planning_flow") == "v2" and stage in V2_STAGE_ROLES:
         return V2_STAGE_ROLES[stage]
     if is_planning(state, stage) and stage == "requirements_gather":
@@ -164,6 +206,8 @@ def route_for(state, stage, role=None):
         return "resolver"
     if stage == "requirements_gather":
         return "requirements"
+    if stage == RECOGNIZE:
+        return role_for(state, stage)
     if state.get("settings", {}).get("planning_flow") == "v2" and stage in V2_STAGE_ROLES:
         route = V2_STAGE_ROLES[stage]
         if route not in state.get("settings", {}).get("roles", {}):
@@ -183,7 +227,8 @@ def engine_for(settings, role):
 
 
 # Independent Plan Reviewer route (user 2026-09-26): never the Planner's model.
-PINNED_REVIEWER_MODEL = "xiaomi-token-plan-sgp/mimo-v2.6-pro"
+# No MiMo anywhere (user 2026-09-27): OpenAI GPT-6 Astra via the ChatGPT login.
+PINNED_REVIEWER_MODEL = "openai/gpt-6-astra"
 
 
 def start(state):
@@ -502,6 +547,13 @@ def workspace_inventory(workspace, task, limit=40, scan_limit=5000):
             "instruction": "File names are navigation hints, not evidence of behavior. Read relevant files."}
 
 
+def capture_command():
+    """The command execution stages are given (autocode_support.context_packet), shown to planning too."""
+    import shlex
+    import sys
+    return shlex.join([sys.executable, str(Path(s.__file__).with_name("autocode.py")), "capture"])
+
+
 def context(state, stage, state_path):
     predecessor = None
     if stage in V2_STAGES:
@@ -562,6 +614,11 @@ def context(state, stage, state_path):
     if state["settings"].get("figma_file"):
         packet["figma_file"] = state["settings"]["figma_file"]
     packet['user_events'] = state.get('user_events', [])
+    if state.get('design_constraint'):
+        packet['approved_design'] = state['design_constraint']
+    diagnosis = bug_job.large_correction(state)
+    if diagnosis:
+        packet['bug_diagnosis'] = diagnosis
     if stage == "requirements_gather":
         packet['previous_requirements_handoff'] = state.get('requirements_handoff')
     if stage in ("requirements_gather", "astra_discovery"):
@@ -572,7 +629,9 @@ def context(state, stage, state_path):
         import autocode_figma as figma
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
-        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY)
+        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY + EVIDENCE_FACTS)
+    if stage != "requirements_gather":
+        packet["capture_command"] = capture_command()
     clarification_policy = ("" if stage == "astra_challenge" else QUESTION_POLICY) + (
         ASSUMPTION_POLICY if stage == "requirements_gather" else "")
     if stage != "requirements_gather":
@@ -585,7 +644,8 @@ def context(state, stage, state_path):
         # everything it needs explicitly.
         packet["investigation_request"] = request
         clarification_policy += INVESTIGATION_POLICY
-    prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
+    design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
+    prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
@@ -594,6 +654,13 @@ def context(state, stage, state_path):
 
 def prepare(state, stage, state_path, schema_dir):
     from .common import ModelRequest
+    if stage == RECOGNIZE:
+        state["phase"] = "DISCOVERING"
+        role = role_for(state, stage)
+        prompt, metrics = workflows.prompt(state, workspace_inventory(state["workspace"], state["task"]),
+                                          state["settings"].get("context_soft_tokens", 10000),
+                                          engine_for(state["settings"], route_for(state, stage, role)))
+        return ModelRequest(role, route_for(state, stage, role), prompt, metrics, workflows.SCHEMA, False)
     if stage not in STAGES + V2_STAGES:
         raise ValueError(f"Autoplanner cannot run {stage}")
     joint = is_planning(state, stage)
@@ -607,6 +674,12 @@ def prepare(state, stage, state_path, schema_dir):
     role = role_for(state, stage)
     return ModelRequest(role, route_for(state, stage, role), prompt, metrics,
                         SCHEMAS[stage] if joint else goals.DISCOVERY_SCHEMA, False)
+
+
+def recognize(state, value, record):
+    """Save the recognized kind of job; the run then continues with its first real stage."""
+    workflows.apply(state, value, record)
+    state["phase"] = "DISCOVERING"
 
 
 def apply_result(state, stage, value, record):

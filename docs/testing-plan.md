@@ -189,7 +189,7 @@ weakening process-identity checks.
 
 These are starting points, not assertions that current tests pass or that all
 cases above are already implemented. The
-[catalogue map](../audits/autopilot-test-catalogue/coverage-map.json) is historical.
+catalogue map (`audits/autopilot-test-catalogue/coverage-map.json` at tag `archive/pre-restructure-2026-09-26`) is historical.
 
 | Area | Existing modules or harness | Additional evidence needed |
 | --- | --- | --- |
@@ -472,5 +472,5 @@ Promotion rules:
    declare dependable complex-project delivery based on fake fixtures alone.
 
 See also: [testing guide](testing.md), [workflow](workflow.md),
-[execution and recovery](execution.md), [providers](providers.md), and
-[dashboard verification](dashboard.md#dashboard-verification).
+[execution and recovery](execution.md), [providers](providers.md),
+[dashboard verification](dashboard.md#dashboard-verification), and [scenarios](../scenarios/README.md).

@@ -6,7 +6,7 @@
 
 AutoCode is a local, conversation-first system for coordinating AI-assisted software engineering. It turns a rough request into a reviewed, explicitly approved plan, runs bounded implementation work, independently checks the result, and preserves the findings and evidence needed to decide what happens next.
 
-Today, it provides a working planning/build/review runner, local dashboard, provider adapters, and recovery infrastructure. The larger vision is one engineering workspace for discussing, designing, building, debugging, reviewing, and verifying software—not just generating code.
+Today, it provides a working planning/build/review runner, local dashboard, provider adapters, recovery infrastructure, and a scenario harness that judges its results independently. The larger vision is one engineering workspace for discussing, designing, building, debugging, reviewing, and verifying software—not just generating code.
 
 ## How it compares
 
@@ -41,7 +41,7 @@ The detailed guides describe supported paths, defaults, and limitations. They ar
 | Independent review and completion checks | A Validator checks the candidate; a separate Completion Owner proposes the next outcome. AutoPilot applies the authoritative transition and completion checks. | [Completion](docs/execution.md#completion-gate) |
 | Durable findings and evidence | Reviewer findings have runner-owned identities. Omission does not close them. Explicit, scoped dispositions and evidence are required; blocked reviews retain defects already discovered. | [Findings code](tools/autocode_findings.py), [Evidence rules](docs/testing.md) |
 | Repair, retries, and recovery | Read-only repair diagnosis, report-format recovery, persisted retry/escalation policies, process supervision, locking, and checkpoints support bounded recovery. Unsafe or uncertain situations can require inspection and an explicit resume. | [Execution](docs/execution.md), [Models](docs/models.md) |
-| Local conversation and monitoring | CLI conversations and a browser dashboard support planning, approvals, task visibility, findings, checkpoints, and safe-boundary feedback. A native macOS host wraps the dashboard. | [Dashboard](docs/dashboard.md), [macOS](docs/macos-app.md) |
+| Local conversation and monitoring | CLI conversations and a browser dashboard support planning, approvals, task visibility, findings, checkpoints, and safe-boundary feedback. A native macOS host wraps the dashboard. Both are frozen (bug fixes only) while the core is consolidated; see [AGENTS.md](AGENTS.md). | [Dashboard](docs/dashboard.md), [macOS](docs/macos-app.md) |
 | Figma workflow | A Codex/plugin-backed design → review → implementation-handoff path exists. It requires the relevant Figma tools to be available to the CLI; it does not assume a Figma Make API. | [Figma](docs/figma.md) |
 | Configurable runtimes and models | OpenCode is the default engine; Codex and configured command-tool adapters are available, including a bundled KiloCode configuration. Roles and supported reasoning settings are configurable. | [Providers](docs/providers.md), [Models](docs/models.md) |
 | Multiple task lanes | Tasks in a lane run sequentially; separate lanes can run concurrently in separate worktrees. Lane branches are **not** automatically merged into one product. | [Task lanes](docs/task-lanes.md) |
@@ -383,11 +383,13 @@ python3 -m unittest tests/test_escalation.py tests/test_autocode.py \
   tests/test_process.py
 ```
 
-This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), and [audit artifacts](audits/). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
+This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), [audit artifacts](audits/), and [AGENTS.md](AGENTS.md#testing). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
 
 ```sh
-python3 -m unittest tools/test_scenario_oracles.py tools/test_program.py tools/test_live_trial.py
+python3 -m unittest tests.test_scenario_oracles tests.test_program tests.test_live_trial
 ```
+
+End-to-end behavior is judged by [scenarios](scenarios/README.md): realistic tasks (a bug fix, a feature in an existing project, small applications, a port, a parallel milestone graph), each with an independent oracle, a reference solution and plausible-but-wrong variants. `.venv/bin/python scenarios/run.py run --fake` runs every scenario through AutoCode with a scripted model; `--profile` runs them with real models.
 
 **Fixture tests establish behavior under the exercised conditions, not model quality or universal correctness.** Test counts and historical results must be tied to their recorded source/environment. Do not present them as a fresh run of current master. The reliability plan also calls for bounded real-model delivery trials: a small application, a feature in an existing project, and a bug fix.
 
@@ -411,10 +413,12 @@ tools/autocode_regression.py  runner-owned regression proof and completion requi
 tools/task_scenarios.py    task-type scenarios and their independent oracles
 tools/live_trial.py     scenario driver: seed, run, serve gates, score
 tools/providers/        runtime adapters and bundled command-tool configs
-tools/dashboard/        local browser interface
-macos-app/              native host for the dashboard
+tools/dashboard/        local browser interface (frozen: bug fixes only)
+macos-app/              native host for the dashboard (frozen: bug fixes only)
+scenarios/              end-to-end scenario harness and catalog
+test-scenarios/         fault-injection suite against a fake Codex
 docs/                   operational guides
-audits/                 recorded verification artifacts
+AGENTS.md               rules for changing this repository
 RELIABILITY.md          current reliability priorities
 VALIDATION.md           recorded results and limitations
 ```
@@ -424,10 +428,11 @@ VALIDATION.md           recorded results and limitations
 | Setup and commands | [Install](docs/install.md) · [CLI](docs/cli.md) |
 | Planning, approval, and handoffs | [Workflow](docs/workflow.md) |
 | Models and runtime integration | [Models](docs/models.md) · [Providers](docs/providers.md) |
-| Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) |
+| Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) · [Task-run interface](docs/task-run.md) |
 | Conversation and monitoring | [Dashboard](docs/dashboard.md) · [Registry API](docs/registry-api.md) · [macOS app](docs/macos-app.md) |
 | Visual work and multi-task runs | [Figma](docs/figma.md) · [Task lanes](docs/task-lanes.md) · [Programs](docs/program.md) |
-| Verification and project priorities | [Testing](docs/testing.md) · [Scenarios](docs/scenarios.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
+| Bug reports and issues | [Fix](docs/fix.md) |
+| Verification and project priorities | [Scenarios](scenarios/README.md) · [Task-type scenarios](docs/scenarios.md) · [Testing](docs/testing.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
 
 ## Keep this README honest
 

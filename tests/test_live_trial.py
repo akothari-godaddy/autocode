@@ -57,27 +57,28 @@ class ProfilesTest(unittest.TestCase):
         self.assertIn("--glm-reasoning-effort", flags)
         self.assertIn("max", flags)
 
-    def test_glm53_mimo_uses_subscription_models_only(self):
-        profile = profiles.resolve("glm53-mimo")
+    def test_glm53_openai_uses_subscription_models_only(self):
+        profile = profiles.resolve("glm53-openai")
         flags = profiles.cli_overrides(profile)
         joined = " ".join(flags)
         self.assertIn("--glm-model", flags)
         self.assertIn("zai-coding-plan/glm-5.3", flags)
         self.assertIn("--terra-model", flags)
-        self.assertIn("xiaomi-token-plan-sgp/mimo-v2.6-pro", flags)
+        self.assertIn("openai/gpt-6-sol", flags)
+        self.assertNotIn("mimo", joined)
         self.assertNotIn("-free", joined)
         self.assertNotIn("flash", joined)
         self.assertNotIn("mimo-token-plan/", joined)
 
-    def test_glm53_mimo_verifier_never_equals_producer(self):
-        profile = profiles.resolve("glm53-mimo")
+    def test_glm53_openai_verifier_never_equals_producer(self):
+        profile = profiles.resolve("glm53-openai")
         models = profile["role_models"]
         self.assertNotEqual(models["planner"].split("/")[0], models["reviewer"].split("/")[0])
         self.assertNotEqual(models["builder"].split("/")[0], models["validator"].split("/")[0])
         self.assertNotEqual(models["builder"].split("/")[0], models["completion"].split("/")[0])
 
-    def test_glm53_mimo_ladder_efforts_match_docs(self):
-        profile = profiles.resolve("glm53-mimo")
+    def test_glm53_openai_ladder_efforts_match_docs(self):
+        profile = profiles.resolve("glm53-openai")
         effort = profile["effort"]
         self.assertEqual("medium", effort["requirements"])
         self.assertEqual("high", effort["planner"])

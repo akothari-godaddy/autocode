@@ -8,6 +8,10 @@ import re
 from types import MappingProxyType
 from typing import Any, Callable, Mapping
 
+try:
+    from . import autocode_workflows as workflows
+except ImportError:
+    import autocode_workflows as workflows
 
 ACTIONS = frozenset({"continue", "retry", "replan", "escalate"})
 RECEIPT_VERSION = 1
@@ -40,6 +44,7 @@ class ContractSnapshot:
     body: Mapping[str, Any]
     approval_status: str
     approval_event: Mapping[str, Any] | None
+    origin: str = ""   # who built the contract; decides which approvers are valid (workflows.approval_actor_ok)
 
 
 @dataclass(frozen=True)
@@ -293,7 +298,7 @@ def _valid_request(request: Any) -> tuple[bool, str]:
     if request.contract.hash != sealed_hash(request.contract.task_id, request.contract.revision, request.contract.body):
         return False, "unsealed contract"
     event = request.contract.approval_event
-    if request.contract.approval_status != "approved" or not isinstance(event, Mapping) or not _as_json(event) or event.get("kind") != "goal_approval" or event.get("actor") != "user_cli" or event.get("token") != f"r{request.contract.revision}:{request.contract.hash}" or request.contract.body["open_blocking_questions"]:
+    if request.contract.approval_status != "approved" or not isinstance(event, Mapping) or not _as_json(event) or event.get("kind") != "goal_approval" or not workflows.approval_actor_ok(request.contract.origin, event) or event.get("token") != f"r{request.contract.revision}:{request.contract.hash}" or request.contract.body["open_blocking_questions"]:
         return False, "unapproved contract"
     return True, "valid"
 

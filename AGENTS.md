@@ -1,0 +1,136 @@
+# Working on AutoCode
+
+Rules for anyone changing this repository, human or agent. They exist because
+the code grew faster than its structure: most of `tools/` now sits in one
+import cycle, and three naming schemes describe the same roles. The goal right
+now is to make the existing workflow dependable and the code easier to change,
+not to add surface area. See `RELIABILITY.md` for product priorities.
+
+## Layout
+
+| Path | What it is |
+| --- | --- |
+| `tools/` | The application, installed as the `autocode_cli` package. Flat for now. |
+| `tests/test_*.py` | Unit and integration tests (`unittest`). `tests/__init__.py` puts `tools/` on `sys.path`, so tests import runtime modules by their top-level names (`import autopilot`, `from units import autoreview`). |
+| `scenarios/` | End-to-end scenario harness and catalog. Black box: it drives the CLI and never imports `tools/`. |
+| `test-scenarios/` | Older fault-injection suite (crash/resume, budgets, dirty workspaces) against a fake Codex. |
+| `tools/dashboard/`, `macos-app/` | Browser dashboard and native macOS host. Frozen: bug fixes only. |
+| `docs/` | User documentation. |
+
+**Frozen since 2026-09-26: the browser dashboard (`tools/dashboard/`) and the
+macOS app (`macos-app/`).** Bug fixes only, no new features, until the core is
+consolidated. Their tests stay in the suite gate. The installed macOS app runs
+the dashboard straight from this checkout, so a change that breaks the dashboard
+breaks the app. The core must not import the dashboard.
+
+Historical audit records (`audits/`), `learn/` and two top-level result reports
+were archived at tag `archive/pre-restructure-2026-09-26`
+(`git show archive/pre-restructure-2026-09-26:audits/...`).
+
+## Architecture rules
+
+1. **Do not grow the big modules.** `autocode.py`, `autocode_goals.py`,
+   `autocode_support.py` and `autopilot.py` have line limits recorded in
+   `tests/test_architecture.py`. New behavior goes in a new module with one
+   purpose. Lower the recorded limit when you shrink one.
+2. **Do not join the import cycle.** 34 modules currently import each other
+   through `autocode.py` (listed in `tests/test_architecture.py`). A new module
+   must depend only on lower-level modules, never on `autocode`, `autopilot` or
+   anything that imports them. Pass what you need as arguments instead.
+   Removing a module from the cycle is progress: take it off the list.
+3. **Target layering**, from the bottom: utilities (files, hashing, locking,
+   schemas) → domain (contract, findings, milestones, completion gate; pure
+   functions over state) → runtime (processes, providers) → controller
+   (`autopilot`, owns the loop) → interfaces (CLI). Lower layers never import
+   higher ones.
+4. **Run state is an untyped dict with about 140 keys.** Prefer existing keys.
+   If you must add one, write it in one place and document what reads it. A
+   typed `RunState` is planned.
+5. **Anything that works across tasks** (architecture, multi-component builds,
+   integration, deployment) goes in a new layer that drives task runs through
+   the task-run interface (`docs/task-run.md`): `autocode_taskrun.TaskRun` and
+   the status view in `autocode_run_view`. It must not import `autocode.py`
+   internals or read `state.json`.
+6. **The status view is a contract.** Add fields to `autocode_run_view.view`;
+   never rename or remove one.
+
+## Names
+
+The code still uses internal stage names. Until they are renamed, this is the
+mapping (the unit column is `autopilot.unit_for`):
+
+| In code | Role in docs | Unit |
+| --- | --- | --- |
+| `recognize_workflow` | Job recognizer: which of the five workflows (`autocode_workflows.py`) | AutoPlanner |
+| `requirements_gather` | Requirements | AutoPlanner |
+| `astra_discovery`, `glm_revise` | Planner | AutoPlanner |
+| `astra_challenge`, `astra_finalize` | Plan Reviewer | AutoPlanner |
+| `orchestrator` | parallel milestone scheduling (no model) | AutoCode build unit |
+| `astra_plan` | next-task planning | AutoCode build unit |
+| `terra` | Builder | AutoCode build unit |
+| `sol` | Validator | AutoReview |
+| `review_change` | Reviewer: the review workflow's only stage (`autocode_review_job.py`) | AutoReview |
+| `review_design` | Architect: the design workflow's first stage (`autocode_design_job.py`) | AutoReview |
+| `check_design` | Architect: checks an approved design against the repository before a build implements it (`autocode_design_check_job.py`) | AutoReview |
+| `investigate_stuck` | Investigator: why a stage stopped converging, before the run pauses (`autocode_stuck_job.py`) | AutoResolver |
+| `astra_review`, `astra_checkpoint` | Completion Owner | AutoReview |
+| `astra_resolve` | AutoResolver | AutoResolver |
+| `investigate_bug` | Investigator: the bug-fix workflow's first stage (`autocode_bug_job.py`) | AutoResolver |
+| `answer_question` | Analyst: the discuss workflow's only stage (`autocode_discuss_job.py`) | AutoResolver |
+
+Stages that belong to one workflow rather than to the build pipeline (`review_change`,
+`investigate_bug`, `review_design`, `answer_question`, `check_design`, `investigate_stuck`) are listed in `tools/autocode_jobs.py`; the runner and Autopilot
+consult that table, so a new one is added there, not in `autocode.py` or `autopilot.py`.
+
+CLI model flags follow the code names: `--astra-model`, `--glm-model`,
+`--terra-model`, `--sol-model`. Do not introduce a fourth naming scheme.
+
+## Testing
+
+Run everything from the repository root, with the venv interpreter.
+
+```sh
+PY=.venv/bin/python   # has psutil; the system python3 does not
+$PY -m unittest tests.test_architecture                        # seconds
+$PY -m unittest tests.test_goals tests.test_autocode           # the modules you touched
+$PY scenarios/run.py run --fake                                # every scenario end to end, under a minute
+$PY -m unittest scenarios/test_harness.py                      # harness and catalog, under a minute
+$PY tools/run_suite.py                                         # the suite gate CI runs; about 40 minutes
+```
+
+`tools/run_suite.py` discovers `tests/test_*.py` minus the modules listed, with
+reasons, in `tests/suite_exclusions.json`. Most of
+the full suite's time is spent waiting on subprocesses and timeouts, not
+computing. Before committing a change to `tools/`, run the tests for the modules
+you touched, `test_architecture`, and the fake scenario runs.
+
+Run the full suite once before merging, not after every change; CI runs it on
+every pull request.
+
+Where a new test belongs:
+
+- **Behavior a user would notice** (a run plans, builds, pauses, completes,
+  refuses to complete): a scenario in `scenarios/`, or a CLI-level test that
+  drives `autocode` through the task-run interface. These survive refactors.
+- **Pure logic** (a function from inputs to outputs, such as the status view or
+  requirement tracing): a small unit test beside that module's other tests.
+- **Not** a test that asserts internal state-dict keys after a sequence of
+  private calls. It breaks on every refactor without catching more bugs. When
+  touching such a test, prefer rewriting it against the CLI or a public function.
+- **Never** a test that re-runs another test, waits in real time, or asserts
+  something that cannot fail. Fake the clock or the provider instead of waiting.
+
+Tests live in `tools/` for now; do not start a second test directory. For new
+end-to-end coverage add a catalog entry with an oracle, a reference solution
+and a broken variant (see `scenarios/README.md`). Live-model runs need `--i-authorize-live-model-spend` and are never part of a
+routine test run.
+
+## Hygiene
+
+- Do not commit run output, logs, `.patch` files or evidence bundles. Scenario
+  results go to `.scenario-runs/` (ignored); AutoCode's own state goes to
+  `.autocode/` (ignored).
+- Write findings worth keeping as a short Markdown note in `docs/bugs/` or in
+  the relevant doc, not as a new top-level report file.
+- Other AutoCode runs, including self-builds, may be running from this
+  checkout. Never edit or delete `.autocode/` contents you did not create.

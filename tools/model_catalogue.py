@@ -16,17 +16,18 @@ from pathlib import Path
 
 # User rule (2026-09-26): subscription models only — never free-tier or flash.
 FORBIDDEN_SUBSTRINGS = ("-free", "flash", "highspeed")
-DEAD_ROUTES = ("mimo-token-plan/",)  # Invalid API key on this machine
+# mimo-token-plan/ has an invalid API key on this machine; MiMo is never used (user 2026-09-27).
+DEAD_ROUTES = ("mimo-token-plan/", "xiaomi-token-plan-sgp/")
 
 # Ladder entry points when both families are present (docs/models.md).
 PREFERRED = {
     "requirements": ("zai-coding-plan/glm-5.3", "medium"),
     "planner": ("zai-coding-plan/glm-5.3", "high"),
-    "reviewer": ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "high"),
-    "builder": ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "medium"),
+    "reviewer": ("openai/gpt-6-astra", "high"),
+    "builder": ("openai/gpt-6-sol", "medium"),
     "validator": ("zai-coding-plan/glm-5.3", "high"),
     "completion": ("zai-coding-plan/glm-5.3", "medium"),
-    "resolver": ("xiaomi-token-plan-sgp/mimo-v2.6-pro", "high"),
+    "resolver": ("openai/gpt-6-astra", "high"),
 }
 INDEPENDENCE = (
     ("planner", "reviewer"),

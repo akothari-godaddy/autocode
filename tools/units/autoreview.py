@@ -1,12 +1,50 @@
-"""Autoreview owns independent verification and evidence validation."""
+"""Autoreview owns independent verification and evidence validation, the review
+workflow's Reviewer stage (autocode_review_job) and the design workflow's
+Architect stage (autocode_design_job)."""
 try:
-    from .. import autocode_goals as goals
+    from .. import autocode_design_job as design_job, autocode_goals as goals, autocode_review_job as review_job
+    from .. import autocode_design_check_job as design_check_job
 except ImportError:
+    import autocode_design_check_job as design_check_job
+    import autocode_design_job as design_job
     import autocode_goals as goals
-from .common import execution_request
+    import autocode_review_job as review_job
+from . import autoplanner
+from .common import ModelRequest, capped_route, execution_request
+
+STAGE = review_job.STAGE
+COMPLETION_REVIEW_STOP = "All required criteria already pass; request completion instead of another implementation batch"
+SEND_BACK_NOTE = ("You returned CONTINUE, but every required acceptance criterion already has current, passing, "
+                  "independent evidence for this exact artifact and no finding is open. Return TASK_COMPLETE, or keep "
+                  "CONTINUE only by naming the criterion that is not met and the evidence that shows it. Re-running "
+                  "validation that already passed is not a reason to continue.")
+JOBS = {review_job.STAGE: review_job, design_job.STAGE: design_job, design_check_job.STAGE: design_check_job}
+# The Architect copies the Plan Reviewer's model but not its effort beyond this: at
+# "high", MiMo twice spent its whole reasoning budget on a dense design and returned
+# no report at all (2026-09-27, design-review-sound live runs).
+ARCHITECT_MAX_EFFORT = "medium"
+
+
+def architect_route(roles):
+    return capped_route(roles.get("plan_reviewer") or roles["astra"], ARCHITECT_MAX_EFFORT)
 
 
 def prepare(state, stage, state_path, schema_dir):
+    if stage == review_job.STAGE:
+        # The Reviewer runs on the Validator's route with write access, so it can
+        # make and test a scratch copy of its own; the runner rejects the report
+        # if the workspace itself changed (review_job.apply).
+        state["phase"] = "REVIEWING"
+        return job_request(state, review_job, "sol", autoplanner.route_for(state, stage, "sol"))
+    if stage in (design_job.STAGE, design_check_job.STAGE):
+        # The Architect inherits the Plan Reviewer's model (the planner's own when
+        # there is none), with effort capped at ARCHITECT_MAX_EFFORT, on a route of
+        # its own so its session never leaks into later planning. Same
+        # scratch-copy rule as the Reviewer.
+        state["phase"] = "REVIEWING"
+        roles = state["settings"]["roles"]
+        roles.setdefault("architect", architect_route(roles))
+        return job_request(state, JOBS[stage], "astra", "architect")
     if stage not in ("sol", "astra_review", "astra_checkpoint"):
         raise ValueError(f"Autoreview cannot run {stage}")
     request = execution_request(state, stage, state_path, schema_dir)
@@ -16,3 +54,30 @@ def prepare(state, stage, state_path, schema_dir):
             "summary": goals.STRING, "evidence_refs": goals.STRINGS})}
         request.schema["required"].append("milestone_results")
     return request
+
+
+def job_request(state, job, role, route):
+    prompt, metrics = job.prompt(
+        state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
+        state["settings"].get("context_soft_tokens", 10000), autoplanner.engine_for(state["settings"], route))
+    return ModelRequest(role, route, prompt, metrics, job.SCHEMA, True)
+
+
+def apply_job(stage, state, value, record, workspace):
+    """Autopilot hands a job stage's validated report here; the job decides how the run continues."""
+    JOBS[stage].apply(state, value, record, workspace)
+
+
+def completion_review(state, snapshot):
+    """The Completion Owner said CONTINUE although everything it must check already passes.
+
+    The first time for this artifact it is sent back once with SEND_BACK_NOTE (it
+    arrives as checkpoint_reason); the model still decides, and the runner never
+    completes on its behalf. Saying CONTINUE again for the same artifact pauses
+    for the user (PAUSED_COMPLETION_REVIEW). Returns the state fields to set.
+    """
+    revision = snapshot.get("revision")
+    if state.get("completion_sent_back") == revision:
+        return {"status": "PAUSED_COMPLETION_REVIEW", "phase": "PAUSED_OR_BLOCKED", "stop_reason": COMPLETION_REVIEW_STOP}
+    state["completion_sent_back"] = revision
+    return {"status": "RUNNING", "stop_reason": SEND_BACK_NOTE}

@@ -636,6 +636,13 @@ class GoalTests(unittest.TestCase):
 
     def test_cannot_start_optional_work_once_goal_has_current_passing_evidence(self):
         self.approve(); self.validation()
+        # First CONTINUE for this artifact: the Completion Owner is sent back once, told why.
+        runner.apply_result(self.state, "astra_review", self.decision(), {"output": "extra"}, self.root, self.run)
+        self.assertEqual(("RUNNING", "astra_review"), (self.state["status"], self.state["next_stage"]))
+        self.assertIn("Return TASK_COMPLETE", self.state["stop_reason"])
+        prompt, _ = s.context_packet(self.state, "astra_review", self.run / "state.json")
+        self.assertIn(json.dumps(self.state["stop_reason"]), prompt)
+        # CONTINUE again for the same artifact: the user decides.
         runner.apply_result(self.state, "astra_review", self.decision(), {"output": "extra"}, self.root, self.run)
         self.assertEqual("PAUSED_COMPLETION_REVIEW", self.state["status"])
         self.assertEqual("astra_review", self.state["next_stage"])
@@ -678,6 +685,29 @@ class GoalTests(unittest.TestCase):
         self.assertEqual("TASK_COMPLETE", self.state["status"])
         self.assertEqual("user_cli", self.state.get("completion_actor"))
         self.assertEqual(task_id, self.state["final_decision"].get("task_id"))
+
+    def test_human_only_pending_validation_closes_only_after_current_review(self):
+        self.approve(human=True)
+        current = self.validation()
+        validation = self.state["validation"]
+        validation["verdict"] = "BLOCKED"
+        validation["criterion_results"][0]["status"] = "NOT_VERIFIED"
+        validation["unverified_criteria"] = ["C1 — awaiting explicit human review"]
+        # A review is requested and published (the AutoResolver human protocol) before it can be approved.
+        g.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1"],
+                                     "decision_needed": "Review C1 on the current artifact.",
+                                     "impact": "C1 needs human acceptance", "options": ["Approve", "Reject"],
+                                     "proposed_delta": ""})
+        g.human.evaluate(self.state)
+        g.present(self.state)
+        selected = g.review_token(self.state)
+        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        g.approve_review(self.state, "C1", selected, current)
+        self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.state["human_reviews"].clear()
+        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.state["validation"]["unverified_criteria"] = ["C2 — unrelated failure"]
+        self.assertFalse(g.human_only_pending_validation(self.state, self.state["validation"], "C1"))
 
     def test_medium_blocking_finding_blocks_even_with_tests_passing(self):
         self.approve(); current = self.validation()

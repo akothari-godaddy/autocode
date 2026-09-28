@@ -16,6 +16,27 @@ in the same conversation. Implementation starts only after you explicitly approv
 After approval, Autocode handles the handoffs:
 
 ```text
+You → Autopilot: recognize the kind of job (build, bugfix, review, design, discuss); saved as `workflow`
+   review → Reviewer only: findings written to review/findings.json, repository untouched, run complete
+   bugfix → Investigator first: diagnosis written to docs/bugs/<name>.json, repository untouched;
+            not reproduced → run complete;
+            reproduced, small (and you did not ask to approve the plan) → one Builder task built from the diagnosis (invariant = the acceptance
+              criterion, a regression test that fails before the fix), approved under a recorded policy
+              instead of by you (approval actor "workflow_policy"), then Validator and Completion Owner;
+            reproduced, large or you asked to approve the plan → the build pipeline below from the Planner on, planned from the
+              diagnosis: no requirements gathering, but plan review and your approval
+   design → Architect first: a design review is written to review/design-review.json (goals met,
+            blocking/advisory concerns, questions for you), repository untouched, run complete;
+            a request for a NEW design → the build pipeline below
+   discuss → Analyst only: an answer with evidence tied to repository files (and the note the
+            request asks for, written by the runner), repository untouched, run complete
+   build → the build pipeline below;
+           implementing an APPROVED design document as written → Architect checks it against the
+             repository first, repository untouched:
+             conflicts (a frozen API, a documented invariant) → written to <design>.blockers.json,
+               run stops (PAUSED_DESIGN_CONFLICT), nothing built, you decide;
+             no conflicts → the design's binding decisions become a constraint and the pipeline starts
+               at the Planner (no requirements gathering; the Planner may not redesign or ask)
 You → Requirements Gatherer: rough idea → saved requirements report
 Requirements Gatherer → Planner: draft task DAG
 Planner → Plan Reviewer → Planner revision → Plan Reviewer final → your approval
@@ -110,6 +131,37 @@ The model can recommend a bounded retry or escalation, not grant permissions, ch
 approved requirements, implement a repair, or declare completion. The controller records
 the policy outcome before applying it. Escalation remains a durable pause; an admitted
 retry returns to the original owner and normal independent validation/review.
+
+## When a stage stops making progress
+
+Before the runner pauses because a stage is not converging, it sends the run to the
+read-only `investigate_stuck` stage (`tools/autocode_stuck_job.py`) instead of stopping at once:
+
+| Pause | After the Investigator |
+| --- | --- |
+| `PAUSED_REPEATED_FAILURE`, `PAUSED_INVALID_OUTPUT` | retry runs the stage once more; its failure history stays, so another failure counts on top (a spent report repair is archived) |
+| `PAUSED_PLANNING_BUDGET` | retry grants one more review round (two calls from the challenge, one from the final review) |
+| `PAUSED_NO_PROGRESS` | retry allows one more implementation batch |
+| `PAUSED_COMPLETION_REVIEW` | retry asks the Completion Owner once more |
+| `PAUSED_REPORT_REPAIR_LIMIT`, `PAUSED_BUILDER_RETRY_LIMIT`, `PAUSED_MILESTONE_STALLED`, `PAUSED_MILESTONE_REPLAN` | diagnosis only; these keep their operator resume flags |
+
+The Investigator runs on a strong OpenAI model different from the stuck stage's (GPT-6
+Astra, or GPT-6 Sol when the stuck stage runs on Astra) at xhigh effort, on a fresh route
+and session. It reads the task, the saved state and the stuck stage's attempts and returns
+a diagnosis, then either guidance for one more attempt or the question only you can answer.
+Guidance goes into the retried stage's prompt: for planning, every planning stage until the
+plan is presented; otherwise that stage until it completes.
+
+Bounds: one investigation per distinct stage and pause, three per run
+(`settings.stuck_investigation.max_calls_per_run`; 0 turns it off). A second failure of the
+same problem, a `pause` recommendation or a failed investigation restores the original
+pause, with the diagnosis in its reason. It never approves anything, changes requirements or
+criteria, weakens tests, grants permissions or extends budgets beyond that one attempt.
+Permission, scope, goal, criteria and spend pauses go straight to you, and so does a pause a
+guard re-raises on resume before any stage runs, or the outcome of a retry you authorized
+with `--retry-failed-stage`. Only full Autopilot runs investigate; a
+single-unit invocation (`--unit`) stops at its own boundary. `--diagnose-failed-stage`
+below remains the operator's explicit, policy-ledgered alternative for a Builder.
 
 ## Joint requirements planning and review
 

@@ -25,8 +25,9 @@ import scenario_references as references  # noqa: E402
 import task_scenarios as scenarios  # noqa: E402
 from tests import test_planning, test_subprocess  # noqa: E402
 
-PLANNING = ["requirements_gather", "astra_discovery", "astra_discovery", "astra_challenge", "glm_revise",
-            "astra_finalize"]
+# The job recognizer runs first (autocode_workflows); this fixture recognizes a build request.
+PLANNING = ["recognize_workflow", "requirements_gather", "astra_discovery", "astra_discovery", "astra_challenge",
+            "glm_revise", "astra_finalize"]
 EXECUTION = ["orchestrator", "terra", "regression_proof", "sol", "astra_review"]
 
 
@@ -73,9 +74,10 @@ class BugfixWorkflow(unittest.TestCase):
         runner = next(row for row in final["stages"] if row["stage"] == "regression_proof")
         self.assertTrue(runner["runner_owned"])
         self.assertEqual(0, runner["metrics"]["provider_tokens"]["input_tokens"])
-        # Small-job guard (#15): nine model calls, no report-format repair, one runner proof.
+        # Small-job guard (#15): ten model calls (nine plus the job recognizer), no report-format
+        # repair, one runner proof.
         model_calls = [row for row in final["stages"] if not row.get("runner_owned")]
-        self.assertEqual(9, len(model_calls))
+        self.assertEqual(10, len(model_calls))
         self.assertFalse([row for row in final["stages"] if row["stage"].endswith("_report_repair")])
         # The independent scenario oracle agrees with the runner.
         self.assertEqual("PASS", scenarios.bugfix01_oracle(self.project).status)
@@ -88,8 +90,11 @@ class BugfixWorkflow(unittest.TestCase):
         self.assertEqual("FAIL", proof["verdict"])
         self.assertTrue(any("No regression test" in reason for reason in proof["failures"]))
         stages = [row["stage"] for row in final["stages"]]
-        self.assertEqual(PLANNING + EXECUTION, stages)  # every stage still ran; the gate refused
+        # Every stage still ran and the gate refused; the refusal was investigated once
+        # (autocode_stuck_job) and the fixture's Investigator left the pause standing.
+        self.assertEqual(PLANNING + EXECUTION + ["investigate_stuck"], stages)
         self.assertIn("no passing regression proof", final["stop_reason"])
+        self.assertEqual(["paused"], [row["outcome"] for row in final["stuck_investigations"]])
 
     def test_build_tasks_get_no_proof_step(self):
         self.env["AUTOCODE_FIXTURE_TASK_KIND"] = "build"

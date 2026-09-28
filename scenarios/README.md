@@ -1,0 +1,166 @@
+# Scenarios
+
+Realistic engineering tasks for AutoCode, each with an independent **oracle**
+that judges the delivered project from the outside. The oracle, not AutoCode's
+own completion claim, decides whether the work is right.
+
+```sh
+PY=.venv/bin/python                               # AutoCode needs psutil from the project virtualenv
+$PY scenarios/run.py list                         # the catalog
+$PY scenarios/run.py check                        # prove every oracle (seconds; no AutoCode, no models)
+$PY scenarios/run.py run --fake                   # every scenario through AutoCode with a scripted model (under a minute, no spend)
+$PY scenarios/run.py run bugfix-iso-weeks --profile glm53-openai --i-authorize-live-model-spend
+$PY scenarios/run.py route --fake                 # which workflow AutoCode recognizes for each prompt in routing.toml
+$PY -m unittest scenarios/test_harness.py         # the harness's own tests (under a minute)
+```
+
+Results land in `.scenario-runs/<time>-<id>-<mode>/`: `result.json` (verdict,
+every oracle check, CLI calls, answers given on the user's behalf, stages,
+model time and tokens), `steps.jsonl`, the final `state.json`, and the
+delivered `project/`, kept for inspection.
+
+## Three levels
+
+| Level | Command | What it proves | Cost |
+| --- | --- | --- | --- |
+| Oracle check | `check` | The oracle rejects the untouched seed, accepts the reference solution, and rejects each plausible-but-wrong variant in `broken/`. | seconds |
+| Fake run | `run --fake` | AutoCode's real CLI, planning gates, approval, build, validation and completion work end to end for this kind of task. The scripted model plans from the brief and applies the reference solution. It says nothing about model quality. | seconds per scenario |
+| Live run | `run --profile NAME` | How well AutoCode actually does the task with real models. | model spend; requires `--i-authorize-live-model-spend` |
+
+`run --fake --fake-solution broken/<name>` makes the scripted model deliver a
+wrong solution. Because its own checks pass, AutoCode completes, and the
+harness must report `FALSE_COMPLETE`. That is how the harness itself is tested.
+
+## Verdicts
+
+| Verdict | Meaning |
+| --- | --- |
+| `PASS` | AutoCode ended the way the scenario expects (completion, or a stop for the scenarios that expect one) and every oracle check passed. |
+| `FALSE_COMPLETE` | AutoCode reported completion but the oracle found failures, or it completed a task it should have stopped on. The worst outcome. |
+| `HONEST_BLOCKER` | AutoCode stopped (paused, waiting for a person) without claiming completion, where completion was expected. The oracle summary shows how far the work got. |
+| `ERROR` | The harness could not finish (budget used up, no progress, a CLI crash) or the oracle crashed. |
+| `SKIPPED` | A required tool is missing, or the scenario does not support the requested mode. |
+
+The driver answers AutoCode's clarifying questions with AutoCode's own proposed
+default and records each answer in `result.json`. It approves the plan it is
+shown and accepts requested human reviews. It never writes AutoCode state and
+does not resume paused runs: a pause is reported as `HONEST_BLOCKER`.
+
+A scenario whose `scenario.toml` carries `[run] known_failure = "why"` is one
+AutoCode is known not to pass yet. `run` still reports its verdict but does not
+count it as a failure, and says when it starts passing so the key can be
+removed. It is a ratchet: the scenarios describe the product AutoCode should
+be, and the list of known failures is the distance left.
+
+## Workflows
+
+AutoCode should recognize what kind of engineering job a prompt is and compose
+the right stages, rather than pushing every prompt through
+requirements → plan → build → test → review. The scenarios in this catalog
+cover five kinds of job and check three things beyond the deliverable:
+
+| Workflow | Prompt shape | Stages | Deliverable |
+| --- | --- | --- | --- |
+| `build` | make or change something | understand → plan → review plan → build → test → review | code |
+| `bugfix` | a reported misbehavior | investigate → diagnose → fix → test → review | code + root-cause note |
+| `review` | judge an existing change | review → test where useful → findings | `review/findings.json` (written by the runner from the Reviewer's report; the run is rejected if anything else changed) |
+| `design` | judge or produce an architecture | understand → challenge → design | `review/design-review.json` |
+| `discuss` | a question, tradeoff or investigation | investigate → conversation | a note under `docs/` |
+
+1. **Which workflow ran.** The status view (`autocode --status`,
+   docs/task-run.md) carries a `workflow` field naming one of the five,
+   decided by the first stage of every run (`recognize_workflow`). Oracles
+   check it through `run_checks`, together with which saved stages ran: a
+   review must not dispatch a Builder or ask for plan approval; a bug fix must
+   not start with requirements gathering; a three-line fix must not get
+   plan-review rounds. In fake mode the scripted provider answers this stage
+   with keyword rules (`harness/fake_codex.py`, `recognize`), which proves the
+   plumbing and nothing about model quality.
+2. **Read-only jobs stay read-only.** Review, design and discussion may leave
+   only their report behind (`only_changed_under`); the oracle reads
+   `git status` in the delivered workspace.
+3. **Negative controls.** For every "find the problem" scenario there is a
+   sibling with no problem (`review-clean-pr`, `design-review-sound`,
+   `bugfix-not-reproducible`): a reviewer that invents blockers, or a fixer
+   that changes working code, fails.
+
+The routing table `routing.toml` holds one-line prompts and the workflow each
+should be recognized as; `run.py route` starts each one, lets AutoCode run a
+single stage, and reads `workflow` from the status view.
+
+Oracles receive an optional third argument, `run`, with the final status view,
+the saved stage names, the questions the driver answered and the CLI calls it
+made. It is `None` in `check` mode, so run-level checks contribute nothing
+there and the reference/broken variants are told apart by files alone.
+
+Not yet covered: a conversation that changes activity mid-run (review → "fix
+them" → build → bug found → fix), which needs a multi-turn driver.
+
+## Catalog
+
+| Scenario | Category | What it exercises |
+| --- | --- | --- |
+| `bugfix-iso-weeks` | bugfix | Root-causing a reported symptom in a different module; hidden tests cover every day from 2000 to 2030, so a special-case fix fails. |
+| `bugfix-duplicate-on-timeout` | bugfix | A retry after an uncertain timeout renews a domain twice. Hidden tests inject lost replies before and after processing; removing retries or raising the deadline both fail. Requires a root-cause note and no requirements gathering. |
+| `bugfix-stale-prices` | bugfix | Checkout charges stale prices because cache invalidation is left to each write path. The fix belongs at the store's write path (every cache hears every write); either fix route passes, with no requirements gathering. Patching today's callers or dropping the cache both fail hidden tests. |
+| `bugfix-cent-drift` | bugfix | Invoice, charge and refunds each round money their own way and drift by a cent. The fix touches every billing module, needs one half-up money rule, and leaves an accounting choice open (tax per line or per invoice), so it must take the planned path: diagnosis, Planner, Plan Reviewer, the user's approval, no requirements gathering. Deriving only the charge from the invoice, or rounding everything with float `round()`, both fail hidden tests. |
+| `bugfix-trivial` | bugfix | An off-by-one. Correctness is easy; the check is proportionality: no requirements gathering, no plan-review rounds, no questions, at most five model stages. |
+| `bugfix-not-reproducible` | bugfix | The reported bug does not exist in this code. Passes by saying so or asking; a "defensive" change to working code fails. |
+| `feature-timesheet-by-project` | feature | Adding an option to an existing CLI without changing existing output. |
+| `implement-locked-design` | feature | An approved design is a constraint: specified modules and signatures (checked by AST), clock injected, no questions about settled decisions. A single-class "simplification" fails. |
+| `implement-design-conflict` | feature | The approved design contradicts a frozen API. The right ending is a stop with the conflict written down and no code changed (`expected = "stop"`). |
+| `greenfield-greeting-cli` | greenfield | A small CLI from an empty repository. |
+| `greenfield-todo-cli` | greenfield | Durable state and failure cases that must not corrupt data. |
+| `port-policy-go` | port | Porting C# to Go against golden vectors. Requires `go`. |
+| `parallel-diamond` | parallel | Four milestones where two can be built in parallel. Live only for now. |
+| `architecture-two-services` | architecture | A two-component design with contracts and an acyclic dependency graph; no code. |
+| `review-planted-defects` | review | A PR with green tests, two planted regressions (timeout reconciliation dropped, `.de` never-retry policy lost) and one nit. Both regressions blocking, nothing else blocking, tree untouched. |
+| `review-clean-pr` | review | The same refactor done right. Must approve; a blocking finding is invented. |
+| `review-vacuous-tests` | review | The PR's tests pass without exercising the change. The reviewer must deliver a targeted test that fails on the patched code and passes once fixed; the oracle runs both. |
+| `design-review-planted` | design | A queue-migration design with three gaps (ordering vs. partition key, no idempotency boundary, no rollback). All three blocking, nothing invented, ordering put to the user as a question. |
+| `design-review-sound` | design | The same design with the gaps closed. No blocking concerns. |
+| `discuss-cache-choice` | discuss | In-process vs. shared cache, decided by facts planted in the repository (four shared-nothing workers against a 60/hour upstream limit). Cites sources, weighs both options, writes no code, asks at most three questions. |
+| `investigate-two-caches` | investigate | Explain two caches: scope, TTL and users must match the code; consequence of removing one named; nothing changed. |
+
+Planned next: Figma design → implementation, and multi-service systems started
+with `docker compose` and checked end to end.
+
+## Adding a scenario
+
+```
+catalog/<id>/
+  scenario.toml     title, category, optional requires = ["go"], [fake] check = "...",
+                    [run] max_steps, timeout_minutes, expected = "complete"|"stop"|"any", known_failure = "why"
+  brief.md          the request, exactly as a user would type it (plain text, no headings)
+  seed/             the starting project, committed before the run (omit for an empty repo)
+  oracle.py         def check(project, scenario, run=None) -> list[Check]
+  reference/        files that, laid over the seed, make a correct solution
+  broken/<name>/    plausible solutions with one real defect each
+  hidden/           tests only the oracle sees; never copied into the workspace
+```
+
+Rules for oracles, so a verdict means something:
+
+- Judge through the documented interface (CLI, HTTP, public functions), so a
+  correct solution with a different internal structure still passes.
+- Work on a copy (`scratch_copy`) and never modify the delivered project.
+- Import only `harness.oracle` and the standard library, never AutoCode.
+- Every scenario has a reference solution and at least one broken variant, and
+  `check` must show the oracle telling them apart. `test_harness.py` enforces this.
+- For changes to an existing Python project, `python_change_checks` gives the
+  standard checks: project tests pass, hidden tests pass, existing tests kept,
+  standard library only, and the delivered tests fail against the original code.
+- For a report, plant the facts in the seed and check them, not the prose:
+  which file, which line span, which number. Where words are unavoidable
+  (`mentions`), accept several phrasings and pair each "finds X" check with a
+  "does not invent Y" check.
+- For a read-only job, end with `only_changed_under(project, "<report dir>/")`.
+
+## Relation to older harnesses
+
+`tools/live_trial.py` and `tools/live_scenarios.py` hold the scenarios this
+catalog was ported from (LIVE-01, 02, 05, 06). They stay until the work in
+progress on them lands; then they can be removed. LIVE-07 depends on a separate
+local repository and was not ported. `test-scenarios/` is a different suite:
+fault injection (crash and resume, budget exhaustion, dirty workspaces) against
+a fake Codex, and has not been migrated yet.

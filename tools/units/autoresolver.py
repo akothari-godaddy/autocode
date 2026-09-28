@@ -1,19 +1,88 @@
-"""Read-only diagnosis and bounded repair planning; never writes application code."""
+"""Read-only diagnosis and bounded repair planning; never writes application code.
+
+Owns three stages: ``astra_resolve`` (why did a reviewed build fail, and what bounded
+rework fixes it), the bug-fix workflow's ``investigate_bug`` (autocode_bug_job:
+reproduce a reported misbehavior and diagnose it before any fix exists), and the
+discuss workflow's ``answer_question`` (autocode_discuss_job: answer a question or
+weigh a tradeoff from the repository, building nothing), and ``investigate_stuck``
+(autocode_stuck_job: why a stage stopped converging, before the run pauses)."""
 import copy
 import json
 from pathlib import Path
 try:
-    from .. import autocode_support as support, autocode_goals as goals
-    from .. import autocode_failures as failures
+    from .. import autocode_support as support, autocode_goals as goals, autocode_bug_job as bug_job
+    from .. import autocode_discuss_job as discuss_job, autocode_stuck_job as stuck_job, autocode_failures as failures
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
+    import autocode_bug_job as bug_job
+    import autocode_discuss_job as discuss_job
+    import autocode_stuck_job as stuck_job
     import autocode_failures as failures
-from .common import ModelRequest, execution_request
+from . import autoplanner
+from .common import ModelRequest, capped_route, execution_request
 
 
+def prepare_answer(state):
+    """The Analyst inherits the planner model on its own route and session, effort capped
+    at medium, with the same scratch-copy rule as the Investigator."""
+    state["phase"] = "INVESTIGATING"
+    state["settings"]["roles"].setdefault("analyst", capped_route(state["settings"]["roles"]["astra"]))
+    prompt, metrics = discuss_job.prompt(
+        state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
+        state["settings"].get("context_soft_tokens", 10000),
+        autoplanner.engine_for(state["settings"], "analyst"))
+    return ModelRequest("astra", "analyst", prompt, metrics, discuss_job.SCHEMA, True)
 
 
+def prepare_investigation(state):
+    """The Investigator inherits the planner model on its own route and session, so its
+    reproduction context never leaks into later planning or review. It may write, but only
+    to a scratch copy of its own; the runner rejects any change to the workspace itself."""
+    state["phase"] = "INVESTIGATING"
+    state["settings"]["roles"].setdefault("investigator", copy.deepcopy(state["settings"]["roles"]["astra"]))
+    prompt, metrics = bug_job.prompt(
+        state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
+        state["settings"].get("context_soft_tokens", 10000),
+        autoplanner.engine_for(state["settings"], "investigator"))
+    return ModelRequest("astra", "investigator", prompt, metrics, bug_job.SCHEMA, True)
+
+
+def apply_job(stage, state, value, record, workspace):
+    """Autopilot hands a job stage's validated report here. The Analyst's answer completes
+    the run. For the Investigator, a small reproduced bug becomes one Builder task at once;
+    anything else continues where bug_job.apply sent it."""
+    if stage in (discuss_job.STAGE, stuck_job.STAGE):
+        return (discuss_job if stage == discuss_job.STAGE else stuck_job).apply(state, value, record, workspace)
+    bug_job.apply(state, value, record, workspace)
+    if bug_job.small_correction(state):
+        start_small_correction(state, workspace)
+
+
+def start_small_correction(state, workspace):
+    """Install the diagnosis as a one-task contract, approve it under the recorded policy
+    (never as the user), and assign the Builder task exactly as a user approval would."""
+    try:
+        from .. import autocode_dispatch as dispatch
+    except ImportError:
+        import autocode_dispatch as dispatch
+    body = bug_job.correction_contract(state)
+    # Approved here under the recorded policy, so no approval request is queued for the user.
+    goals.install_draft(state, body, origin=bug_job.ORIGIN, queue_human=False)
+    goals.validate_body(state, body, ready=True)
+    contract = state["goal_contract"]
+    event = {"kind": "goal_approval", "actor": "workflow_policy", "policy": bug_job.SMALL_FIX_POLICY,
+             "at": support.now(), "token": goals.token(contract)}
+    state.setdefault("user_events", []).append(event)
+    contract.update(approval_status="approved", approval_event=event)
+    state.update(phase="READY_TO_EXECUTE", status="RUNNING", pending_questions=[])
+    decision = goals.initial_decision(body)
+    goals.assign_task(state, decision, support.snapshot(Path(workspace)))
+    state.update(next_action=decision["next_objective"], affected_paths=decision["affected_paths"],
+                 next_stage=dispatch.build_stage(state))
+    goals.record_decision(state, decision)
+    if not goals.approved(state):
+        raise ValueError("The small-correction contract did not pass the approval check")
 
 def guard(state, workspace):
     goals.execution_guard(state)
@@ -34,7 +103,26 @@ def guard(state, workspace):
             raise support.Paused('PAUSED_STALE_HANDOFF', 'Repair evidence changed; review again before resolving')
 
 
+def prepare_stuck(state, state_path):
+    """A fresh route and session every time: a strong OpenAI model different from the stuck
+    stage's, at xhigh, so the Investigator does not inherit the stuck stage's reasoning."""
+    roles = state["settings"]["roles"]
+    stuck_route = autoplanner.route_for(state, state["stuck_investigation"]["stage"])
+    roles[stuck_job.ROUTE] = stuck_job.route(roles, (roles.get(stuck_route) or {}).get("model", ""))
+    state.setdefault("sessions", {}).pop(stuck_job.ROUTE, None)
+    prompt, metrics = stuck_job.prompt(
+        state, state_path, autoplanner.workspace_inventory(state["workspace"], state["task"]),
+        state["settings"].get("context_soft_tokens", 10000), autoplanner.engine_for(state["settings"], stuck_job.ROUTE))
+    return ModelRequest("astra", stuck_job.ROUTE, prompt, metrics, stuck_job.SCHEMA, False)
+
+
 def prepare(state, stage, state_path, schema_dir):
+    if stage == stuck_job.STAGE:
+        return prepare_stuck(state, state_path)
+    if stage == bug_job.STAGE:
+        return prepare_investigation(state)
+    if stage == discuss_job.STAGE:
+        return prepare_answer(state)
     if stage == 'astra_diagnose':
         return prepare_diagnosis(state, stage, state_path, schema_dir)
     if stage != 'astra_resolve':

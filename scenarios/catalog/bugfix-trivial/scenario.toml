@@ -1,0 +1,9 @@
+title = "A three-line fix should not get a five-round plan"
+category = "bugfix"
+# An off-by-one in page_count. Correctness is the easy part (hidden tests
+# cover every small total/size pair, so `// size + 1` fails on exact
+# multiples). The point is proportionality: no requirements gathering, no
+# plan-review rounds, no questions, and at most five model stages in total.
+
+[fake]
+check = "python3 -m unittest discover -s tests -t ."

@@ -23,17 +23,21 @@ from typing import Any
 import copy
 import uuid
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures
+    from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode
     from . import autocode_regression as regression
+    from . import autocode_run_view as run_view
+    from . import autocode_workflows as workflows
 except ImportError:
     import autocode_regression as regression
-    import autocode_support as support
+    import autocode_support as support, autocode_jobs as jobs
+    import autocode_workflows as workflows
     import autocode_goals as goals
     import autocode_interventions as interventions
     import autocode_providers
     import autocode_opencode as opencode
     import autocode_gocode as gocode
+    import autocode_run_view as run_view
     import autocode_process as processes
     import autocode_registry as registry
     import autocode_planning as planning
@@ -618,7 +622,7 @@ def run_role(
     original_stage = state['next_stage']
     stage = original_stage
     joint_stage = planning.is_planning(state, stage)
-    if state.get("version", 2) >= 3 and stage != "astra_discovery" and not joint_stage:
+    if state.get("version", 2) >= 3 and stage not in ("astra_discovery", *jobs.STAGES) and not joint_stage:
         goals.execution_guard(state)
         if not report_only:
             milestones.dispatch_guard(state, stage)
@@ -2799,6 +2803,12 @@ def _main_body(unit=None) -> int:
         except ImportError:
             import autocode_tasks
         return autocode_tasks.cli(sys.argv[2:])
+    if sys.argv[1:2] == ["components"]:
+        try:
+            from . import autocode_components
+        except ImportError:
+            import autocode_components
+        return autocode_components.cli(sys.argv[2:])
     if sys.argv[1:2] == ["ui"]:
         try:
             from . import autocode_ui
@@ -2832,7 +2842,7 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--in-place", action="store_true", help="Use this checkout directly; otherwise new tasks get independent worktrees from HEAD")
     parser.add_argument("--max-parallel-builders", type=int,
                         help="Orchestrator concurrency for independent milestones (new joint runs: 2; 1 dispatches serially)")
-    parser.add_argument('--builder-strong-model', help='New-run Builder escalation model after one ordinary retry (default xiaomi-token-plan-sgp/mimo-v2.6-pro, high); pinned routes never escalate')
+    parser.add_argument('--builder-strong-model', help='New-run Builder escalation model after one ordinary retry (default openai/gpt-6-astra, high); pinned routes never escalate')
     parser.add_argument("--retry-builder", action="append", default=[], metavar="MILESTONE_ID",
                         help="Explicitly retry a stopped Builder after inspecting its retained work; requires --resume-paused")
     parser.add_argument("--figma-file", help="Figma Design URL to implement using the connected Codex plugin")
@@ -3141,6 +3151,7 @@ def _main_body(unit=None) -> int:
                            "unit_handoffs": state.get("unit_handoffs", {}),
                            "milestone_activation_pending": (run_dir / 'milestone-checkpoints-requested.json').exists(),
                            "interventions": intervention_metadata(workspace, run_dir, state),
+                           "view": run_view.view(state),
                            **resolver_human.projection(state)}, indent=2))
         return 0
     saved_provider = dict(state.get("settings") or {})
@@ -3183,7 +3194,11 @@ def _main_body(unit=None) -> int:
         if not args.run_dir:
             state["settings"] = settings
             if settings.get('planning_flow') == 'v2':
-                state['next_stage'] = planning.entry_stage(state)
+                if state.get('next_stage') == workflows.STAGE:
+                    # Recognition still runs first; v2 only moves where the build pipeline starts.
+                    state['workflow']['then'] = planning.entry_stage(state)
+                else:
+                    state['next_stage'] = planning.entry_stage(state)
             write_json(state_path, state)
         try:
             registry.register_run(workspace, run_dir, state)
@@ -3448,7 +3463,7 @@ def _main_body(unit=None) -> int:
                 backup = run_dir / "state.pre-v3.json"
                 if not backup.exists():
                     write_json(backup, state)
-                goals.migrate(state)
+                goals.migrate(state, fresh=not args.run_dir)
                 write_json(state_path, state)
             if args.milestone_checkpoints:
                 milestones.activate(state)
@@ -3558,7 +3573,7 @@ def _main_body(unit=None) -> int:
                 if state["status"] != "TASK_COMPLETE":
                     write_json(state_path, state)
             if state["status"] == "TASK_COMPLETE":
-                print(goals.render_completion(state))
+                print(jobs.render(state, goals.render_completion))
                 return 0
             if state["status"] in ("WAITING_FOR_USER", "AWAITING_GOAL_APPROVAL"):
                 if args.chat:
@@ -3686,7 +3701,7 @@ def _main_body(unit=None) -> int:
                 if stage == "orchestrator":
                     return autopilot.unit_module(stage).dispatch(current, workspace, run_dir)
                 regression.before_review(current, stage, workspace, run_dir)
-                request = autopilot.unit_module(stage).prepare(current, stage, state_path, SCHEMA_DIR)
+                request = autopilot.prepare_request(current, stage, state_path, SCHEMA_DIR)
                 role, route_role = request.role, request.route_role
                 rotate_if_needed(current, route_role, run_dir)
                 prompt, metrics = request.prompt, request.metrics
@@ -3749,7 +3764,7 @@ def _main_body(unit=None) -> int:
             try:
                 orchestrator.drive(state, dispatch_code_stage, before=before_code_stage,
                                    persist=lambda current: (autopilot.publish_handoffs(current, run_dir), write_json(state_path, current)),
-                                   after=after_code_stage)
+                                   after=after_code_stage, investigate=not args.unit)
             except orchestrator.LoopExit as stopped:
                 return stopped.code
         except (support.Paused, ValueError, RuntimeError, OSError) as error:
@@ -3761,7 +3776,7 @@ def _main_body(unit=None) -> int:
             print(f"{state['status']}: {error}", file=sys.stderr)
             return 2
         if state["status"] == "TASK_COMPLETE":
-            print(goals.render_completion(state))
+            print(jobs.render(state, goals.render_completion))
         else:
             if args.chat and state["status"] in ("WAITING_FOR_USER", "AWAITING_GOAL_APPROVAL"):
                 if not chat_checkpoint(state, run_dir):
@@ -3769,7 +3784,7 @@ def _main_body(unit=None) -> int:
                     return 2
                 write_json(state_path, state)
                 if state["status"] == "TASK_COMPLETE":
-                    print(goals.render_completion(state))
+                    print(jobs.render(state, goals.render_completion))
                     return 0
             rendered = goals.present(state)
             write_json(state_path, state)

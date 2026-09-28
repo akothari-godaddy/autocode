@@ -1,0 +1,5 @@
+title = "Four-milestone diamond built by parallel Builders"
+category = "parallel"
+# Ported from tools/live_scenarios.py LIVE-06 (oracle FX06). B and C are
+# independent and own disjoint paths, so AutoCode may build them in parallel.
+# No [fake] section: the scripted provider only handles single-milestone plans.

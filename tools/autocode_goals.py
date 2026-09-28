@@ -9,12 +9,12 @@ import re
 import uuid
 
 try:
-    from . import autocode_support as s
+    from . import autocode_support as s, autocode_workflows as workflows
     from . import autocode_milestones as checkpoints
     from . import autocode_findings as findings
     from . import autocode_resolver_human as human
 except ImportError:
-    import autocode_support as s
+    import autocode_support as s, autocode_workflows as workflows
     import autocode_milestones as checkpoints
     import autocode_findings as findings
     import autocode_resolver_human as human
@@ -189,7 +189,7 @@ def approved(state):
     contract = state.get("goal_contract", {})
     approval = contract.get("approval_event") or {}
     return bool(contract and sealed(contract) and contract.get("approval_status") == "approved"
-                and approval.get("token") == token(contract) and approval.get("actor") == "user_cli"
+                and approval.get("token") == token(contract) and workflows.approval_actor_ok(contract.get("origin"), approval)
                 and approval in state.get("user_events", [])
                 and not contract["body"]["open_blocking_questions"])
 
@@ -761,8 +761,9 @@ def install_draft(state, body, *, origin, allow_legacy=False, changes=None, reco
                             else "astra_discovery") if questions else "astra_plan")
 
 
-def migrate(state):
-    """Call only at a saved, idle boundary. Preserve artifacts and execution history."""
+def migrate(state, *, fresh=False):
+    """Call only at a saved, idle boundary. Preserve artifacts and execution history.
+    A fresh run (``fresh``) first recognizes what kind of job the request is."""
     if state.get("active_stage") or state.get("uncertain_artifacts"):
         raise s.Paused("PAUSED_UNCERTAIN_STAGE", "Reconcile the prior request before goal migration")
     if state.get("version", 2) >= 3:
@@ -786,6 +787,8 @@ def migrate(state):
                    "requirements_gather" if "requirements" in state.get("settings", {}).get("roles", {})
                    else "astra_discovery")
     state.update(version=3, phase="DISCOVERING", status="RUNNING", pending_questions=[], next_stage=first_stage)
+    if fresh:
+        workflows.begin(state, first_stage)
 
 
 def plan_preview(state):

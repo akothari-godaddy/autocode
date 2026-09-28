@@ -6,7 +6,8 @@ import json
 import re
 from pathlib import Path
 try:
-    from . import autocode_support as support, autocode_goals as goals
+    from . import autocode_support as support, autocode_goals as goals, autocode_jobs as jobs
+    from . import autocode_stuck_job as stuck
     from . import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
@@ -15,7 +16,8 @@ try:
     from . import autocode_regression as regression
 except ImportError:
     import autocode_regression as regression
-    import autocode_support as support
+    import autocode_support as support, autocode_jobs as jobs
+    import autocode_stuck_job as stuck
     import autocode_goals as goals
     import autocode_planning_artifacts as planning_artifacts
     import autocode_planning_graph as planning_graph
@@ -40,41 +42,32 @@ class LoopExit(Exception):
 
 
 def drive(state, dispatch, *, apply=None, before=None, after=None, persist=None,
-          active=lambda value: value.get('status') == 'RUNNING'):
+          active=lambda value: value.get('status') == 'RUNNING', investigate=False):
     """Run the saved state's next stage until its workflow reaches a boundary.
 
-    Units own prompts and schemas; Autopilot owns code-workflow transitions. This function owns the
-    common sequence: guard -> select saved stage -> dispatch -> apply -> persist.
-    Returning SKIP from a hook restarts from the newly saved state without
-    pretending a stage completed.
+    Units own prompts and schemas; Autopilot owns code-workflow transitions. The loop itself
+    (guard -> select saved stage -> dispatch -> apply -> persist) is autocode_stuck_job.drive;
+    SKIP from a hook restarts from the newly saved state without pretending a stage completed.
+    With ``investigate``, a stage that stops converging goes to the Investigator before a pause.
     """
-    while active(state):
-        if before and before(state) is SKIP:
-            continue
-        stage = state.get('next_stage')
-        if not isinstance(stage, str) or not stage:
-            raise ValueError('Running orchestration has no next stage')
-        outcome = dispatch(state, stage)
-        if outcome is SKIP:
-            continue
-        if apply:
-            applied = apply(state, stage, outcome)
-            if applied is SKIP:
-                continue
-        if persist:
-            persist(state)
-        if after:
-            after(state, stage, outcome)
-    return state
+    return stuck.drive(state, dispatch, apply=apply, before=before, after=after, persist=persist,
+                       active=active, skip=SKIP, paused=support.Paused, investigate=investigate)
+
+
+def prepare_request(state, stage, state_path, schema_dir):
+    """A unit's model request for ``stage``, carrying the Investigator's guidance when in force."""
+    return stuck.with_guidance(state, stage, unit_module(stage).prepare(state, stage, state_path, schema_dir))
 
 UNITS = ("autoplanner", "autocode", "autoreview", "autoresolver")
 
 
 def unit_for(stage):
+    if stage in jobs.UNIT:
+        return jobs.UNIT[stage]
     if stage in ("astra_resolve", "astra_diagnose"):
         return "autoresolver"
-    if stage in ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize",
-                 "requirements", "plan", "plan_review", "plan_revise", "plan_finalize"):
+    if stage in (planning_unit.RECOGNIZE, "requirements_gather", "astra_discovery", "astra_challenge", "glm_revise",
+                 "astra_finalize", "requirements", "plan", "plan_review", "plan_revise", "plan_finalize"):
         return "autoplanner"
     if stage in ("astra_plan", "orchestrator", "terra"):
         return "autocode"
@@ -99,12 +92,6 @@ def pending_unit(state):
 
 def publish_handoffs(state, run_dir):
     """Export versioned unit outputs; saved state and checked evidence stay authoritative."""
-    try:
-        from . import autocode_goals as goals, autocode_support as support
-    except ImportError:
-        import autocode_goals as goals
-        import autocode_support as support
-    from pathlib import Path
     outputs = {}
     if goals.approved(state):
         contract = state["goal_contract"]
@@ -149,7 +136,7 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
         return unit.dispatch(state, workspace, run_dir)
     regression.before_review(state, stage, workspace, run_dir)
     state_path = run_dir / "state.json"
-    request = unit.prepare(state, stage, state_path, runtime.SCHEMA_DIR)
+    request = prepare_request(state, stage, state_path, runtime.SCHEMA_DIR)
     runtime.rotate_if_needed(state, request.route_role, run_dir)
     state["pending_context_metrics"] = request.metrics
     if request.metrics["estimated_prompt_tokens"] > request.metrics["soft_budget_tokens"]:
@@ -178,7 +165,6 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
             return SKIP
         raise
     return record
-
 
 
 def start_planning(state):
@@ -535,6 +521,8 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
         checked = {**value, "proposed_assumptions": [row for row in value["proposed_assumptions"]
                                                      if not isinstance(row, str)]}
     support.validate_schema(checked, planning_unit.SCHEMAS[stage])
+    if stage == planning_unit.RECOGNIZE:
+        return planning_unit.recognize(state, value, record)
     value, deferred = _clarify_discoverable(state, stage, value, record)
     if deferred:
         return
@@ -624,7 +612,6 @@ def apply_planning_result(state, stage, value, record, *, run_dir=None):
     if planning_unit.is_planning(state, stage):
         apply_planning(state, stage, value, record, run_dir=run_dir)
         return
-    from pathlib import Path
     schema = support.read(Path(record["schema"])) if record.get("schema") else goals.DISCOVERY_SCHEMA
     support.validate_schema(value, schema)
     legacy = not any(key in schema["properties"]["contract"]["properties"] for key in goals.BRIEF_FIELDS)
@@ -900,6 +887,9 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
     support, goals, planning = runtime.support, runtime.goals, runtime.planning
     workflow, milestones, escalation = runtime.workflow, runtime.milestones, runtime.escalation
     dispatch, save_record, now = runtime.dispatch, runtime.save_record, runtime.now
+    if stage in jobs.UNIT:
+        unit_module(stage).apply_job(stage, state, value, record, workspace)
+        return save_record(state, record)
     if stage == "astra_resolve":
         unit_module(stage).validate(state, value, record, workspace)
         value = unit_module(stage).preserve_review_criteria(state, value)
@@ -1039,9 +1029,9 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             # Passing Validator evidence cannot override the Plan Reviewer's rework or unverified criteria.
             if modern and value["status"] == "CONTINUE":
                 completion_probe = {**value, "status": "TASK_COMPLETE"}
-                if support.completion_ready(state, completion_probe, support.snapshot(workspace)):
-                    state.update(status="PAUSED_COMPLETION_REVIEW", phase="PAUSED_OR_BLOCKED", next_stage="astra_review",
-                        stop_reason="All required criteria already pass; request completion instead of another implementation batch")
+                probe_snapshot = support.snapshot(workspace)
+                if support.completion_ready(state, completion_probe, probe_snapshot):
+                    state.update(next_stage="astra_review", **unit_module("astra_review").completion_review(state, probe_snapshot))
                     state["iteration"] += 1
                     goals.record_decision(state, value)
                     save_record(state, record)

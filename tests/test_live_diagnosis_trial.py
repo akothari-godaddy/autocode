@@ -510,7 +510,7 @@ class ParseArgsTests(unittest.TestCase):
 
     def test_live_profile_without_authorization_is_refused_before_any_spend(self):
         with patch.object(sys, "stderr"):
-            code = trial.main(["--profile", "glm53-mimo"])
+            code = trial.main(["--profile", "glm53-openai"])
         self.assertEqual(2, code)
 
 

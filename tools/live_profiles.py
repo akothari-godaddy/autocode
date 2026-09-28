@@ -51,20 +51,20 @@ PROFILES = {
         "effort": {role: "none" for role in EFFORT_ROLES},
     },
     # Subscription-only. Two hard rules (user 2026-09-26):
-    # 1) Verifier ≠ producer — MiMo checks GLM work and GLM checks MiMo work.
+    # 1) Verifier ≠ producer — OpenAI GPT checks GLM work and GLM checks GPT work.
     # 2) Start at the ladder's medium rung where it says medium; shift to higher
     #    reasoning inside the stage when evidence shows struggle.
-    # Never free-tier or flash. `mimo-token-plan/` is dead (Invalid API key).
-    "glm53-mimo": {
+    # Never free-tier or flash. Never MiMo (user 2026-09-27); OpenAI via the ChatGPT login.
+    "glm53-openai": {
         "provider": "opencode",
         "role_models": {
             "requirements": "zai-coding-plan/glm-5.3",
             "planner": "zai-coding-plan/glm-5.3",
-            "reviewer": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
-            "builder": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+            "reviewer": "openai/gpt-6-astra",
+            "builder": "openai/gpt-6-sol",
             "validator": "zai-coding-plan/glm-5.3",
             "completion": "zai-coding-plan/glm-5.3",
-            "resolver": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
+            "resolver": "openai/gpt-6-astra",
         },
         "effort": {
             "requirements": "medium",
@@ -98,19 +98,8 @@ PROFILES = {
 }
 
 
-for _name, _glm, _mimo in (
-    ('glm53-mimo-low', 'low', 'low'),
-    ('glm53-mimo-high', 'high', 'high'),
-    ('glm53-max-mimo-high', 'max', 'high'),
-    ('glm53-high-mimo-medium', 'high', 'medium'),
-):
-    # Advertised by these configured OpenCode routes on 2026-09-26. In
-    # particular GLM-5.3 does not advertise the old profile's medium variant.
-    _profile = copy.deepcopy(PROFILES['glm53-mimo'])
-    _profile['effort'] = {role: _glm if model.startswith('zai-coding-plan/') else _mimo
-                          for role, model in _profile['role_models'].items()}
-    _profile['note'] = f'Campaign: GLM-5.3 {_glm}, MiMo 2.6 Pro {_mimo}; independent producer/verifier roles.'
-    PROFILES[_name] = _profile
+# Master's 2026-09-26 effort-campaign profiles (glm53-mimo-*) derived from glm53-mimo;
+# removed with every MiMo route (user 2026-09-27). VALIDATION.md keeps their results.
 
 
 def resolve(name: str) -> dict:
