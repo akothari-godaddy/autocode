@@ -1,20 +1,3 @@
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / "tools"
-_FAKES = _ROOT / "tests" / "fakes"
-for _p in (_ROOT, _TOOLS, _ROOT / "tests", _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 """Handwritten plans -> public CLI -> actual candidate. No runner state injection.
 
 Provider is deterministic, not a live LLM. Set BUILD_AUDIT_ARTIFACTS to retain
@@ -32,7 +15,7 @@ import time
 import unittest
 
 from goal_fixtures import body
-from . import build_product_fixtures as products
+import build_product_fixtures as products
 
 
 def plan(rows, payloads, checks, title):
@@ -93,7 +76,7 @@ class BuildBlackbox(unittest.TestCase):
             self.root = Path(temp.name).resolve()
         self.project = self.root / 'project'
         self.project.mkdir()
-        self.source = _TOOLS
+        self.source = Path(__file__).resolve().parents[1] / "tools"
         subprocess.run(['git', 'init', '-q', str(self.project)], check=True)
         subprocess.run(['git', '-C', str(self.project), '-c', 'user.name=Fixture', '-c', 'user.email=f@example.test',
                         'commit', '--allow-empty', '-qm', 'baseline'], check=True)
@@ -329,8 +312,9 @@ class BuildBlackbox(unittest.TestCase):
             self.build(); self.candidate()
             if i<2:
                 self.invoke('autoreview',['--run-dir',str(self.run),'--no-chat'])
-        check=subprocess.run([sys.executable,'-c',spec['checks']['M4']],cwd=self.project,capture_output=True,text=True)
+        check=subprocess.run([sys.executable,'-c',spec['checks']['M4']],cwd=self.project,capture_output=True,text=True,timeout=10)
         self.assertNotEqual(0,check.returncode)
+        self.assertIn('HTTP Error 404',check.stderr)
         (self.root/'independent-integration-failure.txt').write_text(check.stdout+check.stderr)
         self.invoke('autoreview',['--run-dir',str(self.run),'--no-chat'])
         self.assertEqual('FAIL',self.state()['validation']['verdict'])
@@ -339,6 +323,37 @@ class BuildBlackbox(unittest.TestCase):
     @unittest.skipUnless(shutil.which('go'),'Go toolchain required')
     def test_product_d_go_registry_synthetic_oracle_not_executed_csharp(self):
         self.finish_product(products.registry(plan))
+
+
+class HttpFixtureTests(unittest.TestCase):
+    def test_loopback_checks_avoid_dns_and_proxy_discovery(self):
+        for fixture, incompatible in ((products.client_server, False),
+                                      (products.client_server, True),
+                                      (products.duplicate_api, False)):
+            with self.subTest(fixture=fixture.__name__, incompatible=incompatible), \
+                    tempfile.TemporaryDirectory() as temp:
+                spec = fixture(plan)
+                if incompatible:
+                    spec['payloads']['M3']['client.py'] = spec['payloads']['M3']['client.py'].replace(
+                        'base+USER_PATH+uid', "base+'/user?id='+uid")
+                for files in spec['payloads'].values():
+                    for name, content in files.items():
+                        (Path(temp) / name).write_text(content)
+                for mid, check in spec['checks'].items():
+                    command = (
+                        'import socket, urllib.request\n'
+                        'from unittest.mock import patch\n'
+                        'with patch.object(socket, "getfqdn", side_effect=AssertionError("reverse DNS")), '
+                        'patch.object(urllib.request, "getproxies", side_effect=AssertionError("system proxies")):\n'
+                        f'    exec({check!r})\n'
+                    )
+                    result = subprocess.run([sys.executable, '-c', command], cwd=temp,
+                                            capture_output=True, text=True, timeout=10)
+                    if incompatible and mid == 'M4':
+                        self.assertNotEqual(0, result.returncode)
+                        self.assertIn('HTTP Error 404', result.stderr)
+                    else:
+                        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
 
 if __name__=='__main__':

@@ -371,9 +371,9 @@ The test strategy includes stale results, reviewer disagreement, findings retent
 A documented starting suite is:
 
 ```sh
-python3 -m unittest tools/test_escalation.py tools/test_autocode.py \
-  tools/test_goals.py tools/test_subprocess.py tools/test_opencode.py \
-  tools/test_process.py
+python3 -m unittest tests/test_escalation.py tests/test_autocode.py \
+  tests/test_goals.py tests/test_subprocess.py tests/test_opencode.py \
+  tests/test_process.py
 ```
 
 This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), and [audit artifacts](audits/). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:

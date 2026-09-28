@@ -1,32 +1,56 @@
 """Report-only recovery tests: fixtures and mocked providers, no live model calls."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 import shutil
 from pathlib import Path
 from unittest.mock import patch
 import unittest
-try:
-    from . import test_autocode as base
-    from . import test_subprocess
-except ImportError:
-    import test_autocode as base
-    import test_subprocess
+from . import test_autocode as base
+from . import test_subprocess
+from goal_fixtures import body
+from .test_opencode import event, terminal
 
 runner, support = base.runner, base.s
 
 
 class RepairTests(unittest.TestCase):
     setUp = base.RetrofitTest.setUp
+
+    def test_plan_review_missing_blocking_is_preserved_as_blocking(self):
+        schema = self.run / 'plan-review.schema.json'
+        schema.write_text(json.dumps(runner.planning.SCHEMAS['astra_challenge']))
+        concern = {'id': 'C-1', 'concern': 'The build gate is premature',
+                   'evidence_refs': ['goal_contract.body'],
+                   'requested_change': 'Move the gate',
+                   'acceptance_test': 'Review happens after build'}
+        raw = {'summary': 'Rework is needed', 'concerns': [concern, {
+            **concern, 'id': 'C-2', 'blocking': False}]}
+        for stage in ('astra_challenge', 'astra_challenge_report_repair'):
+            with self.subTest(stage=stage):
+                output = self.run / f'{stage}.json'
+                record = {'stage': stage, 'engine': 'opencode',
+                          'events': str(self.run / f'{stage}.jsonl'),
+                          'output': str(output), 'schema': str(schema)}
+                with patch.object(runner.opencode, 'final_report', return_value=raw):
+                    result = runner.load_stage_report(record)
+                self.assertEqual([True, False], [row['blocking'] for row in result['concerns']])
+                self.assertEqual(raw, json.loads(output.with_suffix('.reported.json').read_text()))
+                self.assertEqual(result, json.loads(output.read_text()))
+                self.assertEqual(str(output.with_suffix('.reported.json')), record['reported_output'])
+
+    def test_plan_review_normalization_does_not_hide_other_schema_errors(self):
+        schema = self.run / 'plan-review.schema.json'
+        schema.write_text(json.dumps(runner.planning.SCHEMAS['astra_challenge']))
+        record = {'stage': 'astra_challenge', 'engine': 'opencode',
+                  'events': str(self.run / 'plan-review.jsonl'),
+                  'output': str(self.run / 'plan-review.json'), 'schema': str(schema)}
+        raw = {'summary': 'Rework is needed', 'concerns': [{
+            'id': 'C-1', 'concern': 'Missing requested change',
+            'evidence_refs': ['goal_contract.body'], 'acceptance_test': 'Gate passes'}]}
+        with patch.object(runner.opencode, 'final_report', return_value=raw):
+            with self.assertRaises(ValueError):
+                runner.load_stage_report(record)
+        self.assertEqual(raw, support.read(Path(record['output'])))
 
     def test_builder_repair_preserves_failed_results_commands_and_user_decisions(self):
         report = self.run / 'original-builder.json'
@@ -53,22 +77,32 @@ class RepairTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'invented a command'):
             runner.assert_repair_preserves_builder_history(original, {'commands_run': ['fake-test']})
 
+    def stage_record(self, *, report='{}', event_rows=None, stage='terra', iteration=5, **overrides):
+        path = self.run / 'iterations' / f'{iteration:03d}' / f'{stage}-01'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        record = {'role': 'terra', 'stage': stage, 'iteration': iteration, 'exit_code': 0,
+                  'duration_seconds': 1, 'source_revision': support.snapshot(self.root)['revision']}
+        if event_rows is None:
+            event_rows = [{'type': 'thread.started', 'thread_id': 't-session'}, {'type': 'turn.completed'}]
+        for key, suffix, value in [('output', '.json', report), ('events', '.jsonl',
+                '\n'.join(json.dumps(row) for row in event_rows)),
+                ('before_ref', '.before.json', '{}'), ('after_ref', '.after.json', '{}'), ('schema', '.schema.json', '{}')]:
+            p = Path(str(path) + suffix)
+            if value is not None:
+                p.write_text(value)
+            record[key] = str(p)
+        record.update(overrides)
+        return record
+
     def queue(self, error=None, **overrides):
         self.state['settings']['report_repair'] = {'max_attempts': 2}
-        path = self.run / 'iterations/005/terra-01'
-        path.parent.mkdir(parents=True, exist_ok=True)
-        record = {'role': 'terra', 'stage': 'terra', 'iteration': 5, 'exit_code': 0,
-                  'duration_seconds': 1, 'source_revision': support.snapshot(self.root)['revision']}
-        for key, suffix, value in [('output', '.json', '{}'), ('events', '.jsonl',
-                json.dumps({'type': 'thread.started', 'thread_id': 't-session'})+'\n'+json.dumps({'type': 'turn.completed'})),
-                ('before_ref', '.before.json', '{}'), ('after_ref', '.after.json', '{}'), ('schema', '.schema.json', '{}')]:
-            p = Path(str(path)+suffix); p.write_text(value); record[key] = str(p)
-        record.update(overrides)
+        # ResolverRuntimeTests borrows this helper without inheriting RepairTests.
+        record = RepairTests.stage_record(self, **overrides)
         with self.assertRaises(runner.ReportRepairQueued):
             runner.reject_completed_stage(self.state, self.run, record, error or ValueError('Missing summary'))
         return self.state['pending_report_repair']
 
-    def reject_repair(self, iteration, error):
+    def reject_repair(self, iteration, error, *, report=None):
         original = self.state['pending_report_repair']['original']
         path = self.run / 'iterations' / f'{iteration:03d}' / 'terra_report_repair-01'
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -82,7 +116,440 @@ class RepairTests(unittest.TestCase):
             destination = Path(str(path) + suffix)
             shutil.copy2(original[field], destination)
             record[field] = str(destination)
+        if report is not None:
+            Path(record['output']).write_text(report)
         return runner.reject_completed_stage(self.state, self.run, record, error)
+
+    def repair_request(self):
+        with patch.object(runner, 'run_role', side_effect=RuntimeError('fixture stop')) as launch:
+            with self.assertRaisesRegex(RuntimeError, 'fixture stop'):
+                runner.execute_report_repair(self.state, self.run, self.root)
+        launch.assert_called_once()
+        return launch.call_args.kwargs
+
+    def assert_repair_blocked(self, status='PAUSED_REPORT_REPAIR_INPUT'):
+        attempts = self.state['pending_report_repair']['attempts']
+        with patch.object(runner, 'run_role') as launch, self.assertRaises(support.Paused) as error:
+            runner.execute_report_repair(self.state, self.run, self.root)
+        self.assertEqual(status, error.exception.status)
+        launch.assert_not_called()
+        self.assertEqual(attempts, self.state['pending_report_repair']['attempts'])
+        self.assertEqual(attempts, support.read(self.run / 'state.json')['pending_report_repair']['attempts'])
+
+    def test_native_schema_rejections_preserve_reports_before_validation_and_archive_pins(self):
+        cases = [
+            ('astra_challenge', {'summary': 'Review', 'concerns': [{
+                'id': 'P1', 'concern': 'Failure is not handled', 'evidence_refs': ['app.py:10'],
+                'requested_change': 'Handle failure', 'acceptance_test': 'Failure test passes',
+                'blocking': True}]}, '$.concerns[0]: missing requested_change'),
+            ('astra_discovery', {'contract': body(), 'summary': 'Draft', 'code_refs': [],
+                'alternatives': [], 'uncertainties': [], 'contract_changes': [],
+                'conflict_resolutions': [], 'requirement_trace': []}, '$: missing code_refs'),
+        ]
+        initial = copy.deepcopy(self.state)
+        validate = support.validate_schema
+        for stage, report, expected_error in cases:
+            with self.subTest(stage=stage):
+                self.state = copy.deepcopy(initial)
+                self.state['settings']['report_repair'] = {'max_attempts': 2}
+                self.state['next_stage'] = stage
+                schema = runner.planning.SCHEMAS[stage]
+                validate(report, schema)
+                if stage == 'astra_challenge':
+                    del report['concerns'][0]['requested_change']
+                else:
+                    del report['code_refs']
+                text = json.dumps(report)
+                record = self.stage_record(report=None, role='astra', stage=stage, engine='opencode',
+                                           event_rows=[event('text', text=text), terminal()])
+                Path(record['schema']).write_text(json.dumps(schema))
+                output = Path(record['output'])
+                response = output.with_suffix('.response.txt')
+                self.assertFalse(output.exists())
+
+                def validate_saved(value, saved_schema, where='$'):
+                    self.assertEqual(report, support.read(output))
+                    self.assertEqual(text, response.read_text())
+                    self.assertEqual(str(response), record['response_text'])
+                    return validate(value, saved_schema, where)
+
+                with patch.object(support, 'validate_schema', side_effect=validate_saved):
+                    with self.assertRaises(ValueError) as error:
+                        runner.load_stage_report(record, self.root)
+                self.assertEqual(expected_error, str(error.exception))
+                artifacts = {key: (Path(record[key]), Path(record[key]).read_bytes())
+                             for key in ('output', 'response_text', 'events', 'before_ref', 'after_ref')}
+                with self.assertRaises(runner.ReportRepairQueued):
+                    runner.reject_completed_stage(self.state, self.run, record, error.exception)
+                self.state = support.read(self.run / 'state.json')
+                pending = self.state['pending_report_repair']
+                for key, (old_path, contents) in artifacts.items():
+                    archived = Path(pending['original'][key])
+                    self.assertNotEqual(old_path, archived)
+                    self.assertFalse(old_path.exists())
+                    self.assertTrue(archived.parent.name.startswith('archived-'))
+                    self.assertEqual(contents, archived.read_bytes())
+                    self.assertEqual(support.file_hash(archived), pending['pins'][str(archived)])
+                    self.assertEqual(str(archived), pending['original']['archived_paths'][str(old_path)])
+                source = runner.repair_report_source(pending['original'])
+                self.assertEqual({'path': pending['original']['output'], 'format': 'json', 'content': report,
+                                  'bytes': Path(pending['original']['output']).stat().st_size, 'truncated': False,
+                                  'sha256': pending['pins'][pending['original']['output']]}, source)
+                data = json.loads(self.repair_request()['prompt'].split('CURRENT HANDOFF DATA\n', 1)[1])
+                self.assertEqual(expected_error, data['error'])
+                self.assertEqual(source, data['rejected_report'])
+                self.assertIsNone(data.get('original_report'))
+                self.assertEqual(pending['original']['archived_paths'], data['archived_paths'])
+
+    def test_malformed_terminal_text_is_standalone_and_excludes_transport_noise(self):
+        text = '{"summary":"Keep this entire rejected draft", "results":["exit=7"],'
+        noise = 'TOOL_OUTPUT_ONLY_' + 'x' * (runner.REPAIR_HANDOFF_BYTES * 2)
+        rows = [event('text', id='earlier', messageID='old', text='{"summary":"EARLIER_MESSAGE_ONLY"}'),
+                event('tool_use', tool='bash', state={'status': 'completed',
+                    'input': {'command': 'failed-check'}, 'metadata': {'exit': 7}, 'output': noise}),
+                event('text', text='SUPERSEDED_TERMINAL_PART'), event('text', text=text), terminal()]
+        record = self.stage_record(report=None, engine='opencode', event_rows=rows,
+                                   command=['OLD_COMMAND_ONLY_' + noise], metrics={'old_prompt': noise})
+        output = Path(record['output'])
+        response = output.with_suffix('.response.txt')
+        with self.assertRaisesRegex(RuntimeError, 'not a JSON report') as error:
+            runner.load_stage_report(record, self.root)
+        self.assertFalse(output.exists())
+        self.assertEqual(text, response.read_text())
+        self.assertEqual(str(response), record['response_text'])
+        self.state['settings']['report_repair'] = {'max_attempts': 2}
+        with self.assertRaises(runner.ReportRepairQueued):
+            runner.reject_completed_stage(self.state, self.run, record, error.exception)
+        self.state = support.read(self.run / 'state.json')
+        pending = self.state['pending_report_repair']
+        archived = Path(pending['original']['response_text'])
+        self.assertFalse(response.exists())
+        self.assertEqual(text, archived.read_text())
+        self.assertEqual(support.file_hash(archived), pending['pins'][str(archived)])
+        self.assertGreater(Path(pending['original']['events']).stat().st_size, runner.REPAIR_HANDOFF_BYTES)
+        prompt = self.repair_request()['prompt']
+        data = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(str(error.exception), data['error'])
+        self.assertEqual({'path': str(archived), 'sha256': support.file_hash(archived),
+                          'bytes': len(text.encode('utf-8')), 'truncated': False,
+                          'format': 'text', 'content': text}, data['rejected_report'])
+        self.assertIsNone(data.get('original_report'))
+        self.assertEqual(str(archived), data['archived_paths'][str(response)])
+        self.assertNotIn(str(output), data['archived_paths'])
+        self.assertEqual([{'command': 'failed-check', 'exit_code': 7,
+                           'evidence_ref': 'event:prt_tool_use'}], data['original_executed_checks'])
+        for excluded in ('TOOL_OUTPUT_ONLY_', 'EARLIER_MESSAGE_ONLY', 'SUPERSEDED_TERMINAL_PART', 'OLD_COMMAND_ONLY_'):
+            self.assertNotIn(excluded, prompt)
+        self.assertNotIn('metrics', data['original'])
+        self.assertNotIn('command', data['original'])
+        self.assertNotIn('rejection_reason', data['original'])
+        self.assertLess(len(prompt.encode('utf-8')), runner.REPAIR_HANDOFF_BYTES)
+
+    def test_second_repair_pairs_latest_error_with_latest_draft_and_preserves_original(self):
+        original = {'commands_run': ['failed-test'], 'results': ['exit=1'], 'changed_files': ['app.py'],
+                    'remaining_risks': ['not verified'], 'user_request': {'kind': 'permission', 'decision_needed': 'Allow?'}}
+        first_error = '$: missing summary'
+        pending = self.queue(error=ValueError(first_error), report=json.dumps(original))
+        baseline = copy.deepcopy(pending['original'])
+        first = json.loads(self.repair_request()['prompt'].split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(first_error, first['error'])
+        self.assertEqual(original, first['rejected_report']['content'])
+        self.assertIsNone(first.get('original_report'))
+        latest = {**original, 'summary': 'First repaired draft', 'evidence_refs': ['event:missing']}
+        latest_error = 'Implementation evidence references a missing executed event: event:missing\nKeep "exit=1".'
+        with self.assertRaises(runner.ReportRepairQueued):
+            self.reject_repair(6, ValueError(latest_error), report=json.dumps(latest))
+        self.state = support.read(self.run / 'state.json')
+        pending = self.state['pending_report_repair']
+        self.assertEqual(baseline, pending['original'])
+        self.assertEqual(latest_error, pending['error'])
+        rejected = pending['latest_rejected']
+        self.assertEqual('terra_report_repair', rejected['stage'])
+        self.assertNotEqual(baseline['output'], rejected['output'])
+        self.assertEqual(latest, support.read(rejected['output']))
+        for key in ('output', 'events', 'schema'):
+            self.assertEqual(support.file_hash(rejected[key]), pending['pins'][rejected[key]])
+        second = json.loads(self.repair_request()['prompt'].split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(latest_error, second['error'])
+        self.assertEqual(runner.repair_report_source(rejected), second['rejected_report'])
+        self.assertEqual(first['rejected_report'], second['original_report'])
+        self.assertEqual(first['original'], second['original'])
+        self.assertEqual({**baseline['archived_paths'], **rejected['archived_paths']}, second['archived_paths'])
+        self.assertEqual(2, support.read(self.run / 'state.json')['pending_report_repair']['attempts'])
+        runner.assert_repair_preserves_builder_history(baseline, latest)
+        with self.assertRaisesRegex(ValueError, 'changed recorded Builder history: results'):
+            runner.assert_repair_preserves_builder_history(baseline, {**latest, 'results': ['PASS']})
+
+    def test_original_and_latest_output_tampering_blocks_dispatch_without_charging(self):
+        pending = self.queue(report='{"summary":"original draft"}')
+        pending['attempts'] = 1
+        with self.assertRaises(runner.ReportRepairQueued):
+            self.reject_repair(6, ValueError('Latest failure'), report='{"summary":"latest draft"}')
+        self.state = support.read(self.run / 'state.json')
+        for key in ('original', 'latest_rejected'):
+            path = Path(self.state['pending_report_repair'][key]['output'])
+            contents = path.read_bytes()
+            for change in ('rewrite', 'remove'):
+                with self.subTest(source=key, change=change):
+                    try:
+                        if change == 'rewrite':
+                            path.write_text('{"summary":"tampered draft"}')
+                        else:
+                            path.unlink()
+                        self.assert_repair_blocked('PAUSED_STALE_VALIDATION')
+                    finally:
+                        path.write_bytes(contents)
+
+    def test_legacy_latest_draft_is_reassociated_from_history_or_mismatch_blocks(self):
+        initial = copy.deepcopy(self.state)
+        for mismatch in (False, True):
+            with self.subTest(mismatch=mismatch):
+                self.state = copy.deepcopy(initial)
+                original = {'summary': 'Original draft', 'results': ['exit=1']}
+                latest = {**original, 'summary': 'Latest legacy draft'}
+                pending = self.queue(report=json.dumps(original))
+                original_pins = copy.deepcopy(pending['pins'])
+                pending['attempts'] = 1
+                error = 'Exact latest legacy rejection'
+                with self.assertRaises(runner.ReportRepairQueued):
+                    self.reject_repair(5, ValueError(error), report=json.dumps(latest))
+                rejected = pending.pop('latest_rejected')
+                pending['pins'] = original_pins
+                if mismatch:
+                    pending['error'] = 'Error not belonging to the latest saved draft'
+                support.atomic_json(self.run / 'state.json', self.state)
+                self.state = support.read(self.run / 'state.json')
+                self.assertNotIn('latest_rejected', self.state['pending_report_repair'])
+                if mismatch:
+                    self.assert_repair_blocked('PAUSED_STALE_VALIDATION')
+                else:
+                    data = json.loads(self.repair_request()['prompt'].split('CURRENT HANDOFF DATA\n', 1)[1])
+                    self.assertEqual(error, data['error'])
+                    self.assertEqual(latest, data['rejected_report']['content'])
+                    self.assertEqual(rejected['output'], data['rejected_report']['path'])
+                    self.assertEqual(original, data['original_report']['content'])
+                    saved = support.read(self.run / 'state.json')['pending_report_repair']
+                    self.assertEqual(rejected, saved['latest_rejected'])
+                    self.assertEqual(2, saved['attempts'])
+                    for key in ('output', 'events', 'schema'):
+                        self.assertEqual(support.file_hash(rejected[key]), saved['pins'][rejected[key]])
+
+    def test_rejected_repair_cannot_replace_original_shared_schema_pin(self):
+        pending = self.queue()
+        schema = Path(pending['original']['schema'])
+        original_hash = pending['pins'][str(schema)]
+        pending['attempts'] = 1
+        schema.write_text('{"type":"object","required":["invented-field"]}')
+        with self.assertRaises(runner.ReportRepairQueued):
+            self.reject_repair(6, ValueError('Rejected against altered schema'))
+        self.state = support.read(self.run / 'state.json')
+        pending = self.state['pending_report_repair']
+        self.assertEqual(str(schema), pending['latest_rejected']['schema'])
+        self.assertNotEqual(original_hash, support.file_hash(schema))
+        self.assertEqual(original_hash, pending['pins'][str(schema)])
+        self.assert_repair_blocked('PAUSED_STALE_VALIDATION')
+
+    def test_report_byte_limit_accepts_complete_boundary_and_rejects_overflow(self):
+        self.assertEqual(128 * 1024, runner.REPAIR_REPORT_BYTES)
+        initial = copy.deepcopy(self.state)
+        for format_, prefix, suffix in [('json', '{"summary":"', '"}'), ('text', 'malformed: ', ' :end')]:
+            with self.subTest(format=format_):
+                self.state = copy.deepcopy(initial)
+                padding = runner.REPAIR_REPORT_BYTES - len((prefix + suffix).encode('utf-8'))
+                text = prefix + '\u00e9' * (padding // 2) + 'x' * (padding % 2) + suffix
+                record = self.stage_record(report=text if format_ == 'json' else None)
+                key = 'output' if format_ == 'json' else 'response_text'
+                if format_ == 'text':
+                    record[key] = str(Path(record['output']).with_suffix('.response.txt'))
+                    Path(record[key]).write_text(text)
+                self.assertLess(len(text), runner.REPAIR_REPORT_BYTES)
+                self.assertEqual(runner.REPAIR_REPORT_BYTES, Path(record[key]).stat().st_size)
+                source = runner.repair_report_source(record)
+                self.assertEqual(format_, source['format'])
+                self.assertEqual(json.loads(text) if format_ == 'json' else text, source['content'])
+                self.assertEqual(support.file_hash(record[key]), source['sha256'])
+                self.assertEqual(runner.REPAIR_REPORT_BYTES, source['bytes'])
+                self.assertIs(False, source['truncated'])
+                if format_ == 'json':
+                    pending = self.queue(report=text + '\n')
+                else:
+                    Path(record[key]).write_text(text + '\n')
+                    pending = self.queue(report=None, response_text=record[key])
+                path = Path(pending['original'][key])
+                self.assertEqual(runner.REPAIR_REPORT_BYTES + 1, path.stat().st_size)
+                self.assert_repair_blocked()
+                self.assertEqual((text + '\n').encode('utf-8'), path.read_bytes())
+                self.assertEqual(pending['pins'][str(path)], support.file_hash(path))
+
+    def test_latest_rejected_report_overflow_does_not_charge_second_attempt(self):
+        self.queue()['attempts'] = 1
+        oversized = 'x' * (runner.REPAIR_REPORT_BYTES + 1)
+        with self.assertRaises(runner.ReportRepairQueued):
+            self.reject_repair(6, ValueError('Malformed large repair'), report=oversized)
+        pending = self.state['pending_report_repair']
+        self.assert_repair_blocked()
+        self.assertEqual(oversized, Path(pending['latest_rejected']['output']).read_text())
+        self.assertEqual('{}', Path(pending['original']['output']).read_text())
+
+    def test_combined_report_handoff_overflow_preserves_both_sources_and_attempt(self):
+        original = json.dumps({'summary': 'original-' + 'x' * (runner.REPAIR_REPORT_BYTES - 100)})
+        latest = json.dumps({'summary': 'latest-' + 'y' * (runner.REPAIR_REPORT_BYTES - 100)})
+        self.queue(report=original)['attempts'] = 1
+        with self.assertRaises(runner.ReportRepairQueued):
+            self.reject_repair(6, ValueError('Latest draft rejected'), report=latest)
+        pending = self.state['pending_report_repair']
+        for key in ('original', 'latest_rejected'):
+            path = Path(pending[key]['output'])
+            self.assertLess(path.stat().st_size, runner.REPAIR_REPORT_BYTES)
+            self.assertEqual(support.read(path), runner.repair_report_source(pending[key])['content'])
+        self.assert_repair_blocked()
+        self.assertEqual(original, Path(pending['original']['output']).read_text())
+        self.assertEqual(latest, Path(pending['latest_rejected']['output']).read_text())
+
+    def test_handoff_byte_limit_includes_instructions_and_all_metadata(self):
+        self.assertEqual(256 * 1024, runner.REPAIR_HANDOFF_BYTES)
+        self.queue()
+        initial = copy.deepcopy(self.state)
+        prompt = self.repair_request()['prompt']
+        padding = runner.REPAIR_HANDOFF_BYTES - len(prompt.encode('utf-8'))
+        self.assertGreater(padding, 0)
+        self.state = copy.deepcopy(initial)
+        self.state['acceptance_criteria'][0]['criterion'] += 'x' * padding
+        support.atomic_json(self.run / 'state.json', self.state)
+        boundary_prompt = self.repair_request()['prompt']
+        self.assertEqual(runner.REPAIR_HANDOFF_BYTES, len(boundary_prompt.encode('utf-8')))
+        data = json.loads(boundary_prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(self.state['acceptance_criteria'][0]['criterion'], data['acceptance_criteria'][0]['criterion'])
+        self.state = copy.deepcopy(initial)
+        self.state['acceptance_criteria'][0]['criterion'] += 'x' * (padding + 1)
+        support.atomic_json(self.run / 'state.json', self.state)
+        self.assert_repair_blocked()
+        self.assertEqual(len(initial['acceptance_criteria'][0]['criterion']) + padding + 1,
+                         len(self.state['acceptance_criteria'][0]['criterion']))
+
+    def test_provider_decorated_handoff_overflow_never_publishes_or_launches_and_refunds_attempt(self):
+        self.state['settings']['engine'] = 'opencode'
+        self.queue()
+        initial = copy.deepcopy(self.state)
+        prompt = self.repair_request()['prompt']
+        self.state = copy.deepcopy(initial)
+        padding = runner.REPAIR_HANDOFF_BYTES - len(prompt.encode('utf-8')) - 1
+        self.state['acceptance_criteria'][0]['criterion'] += 'x' * padding
+        support.atomic_json(self.run / 'state.json', self.state)
+        snapshot = support.snapshot(self.root)
+        decorate = runner.opencode.prompt_for_schema
+        with patch.object(runner.opencode, 'launch', return_value=(['fixture-provider'], {}, {})), \
+             patch.object(runner.opencode, 'prompt_for_schema', wraps=decorate) as schema_prompt, \
+             patch.object(support, 'snapshot', return_value=snapshot), \
+             patch.object(runner.processes, 'process_table', return_value={}), \
+             patch.object(runner.subprocess, 'Popen', side_effect=AssertionError('No provider may launch')) as launch:
+            with self.assertRaises(support.Paused) as error:
+                runner.execute_report_repair(self.state, self.run, self.root)
+        self.assertEqual('PAUSED_REPORT_REPAIR_INPUT', error.exception.status)
+        schema_prompt.assert_called_once()
+        args = schema_prompt.call_args.args
+        self.assertEqual(runner.REPAIR_HANDOFF_BYTES - 1, len(args[0].encode('utf-8')))
+        self.assertGreater(len(decorate(*args).encode('utf-8')), runner.REPAIR_HANDOFF_BYTES)
+        launch.assert_not_called()
+        self.assertFalse(Path(args[2]).with_suffix('.prompt.md').exists())
+        self.assertNotIn('active_stage', self.state)
+        saved = support.read(self.run / 'state.json')
+        self.assertNotIn('active_stage', saved)
+        self.assertEqual(0, self.state['pending_report_repair']['attempts'])
+        self.assertEqual(0, saved['pending_report_repair']['attempts'])
+
+    def test_oversized_command_receipts_pause_instead_of_truncating_or_launching(self):
+        command = 'exact-command-' + 'x' * runner.REPAIR_HANDOFF_BYTES
+        rows = [{'type': 'thread.started', 'thread_id': 't-session'},
+                {'type': 'item.completed', 'item': {'type': 'command_execution', 'id': 'check',
+                    'command': command, 'exit_code': 1}}, {'type': 'turn.completed'}]
+        pending = self.queue(event_rows=rows)
+        path = Path(pending['original']['events'])
+        contents = path.read_bytes()
+        self.assert_repair_blocked()
+        self.assertEqual(contents, path.read_bytes())
+        self.assertEqual(command, support.events(path)[1]['item']['command'])
+
+    def test_persisted_legacy_missing_native_report_is_recovered_locally_from_pinned_events(self):
+        initial = copy.deepcopy(self.state)
+        for text in ('{"summary":"legacy draft", "results":["exit=1"]}', '{"summary":"legacy malformed draft",'):
+            with self.subTest(text=text):
+                self.state = copy.deepcopy(initial)
+                rows = [event('text', id='old', messageID='old', text='EARLIER_LEGACY_MESSAGE'),
+                        event('tool_use', tool='bash', state={'status': 'completed',
+                            'input': {'command': 'legacy-check'}, 'metadata': {'exit': 1},
+                            'output': 'LEGACY_TOOL_NOISE_' + 'x' * runner.REPAIR_HANDOFF_BYTES}),
+                        event('text', text=text), terminal()]
+                error = ValueError('Exact saved legacy validation error')
+                self.queue(error=error, report=None, engine='opencode', event_rows=rows)
+                self.state = support.read(self.run / 'state.json')
+                pending = self.state['pending_report_repair']
+                original = pending['original']
+                output = Path(original['output'])
+                response = output.with_suffix('.response.txt')
+                self.assertFalse(output.exists())
+                self.assertFalse(response.exists())
+                event_hash = pending['pins'][original['events']]
+                with patch.object(runner.opencode, 'final_report', wraps=runner.opencode.final_report) as extract:
+                    prompt = self.repair_request()['prompt']
+                extract.assert_called_once_with(original['events'], recover_wrapped=False, response_path=response)
+                data = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+                self.assertEqual(str(error), data['error'])
+                self.assertEqual(text, response.read_text())
+                self.assertEqual(str(response), original['response_text'])
+                if text.endswith('}'):
+                    self.assertEqual(json.loads(text), support.read(output))
+                    self.assertEqual('json', data['rejected_report']['format'])
+                    self.assertEqual(json.loads(text), data['rejected_report']['content'])
+                    source = output
+                else:
+                    self.assertFalse(output.exists())
+                    self.assertEqual('text', data['rejected_report']['format'])
+                    self.assertEqual(text, data['rejected_report']['content'])
+                    source = response
+                saved = support.read(self.run / 'state.json')['pending_report_repair']
+                self.assertEqual(str(source), data['rejected_report']['path'])
+                self.assertEqual(support.file_hash(source), data['rejected_report']['sha256'])
+                self.assertEqual(source.stat().st_size, data['rejected_report']['bytes'])
+                self.assertIs(False, data['rejected_report']['truncated'])
+                self.assertEqual(support.file_hash(source), saved['pins'][str(source)])
+                self.assertEqual(str(response), saved['original']['response_text'])
+                self.assertEqual(event_hash, support.file_hash(original['events']))
+                self.assertEqual(1, saved['attempts'])
+                self.assertIn('do not search raw JSONL or old prompts', prompt)
+                self.assertNotIn('EARLIER_LEGACY_MESSAGE', prompt)
+                self.assertNotIn('LEGACY_TOOL_NOISE_', prompt)
+
+    def test_legacy_event_tampering_blocks_local_extraction_and_dispatch(self):
+        pending = self.queue(report=None, engine='opencode',
+                             event_rows=[event('text', text='{"summary":"legacy draft"}'), terminal()])
+        Path(pending['original']['events']).write_text('tampered events')
+        self.state = support.read(self.run / 'state.json')
+        with patch.object(runner.opencode, 'final_report') as extract:
+            self.assert_repair_blocked('PAUSED_STALE_VALIDATION')
+        extract.assert_not_called()
+
+    def test_legacy_response_only_recovery_keeps_builder_history_immutable(self):
+        original = {'commands_run': ['failed-test'], 'results': ['exit=1'], 'changed_files': ['app.py'],
+                    'remaining_risks': ['not verified'], 'user_request': {'kind': 'permission', 'decision_needed': 'Allow?'}}
+        text = json.dumps(original)
+        rows = [event('tool_use', tool='bash', state={'status': 'completed', 'input': {'command': 'failed-test'},
+                    'metadata': {'exit': 1}, 'output': 'FAIL'}), event('text', text=text), terminal()]
+        pending = self.queue(report=None, engine='opencode', event_rows=rows)
+        output = Path(pending['original']['output'])
+        response = output.with_suffix('.response.txt')
+        # A recovery process died after saving terminal text but before parsed JSON.
+        response.write_text(text)
+        self.state = support.read(self.run / 'state.json')
+        self.assertFalse(output.exists())
+        data = json.loads(self.repair_request()['prompt'].split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(original, data['rejected_report']['content'])
+        baseline = self.state['pending_report_repair']['original']
+        runner.assert_repair_preserves_builder_history(baseline, original)
+        for field, replacement in [('results', ['PASS']), ('remaining_risks', []),
+                                   ('user_request', {'kind': 'none'})]:
+            with self.subTest(field=field), self.assertRaisesRegex(ValueError, 'changed'):
+                runner.assert_repair_preserves_builder_history(baseline, {**original, field: replacement})
 
     def test_exact_format_failure_can_request_one_fresh_sol_validation(self):
         self.state['next_stage'] = 'sol'
@@ -243,7 +710,7 @@ class RepairTests(unittest.TestCase):
         launch.assert_not_called()
 
     def test_invalid_or_unbounded_repair_configuration_is_rejected(self):
-        for value in (-1,3,True,'2'):
+        for value in (-1, 7, True, '2'):
                 self.state['settings']['report_repair']={'max_attempts':value}
                 with self.subTest(value=value),self.assertRaises(ValueError):
                     runner.repair_limit(self.state)
@@ -412,7 +879,7 @@ class RepairSubprocessTests(unittest.TestCase):
         self.assertNotIn('pending_report_repair',saved)
         self.assertNotEqual(str(old_output),saved['stages'][-1]['output'])
         self.assertIn('invented-conversation-id',old_output.read_text())
-        self.assertEqual(2,saved['report_repair_archive'][-1]['repair']['attempts'])
+        self.assertEqual(2, saved['report_repair_archive'][-1]['repair']['attempts'])
 
     def test_completed_implementation_is_not_replayed_to_fix_report(self):
         self.env.update(AUTOCODE_FIXTURE_MODE='no-human', AUTOCODE_FIXTURE_REPORT_REPAIR_STAGE='terra')

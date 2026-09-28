@@ -1,14 +1,4 @@
 """Config-registered tools: validation, launch, reports, and drift."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import hashlib
 import json
 import os
@@ -130,6 +120,25 @@ class CommandProviderTests(unittest.TestCase):
         (folder / "sol-01.json").write_text("[1]")
         with self.assertRaisesRegex(RuntimeError, "JSON object"):
             provider.final_report(events)
+
+    def test_malformed_report_file_is_preserved_for_repair(self):
+        write_config(self.home, "report", 'name = "report"\ncommand = ["tool"]\n' + ROLES)
+        provider = command.load("report")
+        events = self.home / "events.jsonl"
+        events.with_suffix(".json").write_text('{"unfinished":')
+        response = self.home / "response.txt"
+        with self.assertRaisesRegex(RuntimeError, "did not write a JSON report"):
+            provider.final_report(events, response_path=response)
+        self.assertEqual('{"unfinished":', response.read_text())
+
+    def test_event_provider_forwards_repair_options(self):
+        write_config(self.home, "events", 'name = "events"\ncommand = ["tool"]\n'
+                     'output = "opencode_events"\nresume = ["--session", "{session}"]\n' + ROLES)
+        provider = command.load("events")
+        events, response = self.home / "events.jsonl", self.home / "response.txt"
+        with mock.patch.object(command._opencode_events, "final_report", return_value={"ok": True}) as parse:
+            self.assertEqual({"ok": True}, provider.final_report(events, recover_wrapped=True, response_path=response))
+        parse.assert_called_once_with(events, recover_wrapped=True, response_path=response)
 
     def test_drift_when_config_or_tool_version_changes(self):
         binary = self.home / "bin"
@@ -289,6 +298,7 @@ class CommandProviderTests(unittest.TestCase):
             autocode_providers.resolve("missing")
         builtin = autocode_providers.resolve("opencode")
         self.assertEqual("tools.providers.opencode", builtin.__name__)
+
 
     def test_event_final_report_forwards_wrapped_recovery(self):
         write_config(self.home, "events2", 'name = "events2"\ncommand = ["kilo", "run"]\n'

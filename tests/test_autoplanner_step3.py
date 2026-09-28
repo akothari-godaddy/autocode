@@ -6,9 +6,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from . import autocode_goals as goals, autopilot
-from .units import autoplanner as planner
-from .goal_fixtures import body
+import autocode_goals as goals, autopilot
+from units import autoplanner as planner
+from goal_fixtures import body
 
 TASK = "Greet the user by name."
 REQUIREMENT = {"id": "R1", "text": "Greet by name", "source_quote": TASK}

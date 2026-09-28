@@ -1,14 +1,4 @@
 """One ledger of reviewer findings: identity, fix task, explicit dispositions, batch limits."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 from pathlib import Path
@@ -17,16 +7,12 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
 
-SCHEMA_DIR = _TOOLS / "autocode-schemas" / "v2"
+SCHEMA_DIR = Path(__file__).resolve().parents[1] / "tools" / "autocode-schemas" / "v2"
 
 
 def sol(*texts, severity="high", dispositions=()):
@@ -421,6 +407,7 @@ class LedgerTests(unittest.TestCase):
 
 class DashboardLedgerTests(unittest.TestCase):
     def test_monitor_prefers_the_ledger_and_reports_counts(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools" / "dashboard"))
         import dashboard_monitor as monitor
         with tempfile.TemporaryDirectory() as temp:
             run = Path(temp) / "run"

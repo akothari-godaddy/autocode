@@ -12,15 +12,15 @@ class Element {
   getAttribute(name){return this.attributes.get(name)||null;}
   removeAttribute(name){this.attributes.delete(name);}
 }
-const glm=new Element('select'),astra=new Element('select'),terra=new Element('select'),sol=new Element('select'),completion=new Element('select'),status=new Element('p'),createSubmit=new Element('button'),gate=new Element('div'),gateStatus=new Element('p'),retry=new Element('button');
+const glm=new Element('select'),plan_reviewer=new Element('select'),astra=new Element('select'),terra=new Element('select'),sol=new Element('select'),completion=new Element('select'),status=new Element('p'),createSubmit=new Element('button'),gate=new Element('div'),gateStatus=new Element('p'),retry=new Element('button');
 assert.ok(!html.match(/<select id="terra-model".*?<\/select>/s)[0].includes('gpt-'));
 assert.match(html,/<div id="create-model-catalogue-gate" class="create-model-catalogue-gate">.*?<p id="create-model-catalogue-status" class="field-note" role="status" aria-live="polite">/s);
 assert.match(html,/<button id="retry-models" type="button" hidden>Retry catalogue<\/button>/);
 assert.match(html,/<button class="primary" type="submit" id="create-submit" disabled aria-describedby="create-model-catalogue-status">/);
 assert.doesNotMatch(html.match(/<p id="model-catalogue-status"[^>]*>/)[0],/aria-live/);
-const roles={glm,astra,terra,sol,completion};
+const roles={glm,plan_reviewer,astra,terra,sol,completion};
 for(const select of Object.values(roles))select.value='openai/new-model';
-const context=vm.createContext({$:id=>({'#glm-model':glm,'#astra-model':astra,'#terra-model':terra,'#sol-model':sol,'#completion-model':completion,'#model-catalogue-status':status,'#create-model-catalogue-gate':gate,'#create-model-catalogue-status':gateStatus,'#retry-models':retry,'#create-submit':createSubmit}[id]),n:(tag,text)=>new Element(tag,text)});
+const context=vm.createContext({$:id=>({'#glm-model':glm,'#plan_reviewer-model':plan_reviewer,'#astra-model':astra,'#terra-model':terra,'#sol-model':sol,'#completion-model':completion,'#model-catalogue-status':status,'#create-model-catalogue-gate':gate,'#create-model-catalogue-status':gateStatus,'#retry-models':retry,'#create-submit':createSubmit}[id]),n:(tag,text)=>new Element(tag,text)});
 vm.runInContext(source.slice(source.indexOf('function syncModelOptions('),source.indexOf('async function loadModels(')),context);
 const values=select=>select.querySelectorAll().map(option=>option.value);
 const models=['zai-coding-plan/glm-5.3','openai/gpt-5.6-terra','openai/new-model','other-provider/new-model'];
@@ -33,6 +33,7 @@ assert.equal(createSubmit.getAttribute('aria-describedby'),null,'a usable catalo
 assert.deepEqual(values(terra),['',...models]);
 for(const select of Object.values(roles))assert.deepEqual(values(select),['',...models]);
 assert.match(astra.children[0].textContent,/GPT-5.6 Sol · high/);
+assert.match(plan_reviewer.children[0].textContent,/MiMo 2.6 Pro · high/);
 assert.match(terra.children[0].textContent,/GPT-5.6 Terra · medium/);
 assert.match(sol.children[0].textContent,/GPT-5.6 Sol · high/);
 assert.match(completion.children[0].textContent,/GPT-5.6 Sol · medium/);
@@ -78,4 +79,4 @@ assert.match(status.textContent,/Explicit selections run through kilofixture/);
 assert.match(status.textContent,/kilofixture uses its own login and billing/);
 assert.doesNotMatch(status.textContent,/ChatGPT OAuth|API-key billing/);
 assert.equal(createSubmit.disabled,false);
-console.log('All five roles use the live provider catalogue; distinct defaults and selections survive refresh/failure.');
+console.log('All six roles use the live provider catalogue; distinct defaults and selections survive refresh/failure.');

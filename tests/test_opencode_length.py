@@ -1,14 +1,4 @@
 """Output-limit regressions using native transport fixtures, never live providers."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import json
 from pathlib import Path
@@ -17,11 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
 import autocode_goals as goals
 import autocode_opencode as opencode
@@ -208,7 +194,9 @@ class OutputLimitTests(unittest.TestCase):
                 runner.abandon_stage(state, self.run, self.root, runner.attempt_id(record))
             popen.assert_not_called()
         self.assertEqual("PAUSED_STAGE_ABANDONED", state["status"])
-        self.assertEqual("astra_review", state["next_stage"])
+        # Abandoning a terra (Builder) attempt re-dispatches terra to inspect
+        # the partial work, not astra_review; see commit 46a8187.
+        self.assertEqual("terra", state["next_stage"])
         self.assertEqual(approved, state["goal_contract"])
         self.assertNotIn("active_stage", state)
         self.assertNotIn("terra", state["sessions"])

@@ -4,40 +4,27 @@ Offline only: provider behaviour uses recorded fixtures and status mapping;
 the installed-CLI cases execute the real installed entry point with no
 network and a temporary workspace.
 """
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 import unittest
 from unittest.mock import patch
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_goals as goals
 import autocode_support as support
-import test_catalogue_t01 as t01
+from . import test_catalogue_t01 as t01
 from goal_fixtures import approve_fixture, body
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-INSTALLED = Path.home() / ".local" / "bin" / "autocode"
+REPO_ROOT = Path(__file__).resolve().parents[1]
+INSTALLED = Path(sysconfig.get_path("scripts")) / "autocode"
 
 
 def rerun(test_name, timeout=180):
@@ -56,8 +43,8 @@ class CompatScenarios(CompatCase):
 
     def test_cfg01_supported_historical_checkpoints_resume(self):
         """CFG-01. Existing: v1->v2 migrate_v1 and v2->v3 goals.migrate tests."""
-        ok_legacy = rerun("tools.test_autocode.RetrofitTest.test_legacy_resume_after_terra_does_not_replay_it")
-        ok_modern = rerun("tools.test_goals.GoalTests.test_migration_retains_work_sessions_limits_and_does_not_approve")
+        ok_legacy = rerun("tests.test_autocode.RetrofitTest.test_legacy_resume_after_terra_does_not_replay_it")
+        ok_modern = rerun("tests.test_goals.GoalTests.test_migration_retains_work_sessions_limits_and_does_not_approve")
         self.check("legacy_checkpoint_resume_passes", True, ok_legacy)
         self.check("modern_migration_without_invented_approval_passes", True, ok_modern)
         self.finish(summary="COMPATIBLE_PROGRESS: supported old formats resume without new approval")
@@ -98,7 +85,7 @@ class CompatScenarios(CompatCase):
 
     def test_cfg04_static_model_routes_preserved(self):
         """CFG-04. Existing: configure() precedence tests in test_autocode."""
-        ok = rerun("tools.test_autocode.RetrofitTest.test_provider_saved_per_role_and_kept_on_resume")
+        ok = rerun("tests.test_autocode.RetrofitTest.test_provider_saved_per_role_and_kept_on_resume")
         self.check("route_persistence_regression_passes", True, ok)
         self.finish(summary="CONFIGURED_ROUTE_OR_PAUSE: saved routes survive resume unchanged")
 
@@ -111,7 +98,7 @@ class CompatScenarios(CompatCase):
                 path = self.run / "events.jsonl"
                 path.write_text(json.dumps({"type": "turn.failed", "error": {"message": message}}))
                 self.check(f"[{message}] honest_status", expected, support.failure_status(path))
-        ok = rerun("tools.test_command_provider.CommandProviderTests.test_pay_as_you_go_credit_errors_pause_as_budget")
+        ok = rerun("tests.test_command_provider.CommandProviderTests.test_pay_as_you_go_credit_errors_pause_as_budget")
         self.check("credit_exhaustion_pauses_as_budget", True, ok)
         self.finish(summary="PAUSED_OR_BOUNDED_RETRY: provider failures map to explicit pauses")
 
@@ -137,7 +124,7 @@ class CompatScenarios(CompatCase):
         reloaded = support.read(self.run / "state.json")
         self.check("limits_survive_roundtrip", self.state["settings"]["limits"],
                    reloaded["settings"]["limits"])
-        ok = rerun("tools.test_goals.GoalTests.test_limits_pause_and_cannot_complete")
+        ok = rerun("tests.test_goals.GoalTests.test_limits_pause_and_cannot_complete")
         self.check("limit_pause_regression_passes", True, ok)
         self.finish(summary="PAUSED_OR_AUTHORIZED_ESCALATION: persisted limits bind after restart")
 
@@ -164,10 +151,8 @@ class CompatScenarios(CompatCase):
 
     def test_cfg09_installed_cli_runs_outside_the_repository(self):
         """CFG-09. New: the real installed entry point, offline, outside the repo."""
-        if not INSTALLED.exists():
-            self.bundle.log("environment_limitation", note="installed CLI not found")
-            self.finish(status=kit.BLOCKED_ENV, summary="installed CLI absent")
-            return
+        self.assertTrue(INSTALLED.is_file(),
+                        f"Install the package with {sys.executable} -m pip install -e .; missing {INSTALLED}")
         with tempfile.TemporaryDirectory() as outside:
             helped = subprocess.run([str(INSTALLED), "--help"], cwd=outside,
                                     capture_output=True, text=True, timeout=60)
@@ -188,7 +173,11 @@ class CompatScenarios(CompatCase):
 
     def test_cfg10_entry_point_aliases_consistent(self):
         """CFG-10. Documented aliases: autocode units + installed scripts."""
-        units = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True).stdout
+        self.assertTrue(INSTALLED.is_file(),
+                        f"Install the package with {sys.executable} -m pip install -e .; missing {INSTALLED}")
+        helped = subprocess.run([str(INSTALLED), "--help"], capture_output=True, text=True, timeout=60)
+        self.check("installed_help_exit", 0, helped.returncode)
+        units = helped.stdout
         self.check("unit_aliases_documented", True,
                    all(u in units for u in ("autoplanner", "autocode", "autoreview", "autoresolver")))
         source_aliases = sorted((REPO_ROOT / "tools" / "units").glob("*.py"))

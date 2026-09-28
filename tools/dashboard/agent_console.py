@@ -414,7 +414,7 @@ class LegacyConsole:
   except OSError:key=str(run or ws)
   return list(self.actions.get(key,[]))
  def joint_models(self,d):
-  explicit={role:d.get(role+'_model','') for role in ('glm','astra','terra','sol','completion')}
+  explicit={role:d.get(role+'_model','') for role in ('glm','plan_reviewer','astra','terra','sol','completion')}
   if any(not isinstance(value,str) for value in explicit.values()):raise ValueError('Model choices must be strings')
   chosen={role:value for role,value in explicit.items() if value}
   if self.run_provider!='opencode':
@@ -438,7 +438,7 @@ class LegacyConsole:
     if value not in catalogue['models']:raise ValueError('Choose a current provider/model identifier from the catalogue')
   return chosen
  def joint_efforts(self,d):
-  explicit={role:d.get(role+'_reasoning_effort','') for role in ('astra','terra','sol','completion')}
+  explicit={role:d.get(role+'_reasoning_effort','') for role in ('plan_reviewer','astra','terra','sol','completion')}
   if any(not isinstance(value,str) for value in explicit.values()):raise ValueError('Reasoning choices must be strings')
   if any(value and value not in REASONING_EFFORTS for value in explicit.values()):raise ValueError('Choose a supported reasoning level')
   return {role:value for role,value in explicit.items() if value}
@@ -457,7 +457,7 @@ class LegacyConsole:
   else:
    if role=='glm' or model not in (CODEX_DEFAULT_MODELS.get(role),GLM_MODELS.get(role)):raise ValueError('This saved route does not support the selected replacement model')
    selected=model
-  action=self.enqueue(ws,run,'Confirm model replacement for '+role,['--'+role+'-model',selected,'--show-goal','--no-chat'])
+  action=self.enqueue(ws,run,'Confirm model replacement for '+role,['--'+role.replace('_','-')+'-model',selected,'--show-goal','--no-chat'])
   action['request_id']=request_id
   return action
  def create(self,d):
@@ -469,8 +469,8 @@ class LegacyConsole:
   if engine=='opencode':
    chosen=self.joint_models(d);efforts=self.joint_efforts(d)
    extra=[goal,'--engine','opencode','--provider',self.run_provider,'--joint-planning','--no-chat']
-   for role,value in chosen.items():extra+=['--'+role+'-model',value]
-   for role,value in efforts.items():extra+=['--'+role+'-reasoning-effort',value]
+   for role,value in chosen.items():extra+=['--'+role.replace('_','-')+'-model',value]
+   for role,value in efforts.items():extra+=['--'+role.replace('_','-')+'-reasoning-effort',value]
    return self.enqueue(ws,None,'Create OpenCode task' if self.run_provider=='opencode' else 'Create '+self.run_provider+' task',extra)
   if d.get('glm_model'):raise ValueError('Planner discovery requires the default joint-planning engine')
   models={r:d.get(r+'_model',v) for r,v in CODEX_DEFAULT_MODELS.items()};provider=self.zai_probe()
@@ -509,7 +509,7 @@ class LegacyConsole:
    if not efforts:raise ValueError('Choose at least one reasoning level')
    if v.get('active_stage'):raise ValueError('Wait for the current model step to finish before changing reasoning')
    extra=[]
-   for role,value in efforts.items():extra+=['--'+role+'-reasoning-effort',value]
+   for role,value in efforts.items():extra+=['--'+role.replace('_','-')+'-reasoning-effort',value]
    return self.enqueue(ws,run,'Save reasoning settings',extra+['--show-goal','--no-chat'])
   if action=='set_model':return self.confirm_model_replacement(d,ws,run,v)
   if action=='continue':return self.enqueue(ws,run,'Continue',[])

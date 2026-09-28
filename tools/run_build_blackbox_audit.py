@@ -67,10 +67,10 @@ def main():
             self.rows.append(dict(test=test.id(),status='SKIP',detail=reason))
             super().addSkip(test,reason)
     suite=unittest.defaultTestLoader.loadTestsFromNames([
-        'tools.test_build_blackbox', 'tools.test_build_recovery_blackbox',
-        'tools.test_report_repair', 'tools.test_dispatch', 'tools.test_assignment_scenarios',
-        'tools.test_units', 'tools.test_subprocess', 'tools.test_escalation',
-        'tools.test_builder_policy', 'tools.test_execution_checkpoints'])
+        'tests.test_build_blackbox', 'tests.test_build_recovery_blackbox',
+        'tests.test_report_repair', 'tests.test_dispatch', 'tests.test_assignment_scenarios',
+        'tests.test_units', 'tests.test_subprocess', 'tests.test_escalation',
+        'tests.test_builder_policy', 'tests.test_execution_checkpoints'])
     result=unittest.TextTestRunner(verbosity=2,resultclass=Result).run(suite)
     scenarios = scenario_results(result.rows)
     (args.artifacts/'results.json').write_text(json.dumps(dict(provider='scripted/offline',

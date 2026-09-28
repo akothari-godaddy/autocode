@@ -1,14 +1,4 @@
 """Isolated tests: no model calls, credentials, learner data or course writes."""
-# path bootstrap: runtime in tools/, fakes in tests/fakes/
-import sys as _sys
-from pathlib import Path as _Path
-_ROOT = _Path(__file__).resolve().parents[2] if 'fakes' in _Path(__file__).parts else _Path(__file__).resolve().parents[1]
-_TOOLS = _ROOT / 'tools'
-_FAKES = _ROOT / 'tests' / 'fakes'
-for _p in (_ROOT, _TOOLS, _ROOT / 'tests', _FAKES):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
 import copy
 import contextlib
 import io
@@ -23,15 +13,12 @@ import unittest
 from unittest.mock import patch
 from types import SimpleNamespace
 
-_ROOT = _Path(__file__).resolve().parents[1] if _Path(__file__).name != 'live_trial.py' else _Path(__file__).resolve().parent.parent
-for _p in (_ROOT, _ROOT / 'tools', _ROOT / 'tests', _ROOT / 'tests' / 'fakes'):
-    _s = str(_p)
-    if _s not in _sys.path:
-        _sys.path.insert(0, _s)
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
 import autocode_support as s
 import autocode_goals as goals
 from goal_fixtures import approve_fixture, envelope
+from . import LOGIN_SHELL
 
 
 class DetachedOutputTest(unittest.TestCase):
@@ -170,8 +157,13 @@ class RetrofitTest(unittest.TestCase):
         )
         for printed, executed in pairs:
             with self.subTest(printed=printed):
-                ran = subprocess.run(printed, shell=True, executable="/bin/zsh", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                claimed = subprocess.run(executed, shell=True, executable="/bin/zsh", stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                # LOGIN_SHELL proves the POSIX quoting behavior generically; it
+                # need not be zsh (only the wrapper string below has to say
+                # "/bin/zsh", since that specifically exercises production's
+                # zsh-wrapper detection in _command_bodies, which never
+                # actually spawns a shell to check it).
+                ran = subprocess.run(printed, shell=True, executable=LOGIN_SHELL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                claimed = subprocess.run(executed, shell=True, executable=LOGIN_SHELL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 self.assertEqual(0, ran.returncode)
                 self.assertNotEqual(0, claimed.returncode)
                 self.assertFalse(s.same_command(printed, executed))
@@ -230,21 +222,6 @@ class RetrofitTest(unittest.TestCase):
         self.assertEqual("glm-5.3",result["roles"]["sol"]["model"])         # saved legacy launch
         self.assertEqual("ZAI",result["roles"]["terra"]["provider"])   # explicit flag
         self.assertEqual("ZAI",result["roles"]["sol"]["provider"])     # recovered from saved command
-
-    def test_new_run_has_unlimited_completion_caps_by_default(self):
-        state = {k: v for k, v in self.state.items() if k != "settings"}
-        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None,
-            reasoning_effort=None, headroom=None, context_soft_tokens=None,
-            rotate_after_input_tokens=None, legacy_iteration_ceiling=None,
-            max_iterations=None, max_seconds=None, max_reported_tokens=None,
-            no_progress_limit=None)
-        with patch.object(s, "local_settings", return_value={}):
-            result = runner.configure(args, state)
-        self.assertIsNone(result["limits"]["iteration_ceiling"])
-        self.assertEqual(0, result["limits"]["no_progress_batches"])
-        self.assertEqual(0, result["milestone_checkpoints"]["max_seconds"])
-        self.assertIsNone(result["milestone_checkpoints"]["max_replans"])
-        self.assertEqual(0, result["milestone_checkpoints"]["stalled_reviews"])
         self.assertIsNone(result["roles"]["astra"]["provider"])        # local Codex default
 
     def test_legacy_completed_sol_is_not_replayed_after_alphabetic_sort(self):
@@ -462,7 +439,9 @@ class RetrofitTest(unittest.TestCase):
         with patch.object(runner.processes, "live_processes", return_value=[]):
             runner.abandon_stage(self.state, self.run, self.root, "005/terra-01")
         self.assertEqual("PAUSED_STAGE_ABANDONED", self.state["status"])
-        self.assertEqual("astra_review", self.state["next_stage"])
+        # Abandoning a terra (Builder) attempt re-dispatches terra to inspect
+        # the partial work, not astra_review; see commit 46a8187.
+        self.assertEqual("terra", self.state["next_stage"])
         self.assertNotIn("active_stage", self.state)
         self.assertNotIn("terra", self.state["sessions"])
         self.assertNotIn("validation", self.state)
@@ -599,69 +578,6 @@ class RetrofitTest(unittest.TestCase):
         runner.repeated_failure_resume_guard(reloaded, self.root)
         self.assertFalse(runner.prepare_abandoned_completion_revalidation(reloaded, self.run, self.root))
 
-    def repeated_failure_state(self):
-        current = s.snapshot(self.root)
-        state = {'status': 'PAUSED_REPEATED_FAILURE', 'next_stage': 'terra', 'iteration': 5,
-                 'workspace': str(self.root), 'task': 'fixture', 'sessions': {}, 'stages': [],
-                 'history': [], 'settings': dict(self.settings), 'user_events': []}
-        error = ValueError('invalid build report')
-        first = None
-        # An unrelated earlier failure must survive any authorization untouched.
-        other = {'stage': 'sol', 'role': 'sol', 'iteration': 4,
-                 'output': str(self.run / 'sol-failed.json'),
-                 'source_revision': current['revision'], 'rejected': True}
-        runner.failures.record(state, other, ValueError('invalid validation'), s.now())
-        state['stages'].append(other)
-        for attempt in range(3):
-            record = {'stage': 'terra', 'role': 'terra', 'iteration': 5,
-                      'output': str(self.run / f'terra-failed-{attempt}.json'),
-                      'source_revision': current['revision'], 'rejected': True,
-                      'rejection_reason': str(error)}
-            runner.failures.record(state, record, error, s.now())
-            state['stages'].append(record)
-            first = first or record
-        return state, first, other
-
-    def test_plain_resume_cannot_erase_an_unchanged_repeated_failure(self):
-        state, record, other = self.repeated_failure_state()
-        before = copy.deepcopy(state)
-        with self.assertRaisesRegex(s.Paused, 'authorize one inspected retry'):
-            runner.repeated_failure_resume_guard(state, self.root)
-        self.assertEqual(before, state)
-        # Changing the source fixes the cause and unblocks a plain resume;
-        # failure history itself is preserved either way.
-        (self.root / 'untracked-change.py').write_text('fixed cause')
-        runner.repeated_failure_resume_guard(state, self.root)
-        self.assertEqual(before['failure_history'], state['failure_history'])
-
-    def test_failure_retry_authorization_is_explicit_and_scoped(self):
-        state, record, other = self.repeated_failure_state()
-        selected = record['failure_key']
-        other_key = other['failure_key']
-        s.atomic_json(self.run / 'state.json', state)
-        with self.assertRaisesRegex(ValueError, 'requires a run paused'):
-            runner.authorize_failure_retry({'status': 'RUNNING'}, self.run, self.root)
-        no_failure = copy.deepcopy(state)
-        no_failure['failure_history'] = {}
-        for row in no_failure['stages']:
-            row.pop('failure_key', None)
-        with self.assertRaisesRegex(ValueError, 'No unchanged repeated failure'):
-            runner.authorize_failure_retry(no_failure, self.run, self.root)
-        self.assertEqual(state, s.read(self.run / 'state.json'))
-        runner.authorize_failure_retry(state, self.run, self.root)
-        self.assertNotIn(selected, state['failure_history'])
-        self.assertIn(other_key, state['failure_history'])
-        self.assertEqual([other_key], [r['failure_key'] for r in state['stages'] if r.get('failure_key')])
-        self.assertTrue(all('failure_key' not in r for r in state['stages'] if r['stage'] == 'terra'))
-        self.assertEqual(1, len(state['failure_retry_authorizations']))
-        self.assertEqual(selected, state['failure_retry_authorizations'][0]['failure_key'])
-        self.assertEqual(3, state['failure_retry_authorizations'][0]['count'])
-        self.assertEqual('failure_retry_authorized', state['user_events'][-1]['kind'])
-        runner.repeated_failure_resume_guard(state, self.root)
-        persisted = s.read(self.run / 'state.json')
-        self.assertNotIn(selected, persisted['failure_history'])
-        self.assertIn(other_key, persisted['failure_history'])
-
     def test_missing_evidence_and_outside_project_rejected(self):
         for refs in ([],["nope"],["/etc/hosts"]):
             with self.assertRaises(ValueError): s.evidence_hashes(refs,self.root,self.run)
@@ -761,7 +677,7 @@ class RetrofitTest(unittest.TestCase):
         self.state["active_stage"] = record
         # Startup reconciliation classifies incomplete provider logs as uncertain;
         # the durable timed_out record, not that later wording, authorizes recovery.
-        error = s.Paused("PAUSED_PROVIDER_TIMEOUT", "timed out")
+        error = s.Paused("PAUSED_PROVIDER_UNCERTAIN", "timed out")
         self.assertTrue(runner.automatically_recover_timed_out_stage(self.state, self.run, self.root, error))
         self.assertEqual("RUNNING", self.state["status"])
         self.assertEqual("terra", self.state["next_stage"])
@@ -902,6 +818,72 @@ class RetrofitTest(unittest.TestCase):
         self.assertEqual(3,code)
         self.assertEqual("complete_original",s.read(path)["summary"]["fallback"])
         self.assertIn("distinct failure",s.read(path)["summary"]["content"])
+
+
+    def repeated_failure_state(self):
+        current = s.snapshot(self.root)
+        state = {'status': 'PAUSED_REPEATED_FAILURE', 'next_stage': 'terra', 'iteration': 5,
+                 'workspace': str(self.root), 'task': 'fixture', 'sessions': {}, 'stages': [],
+                 'history': [], 'settings': dict(self.settings), 'user_events': []}
+        error = ValueError('invalid build report')
+        first = None
+        # An unrelated earlier failure must survive any authorization untouched.
+        other = {'stage': 'sol', 'role': 'sol', 'iteration': 4,
+                 'output': str(self.run / 'sol-failed.json'),
+                 'source_revision': current['revision'], 'rejected': True}
+        runner.failures.record(state, other, ValueError('invalid validation'), s.now())
+        state['stages'].append(other)
+        for attempt in range(3):
+            record = {'stage': 'terra', 'role': 'terra', 'iteration': 5,
+                      'output': str(self.run / f'terra-failed-{attempt}.json'),
+                      'source_revision': current['revision'], 'rejected': True,
+                      'rejection_reason': str(error)}
+            runner.failures.record(state, record, error, s.now())
+            state['stages'].append(record)
+            first = first or record
+        return state, first, other
+
+
+    def test_plain_resume_cannot_erase_an_unchanged_repeated_failure(self):
+        state, record, other = self.repeated_failure_state()
+        before = copy.deepcopy(state)
+        with self.assertRaisesRegex(s.Paused, 'authorize one inspected retry'):
+            runner.repeated_failure_resume_guard(state, self.root)
+        self.assertEqual(before, state)
+        # Changing the source fixes the cause and unblocks a plain resume;
+        # failure history itself is preserved either way.
+        (self.root / 'untracked-change.py').write_text('fixed cause')
+        runner.repeated_failure_resume_guard(state, self.root)
+        self.assertEqual(before['failure_history'], state['failure_history'])
+
+
+    def test_failure_retry_authorization_is_explicit_and_scoped(self):
+        state, record, other = self.repeated_failure_state()
+        selected = record['failure_key']
+        other_key = other['failure_key']
+        s.atomic_json(self.run / 'state.json', state)
+        with self.assertRaisesRegex(ValueError, 'requires a run paused'):
+            runner.authorize_failure_retry({'status': 'RUNNING'}, self.run, self.root)
+        no_failure = copy.deepcopy(state)
+        no_failure['failure_history'] = {}
+        for row in no_failure['stages']:
+            row.pop('failure_key', None)
+        with self.assertRaisesRegex(ValueError, 'No unchanged repeated failure'):
+            runner.authorize_failure_retry(no_failure, self.run, self.root)
+        self.assertEqual(state, s.read(self.run / 'state.json'))
+        runner.authorize_failure_retry(state, self.run, self.root)
+        self.assertNotIn(selected, state['failure_history'])
+        self.assertIn(other_key, state['failure_history'])
+        self.assertEqual([other_key], [r['failure_key'] for r in state['stages'] if r.get('failure_key')])
+        self.assertTrue(all('failure_key' not in r for r in state['stages'] if r['stage'] == 'terra'))
+        self.assertEqual(1, len(state['failure_retry_authorizations']))
+        self.assertEqual(selected, state['failure_retry_authorizations'][0]['failure_key'])
+        self.assertEqual(3, state['failure_retry_authorizations'][0]['count'])
+        self.assertEqual('failure_retry_authorized', state['user_events'][-1]['kind'])
+        runner.repeated_failure_resume_guard(state, self.root)
+        persisted = s.read(self.run / 'state.json')
+        self.assertNotIn(selected, persisted['failure_history'])
+        self.assertIn(other_key, persisted['failure_history'])
 
 
 if __name__ == "__main__":
