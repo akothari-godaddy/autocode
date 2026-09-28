@@ -41,6 +41,18 @@ not the symptom, and do not widen the change beyond what the root cause needs. D
 fix should achieve; ask only about a genuine choice the diagnosis leaves open.
 Cite the diagnosis in code_refs as exactly its note_path; explanations go in summaries, never inside a path.
 """
+# Small features get the bug-fix proof too: the plan states testable criteria as concrete
+# examples marked "test:", and the runner proves each one (autocode_test_cases).
+EXAMPLE_CRITERIA_RULE = """
+TESTS IN PLAIN ENGLISH (a plan with ONE milestone): write every acceptance criterion a test can check as one
+concrete example a person can check without reading code: "Given <the exact starting data or state>, when
+<the exact action or command>, then <the exact result, with literal values>". No vague words such as
+"correctly" or "gracefully". Set its verification_method to "test: test_<criterion id in lowercase>_<what it
+checks>" (C2 -> test_c2_...). The Builder writes that test; before completion the runner itself checks that it
+passes with the change and did not pass without it, and refuses completion otherwise. Keep criteria a test
+cannot check (documentation, visual design, performance under real load) with an ordinary
+verification_method. A plan with several milestones keeps ordinary criteria.
+"""
 # Planning is otherwise never told how execution captures test evidence, so plans invented
 # scratch copies outside the workspace and reviewers blocked them for a "missing capture
 # command" (bugfix-cent-drift, 2026-09-28: three planning rounds).
@@ -657,6 +669,8 @@ def context(state, stage, state_path):
         packet["investigation_request"] = request
         clarification_policy += INVESTIGATION_POLICY
     design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
+    if stage != "requirements_gather":
+        design_rule += EXAMPLE_CRITERIA_RULE
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))

@@ -21,7 +21,7 @@ A reproduced bug comes with ``test_cases``: the regression tests in plain Englis
 person reads these instead of test code. The Builder writes one test per case,
 named ``test_<id>_...``, and the runner's regression proof (autocode_regression)
 checks, with no model, that every case has a test that fails on the original
-code and passes after the fix (``match_cases``).
+code and passes after the fix (autocode_test_cases.match_cases).
 
 Pure module: prompt, schema, transition, rendering. Imports nothing from the
 runner. State key written: ``investigation`` (the report, its note path and output).
@@ -35,8 +35,10 @@ from pathlib import Path
 
 try:
     from . import autocode_workflows as workflows
+    from .autocode_test_cases import case_text, case_test_name, match_cases  # noqa: F401 (used by callers)
 except ImportError:
     import autocode_workflows as workflows
+    from autocode_test_cases import case_text, case_test_name, match_cases  # noqa: F401
 
 STAGE = workflows.INVESTIGATE_STAGE
 NOTES_PREFIX = "docs/bugs/"
@@ -210,38 +212,6 @@ def test_cases(state: dict) -> list[dict]:
     """The reproduced bug's English test cases, or [] (bugs planned without an investigation, older runs)."""
     found = state.get("investigation") or {}
     return list(found.get("test_cases") or []) if found.get("outcome") == "reproduced" else []
-
-
-def case_text(case: dict) -> str:
-    return f"{case['id']}: Given {case['given']}; when {case['when']}; then {case['then']}"
-
-
-def case_test_name(case_id: str) -> str:
-    return f"test_{case_id.lower()}_<what it checks>"
-
-
-def _words(name: str) -> list[str]:
-    """Lowercase words of an identifier: test_t1_x, TestT1X and test-t1-x all give test, t1, x."""
-    name = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", name)
-    return [word for word in re.split(r"[^a-z0-9]+", name.lower()) if word]
-
-
-def _test_function(test_id: str) -> str:
-    """The test's own name inside a runner's id (module.Class.test_x, path::Class::test_x[param], ...)."""
-    names = re.findall(r"[A-Za-z_][A-Za-z0-9_]*", re.sub(r"\[.*\]$", "", test_id))
-    tests = [name for name in names if name.lower().startswith("test")]
-    return tests[-1] if tests else (names[-1] if names else "")
-
-
-def match_cases(cases: list[dict], test_ids: list[str]) -> dict[str, list[str]]:
-    """For each case, the tests whose name carries its id as whole words (T1 -> test_t1_...)."""
-    matched = {}
-    for case in cases:
-        want = _words(case["id"])
-        matched[case["id"]] = [test for test in test_ids
-                               if any(_words(_test_function(test))[i:i + len(want)] == want
-                                      for i in range(len(_words(_test_function(test)))))]
-    return matched
 
 
 # A small, reproduced bug skips requirements gathering and plan review: the runner turns

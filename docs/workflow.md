@@ -342,6 +342,36 @@ approval, orchestrator, Builder, Validator and Completion Owner.
   - **Compatibility.** Runs whose diagnosis has no cases, including bug fixes
     planned without an Investigator and older saved runs, behave as before.
 
+### Small features: tests in plain English
+
+A small feature gets the same kind of proof from its plan. Here "small" means
+a plan with one milestone. The Planner writes every acceptance criterion a test
+can check as one concrete example, and sets its `verification_method` to name
+the test:
+
+> C2: Given calc.py with add(); when sub(5, 3) runs; then it returns 2
+> Verify: test: test_c2_subtracts
+
+- **You approve the examples with the plan.** The plan display says which
+  criteria the runner will prove.
+- **Criteria a test cannot check keep an ordinary verification.** Examples are
+  documentation, visual design and performance under real load; the Validator
+  judges those as before.
+- **Naming.** The Builder writes one test per marked criterion, named with its
+  id (`test_c2_…`).
+- **The runner's check.** Before the Validator runs, the runner checks each
+  named test by the same regression proof as a bug fix, with one difference.
+  The test must pass with the change and must not have passed without it. For a
+  feature, "not passed" includes failing to import the new code on the original
+  revision, because the code didn't exist yet. A bug fix still needs a test that
+  runs and fails. As for bug fixes, no test that passed before may fail now.
+- **Completion.** It is refused until every marked criterion has its test.
+- **Several milestones keep ordinary criteria.** A later milestone's tests
+  cannot pass at an earlier milestone's checkpoint, so plans with more than one
+  milestone are not proven this way.
+
+The matching and the rules are in `tools/autocode_test_cases.py`.
+
 Test commands are detected (pytest, unittest, Go, Jest/Vitest/Mocha, RSpec,
 Cargo, `make test`); `--test-command` and `--regression-command` set them for a
 new run. With per-test results (pytest, unittest) a proof needs a named test

@@ -109,10 +109,13 @@ def pr_body(record: dict, view: dict, diffstat: str) -> str:
     rows = evidence.get("acceptance") or []
     if rows:
         lines += ["| ID | Criterion | Result | Evidence |", "| --- | --- | --- | --- |"]
+        proven = ((evidence.get("regression_proof") or {}).get("case_tests") or {})
         for row in rows:
             result = row.get("status") or "no outcome recorded"
             if row.get("human_reviewed"):
                 result += ", accepted by a person"
+            if proven.get(row.get("id")):
+                result += ", proven by the runner: " + ", ".join(proven[row.get("id")])
             lines.append(f"| {_cell(row.get('id'))} | {_cell(row.get('criterion'))} | {_cell(result)} "
                          f"| {_cell(row.get('evidence'))} |")
     else:
