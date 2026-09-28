@@ -304,6 +304,18 @@ class DriveTests(unittest.TestCase):
         self.assertEqual((["terra"], "Builder lane paused"), (calls, str(caught.exception)))
         self.assertNotIn("stuck_investigation", state)
 
+    def test_a_runner_owned_receipt_is_not_a_fresh_attempt(self):
+        state = state_for(status="RUNNING")
+
+        def dispatch(current, stage):
+            current["stages"].append({"stage": "resolver", "runner_owned": True})
+            raise Paused("PAUSED_REPEATED_FAILURE", "known failure re-asserted")
+
+        with self.assertRaises(Paused):
+            stuck.drive(state, dispatch, active=lambda s: s["status"] == "RUNNING", skip=object(), paused=Paused,
+                        investigate=True)
+        self.assertNotIn("stuck_investigation", state)
+
     def test_an_uncertain_investigation_pauses_like_any_stage(self):
         state = state_for()
 

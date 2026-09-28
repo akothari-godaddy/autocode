@@ -307,8 +307,10 @@ def drive(state, dispatch, *, apply=None, before=None, after=None, persist=None,
     investigated: a guard re-asserting a known pause on resume launches nothing, since that
     pause was investigated when it happened or is now the user's decision.
     """
-    attempted = len(state.get("stages") or [])
-    fresh = lambda: len(state.get("stages") or []) > attempted
+    # Runner-owned records (orchestration, regression proof, AutoResolver receipts) are not attempts.
+    attempts = lambda: sum(1 for row in state.get("stages") or [] if not row.get("runner_owned"))
+    attempted = attempts()
+    fresh = lambda: attempts() > attempted
     while True:
         try:
             while active(state):
