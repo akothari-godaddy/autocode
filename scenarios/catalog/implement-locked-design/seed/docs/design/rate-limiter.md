@@ -36,7 +36,8 @@ class LimiterRegistry:
 
 ## Constraints
 
-- Standard library only. No threads, no module-level state, no decorators.
+- Standard library only. No threads, no module-level state, and no decorators other than the
+  `@property` on `available`.
 - Floats for time and tokens; `available` may be fractional.
 
 ## Rejected alternatives (do not revisit)
