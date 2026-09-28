@@ -352,10 +352,19 @@ emit({'type':'tool_use','sessionID':'one','part':{'id':'part1','tool':'bash','st
         self.assertTrue(snapshots)
 
     def test_startup_grace_allows_a_brief_unreported_launch(self):
-        code, expired, _, _ = self.activity_child('time.sleep(.7)\n', idle=.2, tool=2,
-                                                  startup_grace=1)
+        # The quiet interval must exceed idle, with enough grace for CI scheduling.
+        # A near-boundary exit tests host load rather than startup-grace behavior.
+        code, expired, _, reason = self.activity_child('time.sleep(.5)\n', idle=.1, tool=2,
+                                                       startup_grace=3, total=10)
         self.assertEqual(0, code)
-        self.assertFalse(expired)
+        self.assertFalse(expired, reason)
+
+    def test_startup_grace_still_expires_for_a_silent_worker(self):
+        code, expired, _, reason = self.activity_child('time.sleep(30)\n', idle=.1, tool=2,
+                                                       startup_grace=.5, total=10)
+        self.assertNotEqual(0, code)
+        self.assertTrue(expired)
+        self.assertEqual('idle', reason['kind'])
 
     def test_idle_mcp_helper_does_not_delay_provider_inactivity_timeout(self):
         body = """helper = Path('mcp-server-fixture')
