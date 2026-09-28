@@ -1085,6 +1085,14 @@ def feedback(state, text):
     state.setdefault("user_events", []).append(event)
     state.setdefault("brief_feedback", []).append(event)
     start_clarification_episode(state, event["id"])
+    # A new user clarification restarts requirements discovery. The old
+    # report-only repair is bound to the preceding task/contract sources and
+    # must remain as evidence rather than consuming this episode's allowance.
+    pending = state.pop("pending_report_repair", None)
+    if pending:
+        state.setdefault("report_repair_archive", []).append({
+            "reason": "superseded_by_user_feedback", "feedback_id": event["id"],
+            "repair": copy.deepcopy(pending)})
     if contract:
         contract.update(approval_status="draft", approval_event=None)
         invalidate(state, "Brief feedback requires a refreshed draft and explicit approval")
