@@ -5,17 +5,20 @@ checked by executing the project's own tests in scratch worktrees:
 
 * Regression proof (fail-to-pass). The candidate's new or changed test files
   are run twice with identical test code: once over the base revision's source
-  and once over the candidate's source. They must fail on base and pass on the
-  candidate. Because the only difference between the two trees is the
-  non-test change, the flip is caused by the fix, not by the tests.
-* No regressions (pass-to-pass). The project suite must pass on the candidate.
-  When the suite already fails on base, per-test results (pytest, unittest)
-  must show that nothing which passed on base fails now; without per-test
-  results the outcome stays UNVERIFIED rather than being guessed.
+  and once over the candidate's source. Because the only difference between the
+  two trees is the non-test change, a flip is caused by the fix, not by the
+  tests. With per-test results, a proof is a named test that ran and failed on
+  base and ran and *passed* on the candidate; a module that merely fails to
+  import on base, or a test that is skipped or deselected, proves nothing.
+* No regressions (pass-to-pass). Every test that passed on base must still
+  pass on the candidate: not fail, and not be skipped, deselected or missing.
+  Without per-test results the exit code decides when base was green, and the
+  outcome stays UNVERIFIED when it was not.
 
-The builder's workspace is never executed in: both runs happen in detached
-worktrees assembled from the recorded diff, and the candidate snapshot is
-checked before and after, so a verdict belongs to exactly one candidate.
+The builder's workspace is never executed in: runs happen in detached worktrees
+assembled from the recorded diff, and the candidate snapshot is checked before
+and after, so a verdict belongs to exactly one candidate. Commands that come
+from the Builder's own report can inform its repair but never produce PASS.
 Missing evidence is UNVERIFIED, never PASS.
 """
 from __future__ import annotations
@@ -41,12 +44,23 @@ except ImportError:
     import autocode_support as support
 
 PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"
-TEST_DIRS = frozenset({"test", "tests", "testing", "__tests__", "spec", "specs", "testdata", "test_data"})
-TEST_NAME = re.compile(
-    r"^(test_.*\.py|.*_tests?\.py|conftest\.py|.*\.(test|spec)\.[cm]?[jt]sx?|.*_test\.go"
-    r"|.*_(spec|test)\.rb|.*Tests?\.(java|kt|cs|swift|scala)|test_.*\.(rb|sh))$", re.I)
+# Directories that hold tests wherever they appear, and ones that do only at the repository root:
+# numpy/testing/ and django/test/ are shipped product code, while a top-level test/ is not.
+TEST_DIRS = frozenset({"tests", "__tests__", "__snapshots__", "testdata", "test_data"})
+ROOT_TEST_DIRS = frozenset({"test", "spec"})
+TEST_NAME = re.compile(  # case-sensitive: Latest.java and Contest.kt are product code
+    r"^(test_.*\.py|.*_tests?\.py|conftest\.py|.*\.(test|spec)\.[cm]?[jt]sx?|.*\.snap|.*_test\.go"
+    r"|.*_(spec|test)\.rb|.*Tests?\.(java|kt|cs|swift|scala)|Test[A-Z_]\w*\.(java|kt|cs|swift|scala)"
+    r"|test_.*\.(rb|sh))$")
 PYTHON_TEST_MODULE = re.compile(r"^(test_.*|.*_tests?)\.py$")
+CODE_SUFFIXES = frozenset({".py", ".pyi", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".go", ".rs", ".rb", ".java",
+                           ".kt", ".kts", ".scala", ".swift", ".c", ".h", ".cc", ".cpp", ".hpp", ".cs", ".php",
+                           ".m", ".mm", ".ex", ".exs", ".erl", ".hs", ".ml", ".lua", ".pl", ".sh", ".dart", ".zig"})
 DEPENDENCY_DIRS = ("node_modules", ".venv", "venv")
+COLLECTION_ERROR = re.compile(r"unittest\.loader\.(_FailedTest|ModuleImportFailure)|^::")
+UNITTEST_HEADER = re.compile(r"^(\w+) \(([\w.]+)\)")
+UNITTEST_STATUS = re.compile(r"\.\.\. (ok|FAIL|ERROR|skipped|expected failure|unexpected success)\b")
+UNITTEST_BARE_STATUS = re.compile(r"(ok|FAIL|ERROR|expected failure|unexpected success)|skipped( .*)?")
 TAIL_CHARS = 4000
 DEFAULT_TIMEOUT = 900
 
@@ -58,13 +72,20 @@ def is_test_path(path: str) -> bool:
     parts = PurePosixPath(path).parts
     if not parts:
         return False
-    if any(part.lower() in TEST_DIRS for part in parts[:-1]):
+    directories = parts[:-1]
+    if any(part in TEST_DIRS for part in directories) or (directories and directories[0] in ROOT_TEST_DIRS):
         return True
+    if path.startswith("src/test/") or "/src/test/" in path:
+        return True  # Maven and Gradle layouts
     return bool(TEST_NAME.match(parts[-1]))
 
 
+def is_code_path(path: str) -> bool:
+    return PurePosixPath(path).suffix in CODE_SUFFIXES
+
+
 def _git(cwd, *args, check=True):
-    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+    result = subprocess.run(["git", *args], cwd=cwd, capture_output=True, encoding="utf-8", errors="replace")
     if check and result.returncode:
         raise RuntimeError(f"git {' '.join(args)} failed: {result.stderr.strip()}")
     return result.stdout
@@ -89,23 +110,34 @@ def changed_files(workspace, base) -> dict[str, str]:
     return {path: status for path, status in sorted(changes.items()) if not _ignored(path)}
 
 
+BINARY_LINES = 1000  # a binary change is never "tiny"
+
+
 def diff_stats(workspace, base, changes) -> dict:
-    lines = {}
-    for line in _git(workspace, "diff", "--numstat", "--no-renames", base, "--").splitlines():
-        parts = line.split("\t")
-        if len(parts) == 3 and parts[2] in changes:
-            lines[parts[2]] = (int(parts[0]) if parts[0].isdigit() else 0, int(parts[1]) if parts[1].isdigit() else 0)
+    lines, binary = {}, []
+    for record in _git(workspace, "diff", "--numstat", "-z", "--no-renames", base, "--").split("\0"):
+        parts = record.split("\t", 2)
+        if len(parts) != 3 or parts[2] not in changes:
+            continue
+        if parts[0] == "-":
+            binary.append(parts[2])
+            lines[parts[2]] = (BINARY_LINES, 0)
+        else:
+            lines[parts[2]] = (int(parts[0]), int(parts[1]))
     for path, status in changes.items():
         file = Path(workspace) / path
         if path not in lines and status == "added" and file.is_file():
-            try:
-                lines[path] = (len(file.read_text(errors="replace").splitlines()), 0)
-            except OSError:
-                pass
+            data = file.read_bytes()
+            if b"\0" in data[:8000]:
+                binary.append(path)
+                lines[path] = (BINARY_LINES, 0)
+            else:
+                lines[path] = (len(data.splitlines()), 0)
     source = [p for p in changes if not is_test_path(p)]
     return {"files": len(changes), "source_files": len(source), "test_files": len(changes) - len(source),
             "lines_added": sum(a for a, _ in lines.values()), "lines_removed": sum(r for _, r in lines.values()),
-            "source_lines_changed": sum(sum(lines.get(p, (0, 0))) for p in source)}
+            "source_lines_changed": sum(sum(lines.get(p, (0, 0))) for p in source),
+            "binary_files": sorted(binary), "non_code_files": sorted(p for p in changes if not is_code_path(p))}
 
 
 def removed_python_tests(workspace, base, changes) -> list[str]:
@@ -203,7 +235,7 @@ def detect_framework(root, *, python=None) -> Framework | None:
                              "--continue-on-collection-errors", python=python)
         tests = [p for p in files if PYTHON_TEST_MODULE.match(PurePosixPath(p).name)]
         if tests:
-            note = "pytest is configured but not importable; using unittest" if configured else ""
+            note = f"pytest is configured but {python} cannot import it; using unittest" if configured else ""
             if any("/" not in p for p in tests) or (root / "tests" / "__init__.py").is_file() \
                     or (root / "test" / "__init__.py").is_file():
                 start = ""
@@ -247,17 +279,32 @@ def _kill_group(process):
         pass
 
 
+def test_environment(tree, env=None):
+    """Environment for a command run in ``tree``.
+
+    The tree (and its ``src/``) goes first on PYTHONPATH so an editable install
+    of the user's checkout (a ``.pth`` file in a linked venv) cannot shadow the
+    code being tested.
+    """
+    environment = dict(os.environ if env is None else env, PYTHONDONTWRITEBYTECODE="1", CI="1")
+    roots = [str(Path(tree) / "src")] if (Path(tree) / "src").is_dir() else []
+    roots.append(str(tree))
+    if environment.get("PYTHONPATH"):
+        roots.append(environment["PYTHONPATH"])
+    environment["PYTHONPATH"] = os.pathsep.join(roots)
+    return environment
+
+
 def run_command(command, cwd, log_path, *, timeout=DEFAULT_TIMEOUT, env=None) -> dict:
     """Run one shell command in its own process group and return a receipt."""
     log_path = Path(log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    environment = dict(os.environ if env is None else env, PYTHONDONTWRITEBYTECODE="1", CI="1")
     started = time.monotonic()
     timed_out = False
     with log_path.open("wb") as output:
         process = subprocess.Popen(["/bin/sh", "-c", command], cwd=cwd, stdin=subprocess.DEVNULL,
                                    stdout=output, stderr=subprocess.STDOUT, start_new_session=True,
-                                   env=environment)
+                                   env=test_environment(cwd, env))
         try:
             exit_code = process.wait(timeout=timeout)
         except subprocess.TimeoutExpired:
@@ -266,7 +313,7 @@ def run_command(command, cwd, log_path, *, timeout=DEFAULT_TIMEOUT, env=None) ->
             process.wait()
             exit_code = None
         finally:
-            _kill_group(process)  # descendants that outlived the shell
+            _kill_group(process)  # descendants that outlived the shell, or an interrupted run
     data = log_path.read_bytes()
     return {"command": command, "exit_code": exit_code, "timed_out": timed_out,
             "duration_seconds": round(time.monotonic() - started, 2), "output": str(log_path),
@@ -280,10 +327,26 @@ def _with_results(framework, command, xml_path):
     return command
 
 
+def expects_results(framework, command):
+    """True when this command, run by the runner, must yield per-test results."""
+    if not framework or not framework.per_test or not command:
+        return False
+    return (" -m pytest" in command) if framework.name == "pytest" else (" -m unittest" in command and " -v" in command)
+
+
+def _unittest_id(name, owner):
+    return owner if owner.endswith("." + name) else f"{owner}::{name}"
+
+
 def per_test_results(framework, receipt, xml_path) -> dict | None:
-    """Failing test ids and the number of tests run, or None when unavailable."""
+    """Passed, failed and skipped test ids, or None when the run produced no parseable results.
+
+    ``collection_errors`` are failures of a module to import or collect; they are
+    failures, but they never name a test that ran.
+    """
     if not framework or not framework.per_test:
         return None
+    passed, failed, skipped, collection = set(), set(), set(), set()
     if framework.name == "pytest":
         if not Path(xml_path).is_file():
             return None
@@ -291,19 +354,54 @@ def per_test_results(framework, receipt, xml_path) -> dict | None:
             tree = ET.parse(xml_path)
         except ET.ParseError:
             return None
-        failed, total = [], 0
+        total = 0
         for case in tree.iter("testcase"):
             total += 1
-            if case.find("failure") is not None or case.find("error") is not None:
-                failed.append(f"{case.get('classname', '')}::{case.get('name', '')}")
-        return {"failed": sorted(set(failed)), "total": total}
-    text = Path(receipt["output"]).read_text(errors="replace")
-    ran = re.findall(r"^Ran (\d+) tests? in ", text, re.M)
-    if not ran:
-        return None
-    failed = re.findall(r"^(?:FAIL|ERROR): (\S+) \(([\w.]+)\)", text, re.M)
-    return {"failed": sorted({f"{owner}::{name}" if not owner.endswith("." + name) else owner
-                              for name, owner in failed}), "total": int(ran[-1])}
+            test = f"{case.get('classname', '')}::{case.get('name', '')}"
+            problem = case.find("failure") if case.find("failure") is not None else case.find("error")
+            if problem is not None:
+                failed.add(test)
+                if not case.get("classname") or "collection failure" in (problem.get("message") or ""):
+                    collection.add(test)
+            elif case.find("skipped") is not None:
+                skipped.add(test)
+            else:
+                passed.add(test)
+        complete = True
+    else:
+        text = Path(receipt["output"]).read_text(errors="replace")
+        ran = re.findall(r"^Ran (\d+) tests? in ", text, re.M)
+        if not ran:
+            return None
+        total = int(ran[-1])
+        current = None
+        for line in text.splitlines():
+            if line.startswith(("=====", "-----")):
+                current = None  # the failure details section follows
+                continue
+            match = UNITTEST_HEADER.match(line)
+            if match:
+                current, rest = _unittest_id(*match.groups()), line[match.end():]
+            elif current is None:
+                continue
+            else:
+                rest = line
+            # "name (id) ... ok", a docstring line ending "... ok", or the word alone after test output
+            found = UNITTEST_STATUS.search(rest)
+            word = found.group(1) if found else None
+            if word is None and not match:
+                bare = UNITTEST_BARE_STATUS.fullmatch(rest.strip())
+                word = bare and ("skipped" if bare.group(0).startswith("skipped") else bare.group(1))
+            if word:
+                (passed if word == "ok" else skipped if word in ("skipped", "expected failure") else failed).add(current)
+                current = None
+        for name, owner in re.findall(r"^(?:FAIL|ERROR): (\S+) \(([\w.]+)\)", text, re.M):
+            failed.add(_unittest_id(name, owner))
+        passed -= failed
+        collection = {test for test in failed if COLLECTION_ERROR.search(test)}
+        complete = len(passed) + len(skipped) + len(failed) >= total
+    return {"passed": sorted(passed), "failed": sorted(failed), "skipped": sorted(skipped),
+            "collection_errors": sorted(collection), "total": total, "complete": complete}
 
 
 # --- scratch trees ----------------------------------------------------------
@@ -318,27 +416,42 @@ def link_dependencies(source_root, tree):
             target.symlink_to(source.resolve(), target_is_directory=True)
 
 
+def _clear(path):
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+
+
 def make_tree(repo, base, destination, overlay_root, changes, *, dependencies_from=None):
+    """A detached worktree of ``base`` with ``changes`` copied from ``overlay_root``."""
     destination = Path(destination)
     if destination.exists():
         remove_tree(repo, destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     _git(repo, "worktree", "add", "--detach", str(destination), base)
-    for path, status in changes.items():
-        target = destination / path
-        if status == "deleted":
-            if target.is_file() or target.is_symlink():
-                target.unlink()
-            continue
-        source = Path(overlay_root) / path
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink() or target.is_file():
-            target.unlink()
-        if source.is_symlink():
-            target.symlink_to(os.readlink(source))
-        elif source.is_file():
-            shutil.copy2(source, target)
-    link_dependencies(dependencies_from, destination)
+    try:
+        ordered = sorted(changes.items(), key=lambda item: item[1] != "deleted")  # deletions first
+        for path, status in ordered:
+            target = destination / path
+            if status == "deleted":
+                if target.is_symlink() or target.is_file():
+                    target.unlink()
+                continue
+            source = Path(overlay_root) / path
+            for parent in reversed(target.relative_to(destination).parents[:-1]):
+                if (destination / parent).is_symlink() or (destination / parent).is_file():
+                    (destination / parent).unlink()  # a file that became a directory
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _clear(target)  # includes a directory that became a file
+            if source.is_symlink():
+                target.symlink_to(os.readlink(source))
+            elif source.is_file():
+                shutil.copy2(source, target)
+        link_dependencies(dependencies_from, destination)
+    except BaseException:
+        remove_tree(repo, destination)
+        raise
     return destination
 
 
@@ -352,22 +465,25 @@ def remove_tree(repo, destination):
 # --- verification -----------------------------------------------------------
 
 def _mentions_tests(command, test_paths):
+    """True when a shell word of ``command`` names a changed test file (or a pytest node in it)."""
+    try:
+        words = shlex.split(command, comments=True)
+    except ValueError:
+        words = command.split()
     for path in test_paths:
-        posix = PurePosixPath(path)
-        tokens = {path, posix.name, posix.stem, str(posix.with_suffix("")).replace("/", ".")}
-        if str(posix.parent) not in ("", "."):
-            tokens.add(str(posix.parent))
-        if any(token and token in command for token in tokens):
-            return True
+        module = str(PurePosixPath(path).with_suffix("")).replace("/", ".")
+        for word in words:
+            if word in (path, "./" + path, module) or word.startswith((path + "::", module + ".")):
+                return True
     return False
 
 
 def select_commands(framework, test_paths, *, suite_command=None, regression_command=None, reported=None):
     """Choose commands: explicit flags, then detection, then the builder's report.
 
-    A builder-reported regression command is used only when it names at least
-    one changed test file; otherwise it could check something other than the
-    tests (for example grep the source) and prove nothing.
+    A builder-reported command is used only to give the Builder feedback: it
+    can never make the verdict PASS, because the candidate would be judged by a
+    check it chose. A builder regression command must also name a changed test.
     """
     reported = reported or {}
     notes = []
@@ -393,9 +509,11 @@ def select_commands(framework, test_paths, *, suite_command=None, regression_com
 
 def run_suite(framework, command, tree, evidence_dir, label, *, timeout):
     xml = Path(evidence_dir) / f"{label}.junit.xml"
+    xml.unlink(missing_ok=True)  # never parse a previous run's results
     receipt = run_command(_with_results(framework, command, xml), tree, Path(evidence_dir) / f"{label}.log",
                           timeout=timeout)
     receipt["results"] = per_test_results(framework, receipt, xml)
+    receipt["results_expected"] = expects_results(framework, command)
     return receipt
 
 
@@ -417,11 +535,15 @@ def suite_health(receipt) -> str:
     results = receipt.get("results")
     if receipt["timed_out"]:
         return "timeout"
+    if receipt["exit_code"] in (126, 127):
+        return "broken"  # the command itself could not run
+    if receipt.get("results_expected") and results is None:
+        return "broken"  # the runner ended before reporting any test
+    if results is not None and (results["total"] == 0 or (results["complete"] and not results["passed"])):
+        return "broken"
     if receipt["exit_code"] == 0:
         return "passing"
-    if results is None:
-        return "failing"
-    return "failing_tests" if results["total"] > len(results["failed"]) else "broken"
+    return "failing" if results is None else "failing_tests"
 
 
 def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regression_command=None,
@@ -435,7 +557,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
     tests = [p for p in changes if is_test_path(p)]
     sources = [p for p in changes if not is_test_path(p)]
     test_changes = {p: changes[p] for p in tests}
-    fail, unverified, notes = [], [], []
+    fail, unverified, notes, review_reasons = [], [], [], []
     checks: dict[str, dict] = {}  # command receipts only
     proof: dict = {}
     commands = select_commands(framework, [p for p in tests if changes[p] != "deleted"],
@@ -452,11 +574,16 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
     removed = removed_python_tests(workspace, base, changes)
     if removed:
         fail.append("Existing tests were removed: " + ", ".join(removed[:20]))
-    if not [p for p in tests if changes[p] != "deleted"]:
+    runnable_tests = [p for p in tests if changes[p] != "deleted"]
+    if not runnable_tests:
         (unverified if allow_no_test else fail).append(
             "No regression test was added or changed, so the bug is not shown to be reproduced")
+    for kind in ("regression", "suite"):
+        if commands[f"{kind}_source"] == "builder":
+            unverified.append(f"The {kind} command came from the Builder's own report; pass "
+                              f"--{'regression' if kind == 'regression' else 'test'}-command to verify with "
+                              "a command you trust")
 
-    runnable_tests = [p for p in tests if changes[p] != "deleted"]
     trees = {}
     try:
         if changes and (commands["regression"] or commands["suite"]):
@@ -475,9 +602,10 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
                 on_base = run_suite(framework, commands["regression"], trees["base_with_tests"], run_dir,
                                     "regression-on-base", timeout=timeout)
                 checks["regression_on_base"] = on_base
-            _judge_regression(on_candidate, on_base, fail, notes, proof, known_failures=lambda: _pre_existing(
-                framework, commands, changes, runnable_tests, workspace, base, run_dir, checks,
-                timeout=timeout, dependencies_from=dependencies_from))
+            _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, review_reasons,
+                              known_failures=lambda: _pre_existing(
+                                  framework, commands, changes, runnable_tests, workspace, base, run_dir, checks,
+                                  timeout=timeout, dependencies_from=dependencies_from))
         elif "base_with_tests" in trees and commands["suite"]:
             # No targeted command: the whole suite proves the flip when base was green.
             if base_suite is None or base_suite["health"] != "passing":
@@ -487,6 +615,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
                 on_base = run_suite(framework, commands["suite"], trees["base_with_tests"], run_dir,
                                     "suite-on-base-with-tests", timeout=timeout)
                 checks["regression_on_base"] = on_base
+                review_reasons.append("the regression proof rests on the whole suite's exit code")
                 if on_base["exit_code"] == 0:
                     fail.append("The new tests pass on the unfixed base code, so they do not reproduce the bug")
         elif tests and sources:
@@ -498,7 +627,8 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
             on_candidate = reuse or run_suite(framework, commands["suite"], trees["candidate"], run_dir,
                                               "suite-on-candidate", timeout=timeout)
             checks["suite_on_candidate"] = on_candidate
-            _judge_suite(on_candidate, base_suite, fail, unverified, notes)
+            comparable = base_suite if base_suite and base_suite.get("command") == commands["suite"] else None
+            _judge_suite(on_candidate, comparable, fail, unverified, notes)
         elif sources:
             unverified.append("No project test command was found; existing behavior was not checked "
                               "(pass --test-command)")
@@ -508,11 +638,15 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
     after = support.snapshot(workspace)["revision"]
     if after != before:
         unverified.append("The candidate changed while it was being verified; verify again")
+    stats = diff_stats(workspace, base, changes)
+    if stats["binary_files"]:
+        review_reasons.append("binary files changed: " + ", ".join(stats["binary_files"][:5]))
+    if stats["non_code_files"]:
+        review_reasons.append("non-code files changed: " + ", ".join(stats["non_code_files"][:5]))
     verdict = FAIL if fail else UNVERIFIED if unverified else PASS
     return {"verdict": verdict, "failures": fail, "unverified": unverified, "notes": notes,
-            "base": base, "source_revision": before,
-            "changes": changes, "test_files": tests, "source_files": sources,
-            "stats": diff_stats(workspace, base, changes),
+            "review_reasons": review_reasons, "base": base, "source_revision": before,
+            "changes": changes, "test_files": tests, "source_files": sources, "stats": stats,
             "commands": {k: commands[k] for k in ("suite", "suite_source", "regression", "regression_source")},
             "framework": framework.to_dict() if framework else None,
             "baseline": ({"health": base_suite["health"], "exit_code": base_suite["receipt"]["exit_code"],
@@ -520,33 +654,72 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
             "fail_to_pass": proof.get("fail_to_pass"), "checks": checks}
 
 
-def _judge_regression(on_candidate, on_base, fail, notes, proof, *, known_failures):
-    """Judge the targeted runs. With per-test results, a test that already fails on the
-    pristine base (for example one needing a network) in the same file neither blocks a
-    correct fix nor counts as its proof; without them, exit codes decide."""
+def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, review_reasons, *, known_failures):
+    """Judge the targeted runs of the changed test files.
+
+    With per-test results, the proof is a named test that ran and failed on base
+    and ran and passed on the candidate. A module that fails to import on base
+    (for example because the test imports a name the fix adds) is not a test that
+    ran. A test in the same files that already fails on the pristine base (for
+    example one needing a network) neither blocks the fix nor counts as proof.
+    Without per-test results, exit codes decide and the change needs review.
+    """
     candidate = on_candidate.get("results")
     base = (on_base or {}).get("results")
-    if candidate is not None and not on_candidate["timed_out"]:
+    if on_candidate["timed_out"]:
+        fail.append("The regression tests timed out on the candidate")
+        return
+    if on_candidate.get("results_expected"):
+        if candidate is None:
+            if on_candidate["exit_code"] == 0:
+                unverified.append("The regression run exited 0 without reporting any test result "
+                                  "(did the process exit early?)")
+            else:
+                fail.append("The regression tests fail on the candidate (no test results were reported)")
+            return
         failed = set(candidate["failed"])
-        if candidate["total"] == 0:
-            fail.append("The regression command ran no tests")
-        elif failed:
-            known = known_failures()
-            unexplained = sorted(failed - (known or set()))
+        if candidate["complete"]:
+            passed = set(candidate["passed"])
+        else:
+            # Output the parser could not fully attribute: exit 0 plus "not failed, not skipped".
+            review_reasons.append("per-test results of the regression run were incomplete")
+            passed = (set(base["failed"]) if base else set()) - failed - set(candidate["skipped"]) \
+                if on_candidate["exit_code"] == 0 else set()
+        if candidate["complete"] and not passed:
+            fail.append("The regression command ran no passing tests")
+        if failed:
+            known = known_failures() or set()
+            unexplained = sorted(failed - known)
             if unexplained:
                 fail.append("The regression tests fail on the candidate: " + ", ".join(unexplained[:20]))
             else:
                 notes.append("Tests in the changed files that already fail on base were not counted: "
                              + ", ".join(sorted(failed)[:20]))
-        if on_base is not None and base is not None and not on_base["timed_out"]:
-            flipped = sorted(set(base["failed"]) - failed)
-            proof["fail_to_pass"] = flipped
-            if not flipped:
+        if on_base is None:
+            return
+        if on_base["timed_out"]:
+            notes.append("The regression tests timed out on the base code; counted as a failure on base")
+            review_reasons.append("the regression proof is a timeout on base, not a named test")
+            return
+        if base is None:
+            unverified.append("The regression run on the base code reported no test results")
+            return
+        ran_and_failed = set(base["failed"]) - set(base["collection_errors"])
+        flipped = sorted(ran_and_failed & passed)
+        proof["fail_to_pass"] = flipped
+        if not flipped:
+            if base["collection_errors"]:
+                fail.append("On the unfixed code the new tests only fail to import or collect ("
+                            + ", ".join(base["collection_errors"][:5]) + "), so no test shows the bug. "
+                            "Write the regression test against behavior that exists before the fix.")
+            else:
                 fail.append("No test fails on the unfixed base code and passes with the fix, "
                             "so the tests do not reproduce the bug")
-            return
-    elif on_candidate["exit_code"] != 0:
-        fail.append("The regression tests fail on the candidate" + (" (timed out)" if on_candidate["timed_out"] else ""))
+        return
+    # Exit codes only: honest, but weaker, so a person or the Reviewer must read the change.
+    review_reasons.append("the regression proof rests on exit codes, not named tests")
+    if on_candidate["exit_code"] != 0:
+        fail.append("The regression tests fail on the candidate")
     if on_base is None:
         return
     if on_base["exit_code"] == 0:
@@ -575,32 +748,46 @@ def _pre_existing(framework, commands, changes, runnable_tests, workspace, base,
 
 
 def _judge_suite(on_candidate, base_suite, fail, unverified, notes):
+    """Nothing that passed on base may fail, be skipped, be deselected or disappear."""
     if on_candidate["timed_out"]:
         fail.append("The project suite timed out on the candidate")
         return
     candidate = on_candidate.get("results")
     base_receipt = (base_suite or {}).get("receipt") or {}
     base_results = base_receipt.get("results")
-    if candidate and base_results and candidate["total"] < base_results["total"]:
-        fail.append(f"Fewer tests ran on the candidate ({candidate['total']}) than on base "
-                    f"({base_results['total']}); tests may have been removed, disabled or not importable")
+    if on_candidate.get("results_expected") and candidate is None:
+        if on_candidate["exit_code"] == 0:
+            unverified.append("The project suite exited 0 without reporting any test result "
+                              "(did the process exit early?)")
+        elif base_receipt.get("exit_code") == 0:
+            fail.append("The project suite passes on base but fails on the candidate")
+        else:
+            unverified.append("The project suite reported no test results on the candidate")
+        return
+    if candidate is not None and base_results is not None:
+        new = sorted(set(candidate["failed"]) - set(base_results["failed"]))
+        if new:
+            fail.append("Tests that pass on base fail on the candidate: " + ", ".join(new[:20]))
+        if candidate["complete"] and base_results["complete"]:
+            lost = sorted(set(base_results["passed"]) - set(candidate["passed"]) - set(new))
+            if lost:
+                fail.append("Tests that pass on base did not pass on the candidate (skipped, deselected, "
+                            "renamed or missing): " + ", ".join(lost[:20]))
+        elif candidate["total"] < base_results["total"]:
+            fail.append(f"Fewer tests ran on the candidate ({candidate['total']}) than on base "
+                        f"({base_results['total']})")
+        if base_results["failed"] and not new:
+            notes.append(f"{len(base_results['failed'])} test(s) already failed on base; none newly fail")
+        return
     if on_candidate["exit_code"] == 0:
         return
     if base_suite is None:
         unverified.append("The project suite fails on the candidate and there is no base run to compare with")
-        return
-    if base_receipt.get("exit_code") == 0:
+    elif base_receipt.get("exit_code") == 0:
         fail.append("The project suite passes on base but fails on the candidate")
-        return
-    if candidate and base_results:
-        new = sorted(set(candidate["failed"]) - set(base_results["failed"]))
-        if new:
-            fail.append("Tests that pass on base fail on the candidate: " + ", ".join(new[:20]))
-        else:
-            notes.append(f"{len(base_results['failed'])} test(s) already failed on base; none newly fail")
-        return
-    unverified.append("The project suite already fails on base and per-test results are unavailable, "
-                      "so new failures cannot be ruled out (narrow it with --test-command)")
+    else:
+        unverified.append("The project suite already fails on base and per-test results are unavailable, "
+                          "so new failures cannot be ruled out (narrow it with --test-command)")
 
 
 def feedback(result, *, limit=3000) -> str:
@@ -634,7 +821,7 @@ def cli(argv=None) -> int:
     parser.add_argument("--out", type=Path, help="Directory for logs and verification.json")
     parser.add_argument("--allow-no-test", action="store_true", help="Report UNVERIFIED instead of FAIL without a test")
     args = parser.parse_args(argv)
-    workspace = Path(_git(args.workspace, "rev-parse", "--show-toplevel").strip())
+    workspace = Path(_git(args.workspace, "rev-parse", "--show-toplevel").strip()).resolve()
     base = _git(workspace, "rev-parse", "--verify", args.base + "^{commit}").strip()
     out = (args.out or Path(tempfile.mkdtemp(prefix="autocode-verify-"))).resolve()
     if out.is_relative_to(workspace) and not out.is_relative_to(workspace / ".autocode"):
@@ -649,6 +836,8 @@ def cli(argv=None) -> int:
                     dependencies_from=workspace, allow_no_test=args.allow_no_test)
     support.atomic_json(out / "verification.json", result)
     print(feedback(result, limit=800))
+    if result["review_reasons"]:
+        print("\nNeeds a human or Reviewer read: " + "; ".join(result["review_reasons"]))
     print(f"\nEvidence: {out / 'verification.json'}")
     return {PASS: 0, UNVERIFIED: 2}.get(result["verdict"], 1)
 

@@ -7,7 +7,9 @@ consumes the next step, in order:
     {"role": "builder" | "reviewer",
      "write": {"path": "content" | null},     # files to write (null deletes)
      "report": {...} | "garbage" | null,      # JSON report; "garbage" writes invalid JSON
+     "write_latin1": {"path": "content"},     # files written as Latin-1 bytes (not UTF-8)
      "commit": false,                         # commit the written files (a disobedient Builder)
+     "no_stdin": false,                       # never read the prompt (a stuck provider)
      "exit": 0,                               # process exit code
      "sleep": 0}                              # seconds to wait before exiting
 
@@ -30,9 +32,9 @@ script = json.loads(script_path.read_text())
 counter = script_path.with_suffix(".count")
 index = int(counter.read_text()) if counter.exists() else 0
 counter.write_text(str(index + 1))
-prompt = sys.stdin.read()
 steps = script["calls"]
 step = steps[index] if index < len(steps) else {"role": "any", "report": None, "exit": 9}
+prompt = "" if step.get("no_stdin") else sys.stdin.read()
 with script_path.with_suffix(".log").open("a") as log:
     log.write(json.dumps({"argv": argv, "prompt": prompt, "step": index}) + "\n")
 
@@ -51,6 +53,8 @@ for relative, content in (step.get("write") or {}).items():
     else:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text(content)
+for relative, content in (step.get("write_latin1") or {}).items():
+    (workspace / relative).write_bytes(content.encode("latin-1"))
 if step.get("commit"):
     import subprocess
     subprocess.run(["git", "add", "-A"], cwd=workspace, check=True)
