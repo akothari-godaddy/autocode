@@ -16,7 +16,7 @@ import autocode_goals as goals
 import autocode_opencode as oc
 import autocode_planning as planning
 import autocode_support as support
-from goal_fixtures import body
+from goal_fixtures import assert_operational_wait, body
 from . import test_subprocess
 
 
@@ -184,13 +184,19 @@ class PlanningTests(unittest.TestCase):
     def test_draft_cannot_be_approved_before_both_partners_finish(self):
         state = self.state()
         self.assertEqual("astra_challenge", state["next_stage"])
+        draft_token = goals.token(state["goal_contract"])
         goals.human.evaluate(state)
         goals.present(state)
+        # AutoResolver defers goal approval until joint planning finishes, so
+        # no approval token is displayed for the unreviewed draft.
+        self.assertNotIn("displayed_goal", state)
         with self.assertRaises(ValueError):
-            goals.approve(state, state["displayed_goal"])
+            goals.approve(state, draft_token)
+        # Even a displayed exact token cannot bypass the joint-planning gate.
         state["status"] = "AWAITING_GOAL_APPROVAL"
+        state["displayed_goal"] = draft_token
         with self.assertRaisesRegex(ValueError, "final plan"):
-            goals.approve(state, state["displayed_goal"])
+            goals.approve(state, draft_token)
 
     def test_astra_budget_includes_failed_attempts_and_requires_explicit_new_cycle(self):
         state = self.state()
@@ -511,6 +517,10 @@ class JointFlow(unittest.TestCase):
             # Explicitly exercise compatibility with saved no-recovery runs.
             state['settings']['report_repair'] = {'max_attempts': report_repair}
             (run/'state.json').write_text(json.dumps(state))
+            # Editing saved settings moves the request's binding; publish a
+            # fresh request the way the stale-token message tells a user to.
+            self.launch(["--run-dir", str(run), "--no-chat"], 2)
+            run, state = self.saved()
         self.assertEqual(["requirements", "glm"], [row["role"] for row in state["stages"]])
         handoff = state["requirements_handoff"]
         self.assertEqual(state["stages"][0]["output"], handoff["output"])
@@ -634,7 +644,10 @@ class JointFlow(unittest.TestCase):
         self.assertEqual("WAITING_FOR_USER", state["status"])
         self.assertEqual("P2", state["pending_questions"][0]["id"])
         self.assertEqual(2, state["planning"]["astra_calls"])
-        self.launch(["--run-dir", str(run), "--approve-goal", state["displayed_goal"]], 2)
+        # A clarification request publishes no approval token; the exact
+        # contract token is still rejected.
+        self.assertNotIn("displayed_goal", state)
+        self.launch(["--run-dir", str(run), "--approve-goal", goals.token(state["goal_contract"])], 2)
         self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
         self.assertEqual(6, len(self.saved()[1]["stages"]))
 
@@ -644,8 +657,11 @@ class JointFlow(unittest.TestCase):
         self.assertEqual(2, state["planning"]["astra_calls"])
         self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
         paused = self.saved()[1]
-        self.assertEqual("PAUSED_PLANNING_BUDGET", paused["status"])
-        self.assertEqual(6, len(paused["stages"]))
+        # An exhausted planning budget is now an operational AutoResolver request.
+        assert_operational_wait(self, paused, "PAUSED_PLANNING_BUDGET")
+        # Only a runner-owned AutoResolver receipt was added; no third provider call.
+        self.assertEqual(state["stages"], [r for r in paused["stages"] if not r.get("runner_owned")])
+        self.assertEqual(["resolver"], [r["stage"] for r in paused["stages"] if r.get("runner_owned")])
         self.assertNotIn("active_stage", paused)
         self.env["AUTOCODE_FIXTURE_MODE"] = "no-human"
         self.launch(["--run-dir", str(run), "--feedback", "Try the simpler version"], 0)
@@ -666,7 +682,9 @@ class JointFlow(unittest.TestCase):
         revised = self.saved()[1]
         self.assertEqual("astra_challenge", revised["next_stage"])
         self.launch(["--run-dir", str(run), "--approve-goal", old_token], 2)
-        self.launch(["--run-dir", str(run), "--approve-goal", revised["displayed_goal"]], 2)
+        # The edited draft is not presented for approval until jointly reviewed.
+        self.assertNotIn("displayed_goal", revised)
+        self.launch(["--run-dir", str(run), "--approve-goal", goals.token(revised["goal_contract"])], 2)
         self.assertFalse((self.project / "greet.py").exists())
         self.launch(["--run-dir", str(run), "--no-chat"], 2)
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.saved()[1]["status"])
@@ -687,37 +705,48 @@ with tempfile.TemporaryDirectory() as temp:'''))
         run, _ = self.saved()
         args = ["--run-dir", str(run), "--no-chat"]
         self.launch([*args, "--answer", "Q1=CLI"], 0)
-        self.launch(args, 2)
+        # Since 009c8b8 a proven ordinary planning timeout under the runner-default
+        # cap earns one reserved AutoResolver recovery review instead of a
+        # PAUSED_PLANNING_BUDGET stop (explicit caps stay protected; see
+        # test_failed_extended_review_...). Stop at the pre-final checkpoint with
+        # an explicit pause request to inspect the same boundary as before.
+        self.launch([*args, "--pause-after-stage"], 2)
+        while self.saved()[1]["next_stage"] != "astra_finalize":
+            self.launch([*args, "--resume-paused", "--pause-after-stage"], 2)
         paused = self.saved()[1]
-        self.assertEqual("PAUSED_PLANNING_BUDGET", paused["status"])
-        self.assertEqual("astra_finalize", paused["next_stage"])
+        self.assertEqual("PAUSED_REQUESTED", paused["status"])
         self.assertEqual(2, paused["planning"]["astra_calls"])
         self.assertEqual("stage", paused["automatic_timeout_recoveries"][-1]["timeout_kind"])
         self.assertIn("glm_revise", paused["planning"]["reports"])
-        self.launch([*args, "--resume-paused"], 2)
-        self.assertEqual(paused["stages"], self.saved()[1]["stages"])
-        self.launch([*args, "--planning-review-call-limit", "3"], 0)
-        extended = self.saved()[1]
-        self.assertEqual(paused["planning"]["reports"], extended["planning"]["reports"])
-        self.assertEqual(paused["goal_contract"], extended["goal_contract"])
-        self.assertEqual(paused["stages"], extended["stages"])
-        self.assertEqual(paused.get("planning_history"), extended.get("planning_history"))
-        self.launch([*args, "--planning-review-call-limit", "3"], 0)
-        self.assertEqual(extended["user_events"], self.saved()[1]["user_events"])
-        self.launch([*args, "--approve-goal", extended["displayed_goal"]], 2)
+        self.assertFalse(paused["planning"].get("recovery_review_grants"))
+        pre_final = goals.token(paused["goal_contract"])
+        self.launch([*args, "--approve-goal", pre_final], 2)
         self.launch([*args, "--resume-paused", "--unit", "autoplanner"], 2)
         final = self.saved()[1]
         self.assertEqual("AWAITING_GOAL_APPROVAL", final["status"])
         self.assertEqual(3, final["planning"]["astra_calls"])
-        self.assertEqual(["astra_finalize"], [r["stage"] for r in final["stages"][len(paused["stages"]):]])
+        # Exactly one extra provider call: the final review, funded by one
+        # runner-owned recovery grant; no replanning or extra debate round.
+        added = final["stages"][len(paused["stages"]):]
+        self.assertEqual(["astra_finalize"], [r["stage"] for r in added if not r.get("runner_owned")])
+        self.assertEqual(["resolver"], [r["stage"] for r in added if r.get("runner_owned")])
+        self.assertEqual(1, final["planning"]["recovery_review_calls_used"])
+        self.assertEqual([True], [g["consumed"] for g in final["planning"]["recovery_review_grants"]])
+        self.assertEqual(1, sum(r["stage"] == "glm_revise" for r in final["stages"]))
+        self.assertEqual(paused["goal_contract"]["body"]["open_blocking_questions"],
+                         final["goal_contract"]["body"]["open_blocking_questions"])
         self.assertEqual(final["displayed_goal"], final["planning"]["final_token"])
         self.assertFalse(goals.approved(final))
         self.assertFalse((self.project / "greet.py").exists())
-        self.launch([*args, "--approve-goal", extended["displayed_goal"]], 2)
+        self.launch([*args, "--approve-goal", pre_final], 2)
+        self.assertFalse(goals.approved(self.saved()[1]))
         # A lost final transition is reconciled, not charged as a fourth call.
-        extended["active_stage"] = final["stages"][-1]
-        extended["planning"]["astra_calls"] = 3
-        (run / "state.json").write_text(json.dumps(extended))
+        lost = copy.deepcopy(paused)
+        lost["stages"] = final["stages"][:-1]
+        lost["active_stage"] = final["stages"][-1]
+        for key in ("astra_calls", "recovery_review_grants", "recovery_review_calls_used"):
+            lost["planning"][key] = final["planning"][key]
+        (run / "state.json").write_text(json.dumps(lost))
         self.launch([*args, "--resume-paused"], 2)
         recovered = self.saved()[1]
         self.assertEqual("AWAITING_GOAL_APPROVAL", recovered["status"])
@@ -734,12 +763,16 @@ with tempfile.TemporaryDirectory() as temp:'''))
         failed = self.saved()[1]
         self.assertEqual(3, failed["planning"]["astra_calls"])
         self.launch([*args, "--resume-paused"], 2)
-        self.assertEqual("PAUSED_PLANNING_BUDGET", self.saved()[1]["status"])
+        assert_operational_wait(self, self.saved()[1], "PAUSED_PLANNING_BUDGET")
         self.launch([*args, "--planning-review-call-limit", "3"], 0)
         self.launch([*args, "--resume-paused"], 2)
-        self.assertEqual(failed["stages"], self.saved()[1]["stages"])
+        # No further provider call; AutoResolver may add only its runner-owned receipt.
+        provider = lambda rows: [r for r in rows if not r.get("runner_owned")]
+        self.assertEqual(provider(failed["stages"]), provider(self.saved()[1]["stages"]))
         self.assertFalse((self.project / "greet.py").exists())
-        for value in ("0", "1", "-1", "unlimited"):
+        # "0" is the documented explicit-unlimited setting (335be6c); only
+        # malformed or sub-minimum finite limits are rejected here.
+        for value in ("1", "-1", "unlimited"):
             checkpoint = (run / "state.json").read_bytes()
             self.launch([*args, "--planning-review-call-limit", value], 2)
             self.assertEqual(checkpoint, (run / "state.json").read_bytes())
@@ -786,10 +819,11 @@ with tempfile.TemporaryDirectory() as temp:'''))
         self.launch(["--run-dir", str(run), "--answer", "Q1=CLI"], 0)
         self.launch(args, 2)
         paused = self.saved()[1]
-        self.assertEqual("PAUSED_BUDGET", paused["status"])
+        # A provider quota pause is now published as an operational AutoResolver request.
+        assert_operational_wait(self, paused, "PAUSED_BUDGET")
         self.assertEqual("opencode", paused["active_stage"]["engine"])
         self.assertEqual(1, paused["planning"]["astra_calls"])
-        self.assertEqual(3, len(paused["stages"]))
+        self.assertEqual(3, len([r for r in paused["stages"] if not r.get("runner_owned")]))
         del self.env["AUTOCODE_FIXTURE_QUOTA_STAGE"]
         self.launch([*args, "--resume-paused"], 2)
         still = self.saved()[1]

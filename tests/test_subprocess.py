@@ -304,12 +304,20 @@ class SubprocessFlow(unittest.TestCase):
         count = len(abandoned['stages'])
         # Merely inspecting or launching a paused run must not authorize recovery.
         self.launch(args, 2)
-        self.assertEqual(count, len(self.saved()[1]['stages']))
+        _, held = self.saved()
+        # AutoResolver may record only a runner-owned hold receipt and, for the
+        # legacy failure loop, publish an operational request; no provider runs.
+        provider = lambda rows: [r for r in rows if not r.get('runner_owned')]
+        self.assertEqual(provider(abandoned['stages']), provider(held['stages']))
+        if legacy:
+            from tools.goal_fixtures import assert_operational_wait
+            assert_operational_wait(self, held, 'PAUSED_REPEATED_FAILURE')
 
         self.launch([*args, '--resume-paused', '--unit', 'autoreview'], 0)
         _, final = self.saved()
         self.assertEqual('TASK_COMPLETE', final['status'])
-        self.assertEqual(['sol', 'astra_review'], [r['stage'] for r in final['stages'][count:]])
+        self.assertEqual(['sol', 'astra_review'],
+                         [r['stage'] for r in final['stages'][count:] if not r.get('runner_owned')])
         self.assertEqual('PASS', final['validation']['verdict'])
         self.assertEqual(1, sum(r['stage'] == 'terra' for r in final['stages']))
         self.assertEqual(contract, final['goal_contract'])
@@ -326,9 +334,11 @@ class SubprocessFlow(unittest.TestCase):
         self.env["AUTOCODE_FIXTURE_SESSION_DRIFT"] = "1"
         self.launch(args, 2)
         _, paused = self.saved()
-        self.assertEqual("PAUSED_UNCERTAIN_STAGE", paused["status"])
+        # The uncertain-stage pause is now published as an operational AutoResolver request.
+        from tools.goal_fixtures import assert_operational_wait
+        published = assert_operational_wait(self, paused, "PAUSED_UNCERTAIN_STAGE")
         self.assertEqual(initial["sessions"], paused["sessions"])
-        self.assertEqual(1, len(paused["stages"]))
+        self.assertEqual(1, len([r for r in paused["stages"] if not r.get("runner_owned")]))
         status = json.loads(self.launch([*args, "--status"], 0).stdout)
         unchanged = (run / "state.json").read_bytes()
         self.launch([*args, "--abandon-stage", "001/wrong-01"], 2)
@@ -336,8 +346,10 @@ class SubprocessFlow(unittest.TestCase):
         self.launch([*args, "--abandon-stage", status["attempt_id"]], 0)
         _, abandoned = self.saved()
         self.assertEqual("PAUSED_STAGE_ABANDONED", abandoned["status"])
-        self.assertEqual(2, len(abandoned["stages"]))
+        self.assertEqual(2, len([r for r in abandoned["stages"] if not r.get("runner_owned")]))
         self.assertTrue(abandoned["stages"][-1]["abandoned"])
+        self.assertEqual("superseded",
+                         abandoned["resolver"]["human_escalations"][published["request_id"]]["status"])
         self.assertNotIn("astra", abandoned["sessions"])
         self.assertFalse((self.project / "greet.py").exists())
         del self.env["AUTOCODE_FIXTURE_SESSION_DRIFT"]
@@ -348,8 +360,9 @@ class SubprocessFlow(unittest.TestCase):
         self.env["AUTOCODE_FIXTURE_MODE"] = "rework"
         self.launch(["Build a greeting tool", "--chat", "--max-iterations", "1"], 2, answers="CLI\nyes\n")
         run, state = self.saved()
-        self.assertEqual("PAUSED_ITERATION_LIMIT", state["status"])
-        self.assertEqual("PAUSED_OR_BLOCKED", state["phase"])
+        # An explicit iteration limit now waits on an operational AutoResolver request.
+        from tools.goal_fixtures import assert_operational_wait
+        assert_operational_wait(self, state, "PAUSED_ITERATION_LIMIT")
         self.assertEqual("REWORK", state["last_decision"]["report"]["status"])
         task_id = state["current_task"]["id"]
         self.assertEqual(1, sum(r["stage"] == "terra" for r in state["stages"]))

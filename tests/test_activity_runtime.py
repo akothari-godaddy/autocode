@@ -16,7 +16,7 @@ import autocode as runner
 import autocode_goals as goals
 import autocode_milestones as milestones
 import autocode_support as support
-from goal_fixtures import envelope
+from goal_fixtures import assert_operational_wait, envelope
 
 
 class ActivityRuntimeTests(unittest.TestCase):
@@ -219,7 +219,8 @@ class ActivityRuntimeTests(unittest.TestCase):
         self.assertEqual(1800, recovery['execution_limits']['tool_timeout_seconds'])
         self.assertEqual(600, recovery['execution_limits']['idle_timeout_seconds'])
         self.assertIn('split long tool work into bounded calls', recovery['instruction'])
-        archived = self.state['stages'][-1]
+        # AutoResolver's runner-owned observation receipt may follow the archive.
+        archived = [row for row in self.state['stages'] if not row.get('runner_owned')][-1]
         self.assertEqual('idle', archived['timeout_kind'])
         self.assertTrue(Path(archived['events']).is_file())
         self.assertEqual(['greet.py'], archived['changed_files'])
@@ -378,16 +379,27 @@ class ActivityRuntimeTests(unittest.TestCase):
         def inspect(**kwargs):
             calls.append(kwargs['role'])
             self.assertEqual(0, kwargs['state'].get('consecutive_timeout_recoveries', 0))
-            self.assertEqual(0, runner.recovery_count(kwargs['state']))
+            # One granted recovery reopens exactly one slot of the spent allowance.
+            self.assertEqual(runner.MAX_AUTOMATIC_RECOVERIES - 1, runner.recovery_count(kwargs['state']))
             self.assertEqual(history, kwargs['state']['automatic_timeout_recoveries'])
             raise support.Paused('PAUSED_TEST', 'Offline dispatch inspected')
 
         self.assertEqual(2, test_goals.GoalTests.invoke(self, role=inspect))
         self.assertEqual([], calls, 'An ordinary invocation must retain the exhausted pause')
         self.assertEqual(3, self.state['consecutive_timeout_recoveries'])
+        published = assert_operational_wait(self, self.state, 'PAUSED_TIMEOUT_RECOVERY')
+        self.assertIn('--grant-recovery', published['request']['decision_needed'])
+        # Since 009c8b8 a plain explicit resume no longer replenishes the spent
+        # allowance; only an audited --grant-recovery N does.
         self.assertEqual(2, test_goals.GoalTests.invoke(self, '--resume-paused', role=inspect))
+        self.assertEqual([], calls, 'A plain resume must not restore a spent recovery allowance')
+        self.assertEqual(3, self.state['consecutive_timeout_recoveries'])
+        self.assertEqual(2, test_goals.GoalTests.invoke(self, '--resume-paused', '--grant-recovery', '1', role=inspect))
         self.assertEqual(['astra'], calls)
         self.assertEqual(history, self.state['automatic_timeout_recoveries'])
+        grants = [event for event in self.state['user_events'] if event.get('kind') == 'recovery_grant']
+        self.assertEqual([1], [event['amount'] for event in grants])
+        self.assertEqual(published['request_id'], grants[0]['request_id'])
 
     def fake_provider(self, script):
         """Install a workspace-local offline executable, never the user's Codex."""
@@ -484,8 +496,9 @@ class ActivityRuntimeTests(unittest.TestCase):
         self.assertEqual(original, source.read_bytes())
         self.assertEqual('astra_review', self.state['next_stage'])
         self.assertEqual(1, len(self.state['automatic_timeout_recoveries']))
-        self.assertEqual('idle', self.state['stages'][-1]['timeout_kind'])
-        self.assertTrue(Path(self.state['stages'][-1]['events']).is_file())
+        archived = [row for row in self.state['stages'] if not row.get('runner_owned')][-1]
+        self.assertEqual('idle', archived['timeout_kind'])
+        self.assertTrue(Path(archived['events']).is_file())
         self.assertNotIn('active_stage', self.state)
 
 
