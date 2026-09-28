@@ -1,5 +1,6 @@
 """Workflow recognition: the first stage of a new run and the `workflow` view field."""
 import unittest
+from unittest import mock
 
 import autocode_run_view as run_view
 import autocode_workflows as workflows
@@ -119,8 +120,11 @@ class JobRouteTests(unittest.TestCase):
                                   "roles": {"astra": {"model": "gpt-6-astra", "engine": "codex"},
                                             "terra": {"model": "gpt-6-sol"}}}}
             stuck.intercept(state, "PAUSED_REPEATED_FAILURE", "x")
-            request = autoresolver.prepare(state, stuck.STAGE, Path(workspace) / "state.json", None)
+            # Hermetic: no OpenCode install needed; its local settings are what gets recorded.
+            tool = type("Tool", (), {"local_settings": staticmethod(lambda workspace: {"fixture": "opencode"})})
+            with mock.patch("autocode_providers.resolve", return_value=tool):
+                request = autoresolver.prepare(state, stuck.STAGE, Path(workspace) / "state.json", None)
         self.assertEqual(request.route_role, autoplanner.route_for(state, stuck.STAGE, request.role))
         self.assertEqual("opencode", autoplanner.engine_for(state["settings"], request.route_role))
         # A Codex run's first OpenCode stage records that transport, so the drift and billing checks cover it.
-        self.assertIn("opencode", state["settings"]["transport_identities"])
+        self.assertEqual({"fixture": "opencode"}, state["settings"]["transport_identities"]["opencode"])
