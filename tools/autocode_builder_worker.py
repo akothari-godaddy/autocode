@@ -5,8 +5,10 @@ import uuid
 
 try:
     from . import autocode as runner
+    from . import autocode_test_examples as test_examples
 except ImportError:
     import autocode as runner
+    import autocode_test_examples as test_examples
 
 
 def execute(state, directory, workspace, mode):
@@ -52,6 +54,8 @@ def execute(state, directory, workspace, mode):
             raise runner.support.Paused("PAUSED_ORCHESTRATOR_WORKER", "No completed Builder result; explicitly retry this member after inspection")
         state.update(status="RUNNING", next_stage="terra")
         prompt, metrics = runner.support.context_packet(state, "terra", directory / "state.json")
+        prompt = test_examples.add_to_prompt(prompt, workspace, state.get("current_task"))
+        metrics = {**metrics, "estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4}
         prompt = ("\nYou are one isolated Builder in a parallel milestone batch. Write only within "
                    "current_task.affected_paths. Other Builders own the other milestones. Do not "
                    "treat a missing assigned output file as a missing prerequisite: create new "
