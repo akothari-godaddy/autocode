@@ -389,7 +389,7 @@ This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](
 python3 -m unittest tests.test_scenario_oracles tests.test_program tests.test_live_trial
 ```
 
-End-to-end behavior is judged by [scenarios](scenarios/README.md): realistic tasks (a bug fix, a feature in an existing project, small applications, a port, a parallel milestone graph), each with an independent oracle, a reference solution and plausible-but-wrong variants. `.venv/bin/python scenarios/run.py run --fake` runs every scenario through AutoCode with a scripted model; `--profile` runs them with real models.
+End-to-end behavior is judged by [scenarios](scenarios/README.md): realistic tasks (a bug fix, a feature in an existing project, small applications, a port, a parallel milestone graph), each with an independent oracle, a reference solution and plausible-but-wrong variants. `.venv/bin/python scenarios/run.py run --fake` runs every scenario through AutoCode with a scripted model; `--profile` runs them with real models. `scenarios/run.py compare` runs the same scenarios through a plain coding agent as well and judges both with the same oracles, to measure whether AutoCode's extra stages buy correctness ([comparing with a plain agent](scenarios/README.md#comparing-with-a-plain-agent)).
 
 **Fixture tests establish behavior under the exercised conditions, not model quality or universal correctness.** Test counts and historical results must be tied to their recorded source/environment. Do not present them as a fresh run of current master. The reliability plan also calls for bounded real-model delivery trials: a small application, a feature in an existing project, and a bug fix.
 
