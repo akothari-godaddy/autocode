@@ -74,9 +74,14 @@ How to decide:
   when the user also names a suspected cause.
 - "Review", "look over", "is it safe to merge", a named patch, PR or diff: review. Reviewing a design
   document is design, not review.
-- "Design", "how should we structure", "don't implement": design.
-- A question ending in a question mark that asks for a comparison, a reason or a consequence, with no
-  request to change anything: discuss.
+- design means the user wants a DESIGN back: a new design produced ("design how X should work",
+  "how should we structure", "sketch the architecture, don't implement") or an existing design
+  document reviewed.
+- discuss means the user wants an ANSWER back: a choice between named options ("should we use A or B",
+  "stay X or move to Y"), a reason ("why does the code do X") or a consequence ("what would break if").
+  This holds for architecture questions too, and when the user asks for the analysis or recommendation
+  to be written down (a decision record or note), as long as nothing is to be built or fixed and no
+  design document is to be produced or reviewed. "I want the analysis, not code" is discuss.
 - When a request asks for several things, choose the kind of the FIRST thing that must happen. "Review
   this and fix what you find" starts as review; "why does this fail, then fix it" starts as bugfix.
 - Do not guess build when unsure. Build is the most expensive path; the other kinds are cheaper and can

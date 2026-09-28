@@ -52,6 +52,12 @@ workflow = "design"
 text = "Should the retry policy table live in code or in a config file?"
 workflow = "discuss"
 
+# An architecture choice with a requested decision note is still discuss: the user wants an answer
+# written down, not a design produced (openai-only misrouted this shape to design on 2026-09-28).
+[[prompt]]
+text = "Should the retry state stay in memory or move to a shared file on the host? I want the analysis, not code, written to docs/decisions/retry-state.json with the tradeoffs."
+workflow = "discuss"
+
 [[prompt]]
 text = "Why does the client have both a per-attempt timeout and an overall deadline?"
 workflow = "discuss"
