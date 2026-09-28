@@ -24,8 +24,7 @@ import copy
 import uuid
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
-    from . import autocode_gocode as gocode
-    from . import autocode_regression as regression
+    from . import autocode_gocode as gocode, autocode_regression as regression
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env
 except ImportError:
     import autocode_regression as regression
@@ -3164,6 +3163,7 @@ def _main_body(unit=None) -> int:
         parser.error(str(error))
     # Legacy runner does not own our new lock; detect it before touching state.
     support.assert_no_legacy_process(run_dir, workspace)
+    task_workspaces.keep_out_of_git(workspace)
     with support.run_lock(run_dir):
         support.assert_no_legacy_process(run_dir, workspace)
         if args.run_dir:

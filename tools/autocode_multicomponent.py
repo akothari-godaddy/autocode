@@ -43,8 +43,10 @@ from pathlib import Path
 
 try:
     from .autocode_taskrun import TaskRun, TaskRunError
+    from .autocode_workspaces import keep_out_of_git
 except ImportError:
     from autocode_taskrun import TaskRun, TaskRunError
+    from autocode_workspaces import keep_out_of_git
 
 _WORKTREE_LOCK = threading.Lock()
 GIT_IDENTITY = ("-c", "user.name=AutoCode", "-c", "user.email=autocode@localhost")
@@ -229,6 +231,7 @@ class MultiComponentBuild:
             return ComponentResult(component, workspace, None, error=f"could not prepare a worktree: {detail}")
 
     def _new_worktree_run(self, component: Component, workspace: Path) -> tuple[str, TaskRun]:
+        keep_out_of_git(self.repo, ".autocode-components")
         workspace.parent.mkdir(parents=True, exist_ok=True)
         branch = f"components/{component.id}-{uuid.uuid4().hex[:8]}"
         # Components in one batch start in parallel threads, but `git worktree add` on one

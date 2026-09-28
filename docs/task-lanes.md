@@ -101,6 +101,13 @@ The command prints the task workspace and branch; the dashboard discovers its ru
 through the registry. Each worktree has its own runner lock, checkpoints, and code.
 Two writers still cannot operate on the same worktree.
 
+AutoCode's own directories (`.autocode/`, `.autocode-components/`, `.autocode-ui/`)
+each hold a `.gitignore` containing `*`, so run state, logs and nested task worktrees
+never appear in `git status` or get staged by `git add -A` in your checkout or in a
+task worktree. Your own `.gitignore` is not touched, and a `.gitignore` you already
+put in one of these directories is left as it is. Worktrees are not removed when a
+task finishes: merge the task branch, then `git worktree remove <path>`.
+
 Resume with the printed run path and either the original project or task workspace:
 
 ```sh

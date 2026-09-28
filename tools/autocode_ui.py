@@ -375,6 +375,8 @@ def cli(argv=None):
     run_dir = args.run_dir.resolve() if args.run_dir else workspace / '.autocode-ui/runs' / name
     if run_dir.exists():
         parser.error('Run directory already exists; use autocode --ui-run to build an accepted result')
+    if not args.run_dir:
+        workspaces.keep_out_of_git(workspace, '.autocode-ui')
     run_dir.mkdir(parents=True)
     return execute(args, workspace, run_dir)
 

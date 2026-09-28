@@ -234,6 +234,7 @@ def cli(argv=None):
         preview = new_state(source, manifest, project)
         print(json.dumps(summarize(manifest, preview, state_path), indent=2))
         return 0
+    workspaces.keep_out_of_git(project)
     flow_dir.mkdir(parents=True, exist_ok=True)
     try:
         with support.workspace_lock(flow_dir):
