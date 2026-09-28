@@ -440,6 +440,13 @@ class GoalTests(unittest.TestCase):
 
     def test_cannot_start_optional_work_once_goal_has_current_passing_evidence(self):
         self.approve(); self.validation()
+        # First CONTINUE for this artifact: the Completion Owner is sent back once, told why.
+        runner.apply_result(self.state, "astra_review", self.decision(), {"output": "extra"}, self.root, self.run)
+        self.assertEqual(("RUNNING", "astra_review"), (self.state["status"], self.state["next_stage"]))
+        self.assertIn("Return TASK_COMPLETE", self.state["stop_reason"])
+        prompt, _ = s.context_packet(self.state, "astra_review", self.run / "state.json")
+        self.assertIn(json.dumps(self.state["stop_reason"]), prompt)
+        # CONTINUE again for the same artifact: the user decides.
         runner.apply_result(self.state, "astra_review", self.decision(), {"output": "extra"}, self.root, self.run)
         self.assertEqual("PAUSED_COMPLETION_REVIEW", self.state["status"])
         self.assertEqual("astra_review", self.state["next_stage"])

@@ -567,9 +567,9 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             # Passing Validator evidence cannot override the Plan Reviewer's rework or unverified criteria.
             if modern and value["status"] == "CONTINUE":
                 completion_probe = {**value, "status": "TASK_COMPLETE"}
-                if support.completion_ready(state, completion_probe, support.snapshot(workspace)):
-                    state.update(status="PAUSED_COMPLETION_REVIEW", phase="PAUSED_OR_BLOCKED", next_stage="astra_review",
-                        stop_reason="All required criteria already pass; request completion instead of another implementation batch")
+                probe_snapshot = support.snapshot(workspace)
+                if support.completion_ready(state, completion_probe, probe_snapshot):
+                    state.update(next_stage="astra_review", **unit_module("astra_review").completion_review(state, probe_snapshot))
                     state["iteration"] += 1
                     goals.record_decision(state, value)
                     save_record(state, record)
