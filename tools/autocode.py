@@ -2747,18 +2747,6 @@ def _main_body(unit=None) -> int:
         except ImportError:
             import autocode_program
         return autocode_program.cli(sys.argv[2:])
-    if sys.argv[1:2] == ["fix"]:
-        try:
-            from . import autocode_fix
-        except ImportError:
-            import autocode_fix
-        return autocode_fix.cli(sys.argv[2:])
-    if sys.argv[1:2] == ["verify-fix"]:
-        try:
-            from . import autocode_verify
-        except ImportError:
-            import autocode_verify
-        return autocode_verify.cli(sys.argv[2:])
     if sys.argv[1:2] == ["compare-baseline"]:
         try:
             from . import autocode_baseline

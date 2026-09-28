@@ -43,7 +43,6 @@ from score_autocode_run import usage_summary  # noqa: E402
 
 AUTOCODE = HERE / "autocode.py"
 PROVIDER_BIN = HERE / "live_fixture_provider.py"
-FIX_AGENT_BIN = HERE / "fake_fix_agent.py"
 
 
 class TrialError(RuntimeError):
@@ -453,83 +452,6 @@ def classify_program_status(status: str) -> str:
     return "stopped"
 
 
-# --- fix mode ------------------------------------------------------------
-
-FIX_COMPLETE = ("READY",)
-FIX_PAUSES = ("NEEDS_REVIEW", "NEEDS_INPUT", "UNVERIFIED", "ENV_BROKEN")
-
-
-def fix_command(project: Path, profile: dict, task: str) -> list[str]:
-    """`autocode fix` with the profile's Builder and Validator routes as Builder and Reviewer."""
-    cmd = [sys.executable, str(AUTOCODE), "fix", task, "--workspace", str(project)]
-    if profile["provider"] == "fixture":
-        return cmd + ["--engine", "codex"]
-    cmd += ["--provider", profile["provider"]]
-    if not profile.get("passthrough"):
-        cmd += ["--model", profiles.model_for(profile, "builder"),
-                "--reviewer-model", profiles.model_for(profile, "validator")]
-        for flag, role in (("--reasoning-effort", "builder"), ("--reviewer-reasoning-effort", "validator")):
-            effort = profiles.effort_for(profile, role)
-            if effort and effort != "none":
-                cmd += [flag, effort]
-    return cmd
-
-
-def install_fix_fixture(root: Path, scenario_id: str) -> dict:
-    """Offline fix-mode fixture: one Builder call that writes the scenario's reference delivery."""
-    import scenario_references as references
-    reference = references.REFERENCES.get(scenario_id)
-    if not reference:
-        raise TrialError(f"--profile fixture in fix mode needs a reference delivery; {scenario_id} has none")
-    env = install_fixture_provider(root)
-    target = root / "bin" / "codex"
-    shutil.copy2(FIX_AGENT_BIN, target)
-    target.chmod(0o755)
-    report = {"status": "FIXED", "summary": "Reference delivery (offline fixture; not model output)",
-              "diagnosis": {"observed": "", "reproduction": "", "root_cause": "fixture", "affected_paths": [],
-                            "invariant": ""},
-              "regression_tests": [], "regression_command": "", "test_command": "", "question": ""}
-    script = root / "fix-fixture.json"
-    script.write_text(json.dumps({"calls": [
-        {"role": "builder", "write": reference, "report": report},
-        {"role": "reviewer", "report": {"verdict": "APPROVE", "summary": "fixture", "findings": []}},
-    ]}))
-    return {**env, "AUTOCODE_FAKE_FIX_SCRIPT": str(script)}
-
-
-def drive_fix(project: Path, root: Path, profile: dict, spec: dict, scenario_id: str,
-              timeout: int, bundle: Bundle) -> dict:
-    """One `autocode fix` invocation; the fix record is read, never written, by this driver."""
-    env = dict(os.environ, AUTOCODE_HOME=str(root / "registry"), PYTHONDONTWRITEBYTECODE="1")
-    if profile["provider"] == "fixture":
-        env.update(install_fix_fixture(root, scenario_id))
-    cmd = fix_command(project, profile, spec["task"])
-    bundle.log("cli_step", kind="fix", cmd=cmd)
-    proc = invoke(cmd, env, root, timeout)
-    step = {"kind": "fix", "cmd": cmd, "returncode": proc.returncode,
-            "stdout_tail": proc.stdout[-800:], "stderr_tail": proc.stderr[-800:]}
-    bundle.log("cli_result", kind="fix", returncode=proc.returncode,
-               stdout_tail=step["stdout_tail"], stderr_tail=step["stderr_tail"])
-    records = sorted((project / ".autocode" / "fix").glob("*/fix.json"))
-    if len(records) != 1:
-        raise TrialError(f"autocode fix left {len(records)} run records (exit {proc.returncode}): "
-                         f"{(proc.stderr or proc.stdout)[-500:]}")
-    record = json.loads(records[0].read_text())
-    bundle.state("fix", record)
-    bundle.log("drive_finished", status=record.get("status"), cost=record.get("cost"))
-    return {"state": {"status": record.get("status", ""), "fix": record}, "steps": [step],
-            "run_dir": records[0].parent, "product": Path(record.get("workspace") or project),
-            "cost": record.get("cost")}
-
-
-def classify_fix_status(status: str) -> str:
-    if status in FIX_COMPLETE:
-        return "complete"
-    if status in FIX_PAUSES:
-        return "paused"
-    return "stopped"
-
-
 # --- verdict -------------------------------------------------------------
 
 def judge(run: dict, spec: dict, project: Path, bundle: Bundle) -> scenarios.OracleResult:
@@ -538,7 +460,6 @@ def judge(run: dict, spec: dict, project: Path, bundle: Bundle) -> scenarios.Ora
     state = run["state"]
     status = state.get("status", "")
     kind = (classify_program_status(status) if "program" in state
-            else classify_fix_status(status) if "fix" in state
             else scenarios.classify_runner_status(status))
 
     # The oracle scores the delivered workspace regardless of how the run ended,
@@ -587,7 +508,6 @@ def write_report(bundle: Bundle, scenario_id: str, spec: dict,
         "runner_phase": run["state"].get("phase"),
         "mode": run.get("mode", "run"),
         "product": str(run.get("product", "")),
-        "cost": run.get("cost"),
         "baseline": spec.get("baseline"),
         "source": source_revision(),
         "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
@@ -643,10 +563,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--authorize-deployment", action="store_true",
                         help="explicitly authorize deployment workstreams in --mode program; "
                              "independent of live model spend authorization")
-    parser.add_argument("--mode", choices=["run", "program", "fix"], default="run",
+    parser.add_argument("--mode", choices=["run", "program"], default="run",
                         help="run: one autocode run (default); program: `autocode program run` with the "
-                             "scenario's program_manifest, gates served per child run; fix: one "
-                             "`autocode fix` of the scenario's report (bug-fix scenarios)")
+                             "scenario's program_manifest, gates served per child run")
     parser.add_argument("--score-only", type=Path, metavar="PROJECT",
                         help="do not drive anything: score an already delivered workspace with the oracle")
     return parser.parse_args(argv)
@@ -753,8 +672,6 @@ def main(argv: list[str] | None = None) -> int:
             run = drive_program(project, root, profile, spec["program_manifest"],
                                 args.budget_stages, args.timeout, bundle,
                                 authorize_deployment=args.authorize_deployment)
-        elif args.mode == "fix":
-            run = drive_fix(project, root, profile, spec, args.scenario, args.timeout, bundle)
         else:
             run = drive(project, root, profile, spec["task"],
                         args.budget_stages, args.timeout, bundle)
@@ -788,12 +705,6 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = _discover_run_dir(project)
         state = load_state(run_dir) if run_dir else {}
         product = project
-        if args.mode == "fix":
-            records = sorted((project / ".autocode" / "fix").glob("*/fix.json"))
-            if len(records) == 1:
-                saved = json.loads(records[0].read_text())
-                state = {"status": saved.get("status"), "fix": saved}
-                product = Path(saved.get("workspace") or project)
         if args.mode == "program":
             paths = list((project / ".autocode/programs").glob("*/state.json"))
             if len(paths) == 1:

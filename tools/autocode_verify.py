@@ -23,7 +23,6 @@ Missing evidence is UNVERIFIED, never PASS.
 """
 from __future__ import annotations
 
-import argparse
 import hashlib
 import json
 import os
@@ -33,7 +32,6 @@ import shutil
 import signal
 import subprocess
 import sys
-import tempfile
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
@@ -807,40 +805,3 @@ def feedback(result, *, limit=3000) -> str:
         lines.append(f"\n## {label}: exit {receipt['exit_code']}{' (timed out)' if receipt['timed_out'] else ''}")
         lines.append(receipt["tail"][-limit:])
     return "\n".join(lines)
-
-
-def cli(argv=None) -> int:
-    parser = argparse.ArgumentParser(prog="autocode verify-fix",
-                                     description="Model-free check that a bug fix is proven by a regression test")
-    parser.add_argument("--workspace", type=Path, default=Path.cwd(), help="Checkout holding the candidate fix")
-    parser.add_argument("--base", default="HEAD", help="Revision without the fix (default HEAD)")
-    parser.add_argument("--test-command", help="Shell command that runs the project suite")
-    parser.add_argument("--regression-command", help="Shell command that runs only the new or changed tests")
-    parser.add_argument("--python", help="Interpreter for Python projects (default: project venv, then python3)")
-    parser.add_argument("--timeout", type=int, default=DEFAULT_TIMEOUT, help="Seconds per command")
-    parser.add_argument("--out", type=Path, help="Directory for logs and verification.json")
-    parser.add_argument("--allow-no-test", action="store_true", help="Report UNVERIFIED instead of FAIL without a test")
-    args = parser.parse_args(argv)
-    workspace = Path(_git(args.workspace, "rev-parse", "--show-toplevel").strip()).resolve()
-    base = _git(workspace, "rev-parse", "--verify", args.base + "^{commit}").strip()
-    out = (args.out or Path(tempfile.mkdtemp(prefix="autocode-verify-"))).resolve()
-    if out.is_relative_to(workspace) and not out.is_relative_to(workspace / ".autocode"):
-        raise ValueError("--out inside the checkout would change the candidate; use a path outside it "
-                         "or under .autocode/")
-    framework = detect_framework(workspace, python=args.python)
-    suite = args.test_command or (framework.suite if framework else None)
-    base_suite = (baseline(workspace, base, out, framework=framework, suite_command=suite, timeout=args.timeout,
-                           dependencies_from=workspace) if suite else None)
-    result = verify(workspace, base, out, framework=framework, suite_command=args.test_command,
-                    regression_command=args.regression_command, base_suite=base_suite, timeout=args.timeout,
-                    dependencies_from=workspace, allow_no_test=args.allow_no_test)
-    support.atomic_json(out / "verification.json", result)
-    print(feedback(result, limit=800))
-    if result["review_reasons"]:
-        print("\nNeeds a human or Reviewer read: " + "; ".join(result["review_reasons"]))
-    print(f"\nEvidence: {out / 'verification.json'}")
-    return {PASS: 0, UNVERIFIED: 2}.get(result["verdict"], 1)
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())

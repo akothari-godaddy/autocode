@@ -40,7 +40,6 @@ The detailed guides describe supported paths, defaults, and limitations. They ar
 | Configurable runtimes and models | OpenCode is the default engine; Codex and configured command-tool adapters are available, including a bundled KiloCode configuration. Roles and supported reasoning settings are configurable. | [Providers](docs/providers.md), [Models](docs/models.md) |
 | Multiple task lanes | Tasks in a lane run sequentially; separate lanes can run concurrently in separate worktrees. Lane branches are **not** automatically merged into one product. | [Task lanes](docs/task-lanes.md) |
 | Program workstreams | A large requirement becomes a manifest of workstreams with explicit dependencies and literal ownership, derived from an approved plan. Each workstream is an ordinary reviewed run in its own worktree; completed workstreams are merged `--no-ff` onto one integration branch in dependency order, conflicts pause, and deployment workstreams wait for explicit authorization. The integration branch is **not** merged into your default branch. | [Programs](docs/program.md) |
-| Bug-fix workflow (`autocode fix`) | A bug report (GitHub issue, file, or text) becomes a verified fix on a local branch in one or two model calls: a Builder reproduces with a test and fixes the root cause; the runner proves the regression test fails on the base source and passes on the fix, and that no test that passed on base now fails; an optional read-only Reviewer checks what tests cannot. Produces a patch and PR text; never pushes. Offline coverage only; no live-model results yet. | [Fix](docs/fix.md) |
 | Task-type scenario catalogue | Frozen scenarios for a bug fix, a feature in an existing project, an architecture task, a multi-service program, and a design-reference UI, each with an independent executable oracle proven against reference and broken deliveries. A driver seeds, runs, serves human gates, and scores; `--score-only` scores any delivered workspace. No live baselines are recorded yet. | [Scenarios](docs/scenarios.md) |
 
 **Important boundaries:** Parallel milestone integration is not automatic merging into `master`. Programs add one level (workstreams with an integration branch), not the full Project → Workstream → Milestone → Task hierarchy, and their merged branch still needs your review. The scenario oracles prove what a delivery must do; they do not yet record that any model delivered it. Existing conversations and checkpoints are the foundation for the broader one-conversation workspace—not a claim that all planned engineering workflows already exist.
@@ -274,7 +273,7 @@ Show concise explanations of actions, decisions, and observations—not private 
 
 These are target workflows, not claims that today's CLI automatically classifies and implements every intent. Reuse the same units and approval rules instead of building a different engine for every request. The [task-type scenarios](docs/scenarios.md) freeze one request of each kind with an independent oracle, so a claim that a workflow works can be tested rather than asserted.
 
-Start with **fix** and **review** ([#20](https://github.com/charlieanna/autocode/issues/20)). A first **fix** slice exists as an explicit subcommand, [`autocode fix`](docs/fix.md): the command you run is the job type, and it leaves the main runner's routing settings unchanged. It has offline coverage only; the live bug-fix trial and the speed target in #15 are still open:
+Start with **fix** and **review** ([#20](https://github.com/charlieanna/autocode/issues/20)).:
 
 - **Fix** is where small-task cost targets should be met ([#15](https://github.com/charlieanna/autocode/issues/15)).
 - **Review** must be read-only, enforced by AutoPilot rather than by leaving the Builder out of the sequence.
@@ -351,14 +350,6 @@ autocode "I want a small notes tool that keeps my notes between runs" \
   --workspace /absolute/path/to/project --chat
 ```
 
-For a bug report, `autocode fix` skips planning and proves the fix by executing tests:
-
-```sh
-autocode fix https://github.com/owner/repo/issues/123 --workspace /absolute/path/to/clone
-```
-
-It works on its own branch and prints the branch, patch and PR text. See [Fix](docs/fix.md).
-
 Review and approve the displayed brief before implementation starts. Keep the task workspace and run paths printed by the runner. New task worktrees start from the project's committed HEAD; ignored environment files and dependencies are not automatically copied. See [workspace behavior](docs/task-lanes.md).
 
 ```sh
@@ -408,8 +399,7 @@ tools/autopilot.py       overall workflow controller
 tools/units/            planning, build, review, and repair units
 tools/autocode_*.py     contracts, findings, evidence, execution, and recovery
 tools/autocode_program.py  program workstreams: manifest, derive, waves, integration branch
-tools/autocode_fix.py   bug-fix workflow: issue intake, Builder, verification, review, PR text
-tools/autocode_verify.py   model-free fail-to-pass / pass-to-pass verification of a fix
+tools/autocode_verify.py   model-free fail-to-pass / pass-to-pass test runs (not yet wired into a stage)
 tools/task_scenarios.py    task-type scenarios and their independent oracles
 tools/live_trial.py     scenario driver: seed, run, serve gates, score
 tools/providers/        runtime adapters and bundled command-tool configs
@@ -429,7 +419,6 @@ VALIDATION.md           recorded results and limitations
 | Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) |
 | Conversation and monitoring | [Dashboard](docs/dashboard.md) · [Registry API](docs/registry-api.md) · [macOS app](docs/macos-app.md) |
 | Visual work and multi-task runs | [Figma](docs/figma.md) · [Task lanes](docs/task-lanes.md) · [Programs](docs/program.md) |
-| Bug reports and issues | [Fix](docs/fix.md) |
 | Verification and project priorities | [Testing](docs/testing.md) · [Scenarios](docs/scenarios.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
 
 ## Keep this README honest
