@@ -1,8 +1,10 @@
 """Isolated tests for the unattended AutoCode wrapper: no model calls."""
 import contextlib
 import io
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import textwrap
@@ -72,6 +74,72 @@ class RunTests(unittest.TestCase):
             rc, _, calls = self.run_wrapper(["--run-dir", "r", "--resume-paused"], 0)
         self.assertEqual((rc, calls), (2, []))
         self.assertIn("refused", err.getvalue())
+
+
+class CompletionNoticeTests(unittest.TestCase):
+    def test_completed_run_points_to_analyze(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "run"
+            run_dir.mkdir()
+            (run_dir / "state.json").write_text(json.dumps({"status": "TASK_COMPLETE"}))
+            fake = Path(tmp) / "fake.py"
+            fake.write_text(f"print('Run: {run_dir}')\n")
+            out = io.StringIO()
+            with patch.dict(os.environ, {"AUTOCODE_UNATTENDED_COMMAND": f"{sys.executable} {fake}"}), \
+                    contextlib.redirect_stdout(out):
+                self.assertEqual(0, unattended.run(["Build it"]))
+            self.assertIn(f"autocode-unattended --analyze --run-dir {run_dir}", out.getvalue())
+
+
+class AnalyzeTests(unittest.TestCase):
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-C", str(cwd), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+
+    def test_report_covers_outcome_findings_stages_and_changes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            self.git(workspace, "init", "-q")
+            (workspace / "app.py").write_text("print('hi')\n")
+            self.git(workspace, "add", ".")
+            self.git(workspace, "commit", "-qm", "base")
+            base = self.git(workspace, "rev-parse", "HEAD")
+            (workspace / "app.py").write_text("print('hello')\n")
+            self.git(workspace, "commit", "-qam", "Builder change")
+            (workspace / "app.py").write_text("print('hello, world')\n")
+            (workspace / "new.py").write_text("x = 1\n")
+            run_dir = workspace / ".autocode" / "runs" / "r1"
+            run_dir.mkdir(parents=True)
+            (workspace / ".autocode" / "task-workspace.json").write_text(json.dumps({"base_commit": base}))
+            (run_dir / "state.json").write_text(json.dumps({
+                "status": "TASK_COMPLETE", "task": "Greet", "workspace": str(workspace), "iteration": 3,
+                "goal_contract": {"body": {"intended_outcome": "Greets the world", "acceptance_criteria": [
+                    {"id": "C1", "criterion": "Prints a greeting", "verification_method": "run app.py"}]}},
+                "last_decision": {"acceptance_criteria": [
+                    {"id": "C1", "criterion": "Prints a greeting", "status": "verified", "evidence": "ran it"}]},
+                "human_reviews": {"C1": {"actor": "user_cli", "criterion": "C1"}},
+                "findings_ledger": [{"id": "F1", "status": "resolved", "severity": "high", "source": "validator",
+                                     "finding": "Missing comma"}],
+                "stages": [{"stage": "terra", "iteration": 1, "output": "terra-01.json"}]}))
+            out_dir = workspace.parent / (workspace.name + "-analysis")
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                rc = unattended.run(["--analyze", "--run-dir", str(run_dir), "--out", str(out_dir)])
+            report = out.getvalue()
+            self.assertEqual(rc, 0)
+            for expected in ("TASK_COMPLETE", "Greets the world", "**C1** [verified, human-reviewed]: Prints a greeting",
+                             "Verification: run app.py", "Evidence: ran it", "F1 [resolved, high, validator",
+                             "| terra |", "`terra-01.json`", "app.py", "Untracked files (new, not committed): `new.py`", "Builder change"):
+                self.assertIn(expected, report)
+            self.assertNotIn(".autocode/", report.split("Untracked files (new, not committed):")[1].splitlines()[0])
+            diff = (out_dir / "changes.diff").read_text()
+            self.assertIn("hello, world", diff)
+            self.assertIn("+x = 1", diff)
+            self.assertTrue((out_dir / "analysis.md").is_file())
+
+    def test_analyze_takes_only_its_own_arguments(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            unattended.run(["--analyze", "--run-dir", "r", "--approve-goal", "t"])
 
 
 if __name__ == "__main__":

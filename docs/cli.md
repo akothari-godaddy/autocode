@@ -105,11 +105,19 @@ AutoCode's own arguments but refuses every decision or recovery flag (`--answer`
 with no stdin, and when AutoCode stops it prints `--status` and tells the caller to
 report and stop. Exit codes are AutoCode's.
 
+When a run completes, the wrapper prints the command to analyze it:
+`autocode-unattended --analyze --run-dir RUN [--out DIR]`. That launches no stage; it
+reads the saved run and reports the outcome, each acceptance criterion with its
+recorded status and evidence, findings, stages (role, time, exit, tokens, report
+path), and the code changes against the task's base commit, including new untracked
+files. `--out` saves `analysis.md` and the full `changes.diff`.
+
 To lock a Claude Code agent to it, launch the agent from a copy of
 [`examples/agent-operator`](../examples/agent-operator): its `.claude/settings.json`
 allows only `autocode-unattended` and read-only tools, denies edits and other
 AutoCode or provider commands, and uses `dontAsk` so anything else is refused
-without a prompt. Keep that directory outside the target workspace.
+without a prompt. Its `CLAUDE.md` has the agent report stops verbatim and, after completion,
+analyze the work read-only. Keep that directory outside the target workspace.
 
 ## Exit codes
 

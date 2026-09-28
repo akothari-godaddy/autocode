@@ -10,10 +10,17 @@ prints the saved status when it stops.
 
 Exit codes follow AutoCode: 0 when an action was saved or the task
 completed, 2 when AutoCode stopped for the operator (or refused the call).
+
+`--analyze --run-dir RUN [--workspace W] [--out DIR]` launches nothing. It
+reads a saved run and prints what AutoCode did: outcome, acceptance
+criteria, findings, stages with their report files, token use, and the code
+changes against the task's base commit. `--out` also saves the report and
+the full diff.
 """
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -36,6 +43,10 @@ STOP_NOTICE = """\
 AUTOCODE STOPPED FOR THE OPERATOR (exit {rc}).
 Report the output above to the operator verbatim and stop.
 Do not edit files, answer questions, approve, retry or resume on the operator's behalf."""
+
+DONE_NOTICE = """\
+AUTOCODE COMPLETED THE TASK.
+Analyze the work with: autocode-unattended --analyze --run-dir {run_dir}"""
 
 
 def refused(argv: list[str]) -> str | None:
@@ -74,24 +85,131 @@ def option_value(argv: list[str], flag: str) -> str | None:
     return None
 
 
+def git(workspace: Path, *args: str) -> str:
+    result = subprocess.run(["git", "-C", str(workspace), *args], stdin=subprocess.DEVNULL,
+                            capture_output=True, text=True, check=False)
+    return result.stdout if result.returncode == 0 else f"(git {' '.join(args)} failed: {result.stderr.strip()})\n"
+
+
+def analyze(run_dir: Path, out: Path | None) -> int:
+    """Print a read-only report of a saved run. Launches no AutoCode stage."""
+    run_dir = run_dir.resolve()
+    state_path = run_dir / "state.json"
+    if not state_path.is_file():
+        print(f"autocode-unattended: no state.json in {run_dir}", file=sys.stderr)
+        return 2
+    state = json.loads(state_path.read_text())
+    workspace = Path(state.get("workspace") or run_dir.parents[2])
+    meta_path = workspace / ".autocode" / "task-workspace.json"
+    meta = json.loads(meta_path.read_text()) if meta_path.is_file() else {}
+    base = meta.get("base_commit") or state.get("base_commit")
+    lines = [f"# AutoCode run analysis: {state.get('status')}", "",
+             f"- Task: {state.get('task')}", f"- Run: `{run_dir}`", f"- Workspace: `{workspace}`",
+             f"- Branch: {state.get('task_branch') or '(in place)'}", f"- Base commit: {base or 'unknown'}",
+             f"- Iteration: {state.get('iteration')}", f"- Phase: {state.get('phase')}"]
+    if state.get("stop_reason"):
+        lines.append(f"- Stop reason: {state['stop_reason']}")
+    if state.get("status") != "TASK_COMPLETE":
+        lines.append("- Note: the run has not completed; this is a snapshot of unfinished work.")
+    contract = (state.get("goal_contract") or {}).get("body") or {}
+    criteria = contract.get("acceptance_criteria") or state.get("acceptance_criteria") or []
+    if contract.get("intended_outcome"):
+        lines += ["", "## Intended outcome", "", contract["intended_outcome"]]
+    decision = state.get("last_decision") if isinstance(state.get("last_decision"), dict) else {}
+    report = decision.get("report") if isinstance(decision.get("report"), dict) else decision
+    outcomes = {row.get("id"): row for row in report.get("acceptance_criteria") or [] if isinstance(row, dict)}
+    human = set(state.get("human_reviews") or {}) if isinstance(state.get("human_reviews"), dict) else set()
+    lines += ["", "## Acceptance criteria", ""]
+    for item in criteria:
+        if not isinstance(item, dict):
+            lines.append(f"- {item}")
+            continue
+        outcome = outcomes.get(item.get("id")) or {}
+        reviewed = ", human-reviewed" if item.get("id") in human else ""
+        lines.append(f"- **{item.get('id', '?')}** [{outcome.get('status', 'no outcome recorded')}{reviewed}]: "
+                     f"{item.get('criterion') or item.get('text') or json.dumps(item)}")
+        if item.get("verification_method"):
+            lines.append(f"  - Verification: {item['verification_method']}")
+        if outcome.get("evidence"):
+            lines.append(f"  - Evidence: {outcome['evidence']}")
+    if not criteria:
+        lines.append("None recorded.")
+    if report.get("agreed_limitations"):
+        lines += ["", "Agreed limitations: " + "; ".join(map(str, report["agreed_limitations"]))]
+    ledger = state.get("findings_ledger") or []
+    lines += ["", "## Findings", ""]
+    for row in ledger:
+        lines.append(f"- {row.get('id')} [{row.get('status')}, {row.get('severity')}, {row.get('source')}, "
+                     f"reported {row.get('times_reported', 1)}x]: {row.get('finding')}")
+    if not ledger:
+        lines.append("None recorded.")
+    lines += ["", "## Stages", "",
+              "Report paths are relative to the run directory.", "",
+              "| # | Stage | Role | Iteration | Finished | Seconds | Exit | Tokens in/out | Report |",
+              "| ---: | --- | --- | ---: | --- | ---: | ---: | --- | --- |"]
+    for number, stage in enumerate(state.get("stages") or [], 1):
+        used = (stage.get("metrics") or {}).get("provider_tokens") or {}
+        seconds = stage.get("duration_seconds")
+        output = str(stage.get("output") or "")
+        if output.startswith(str(run_dir) + os.sep):
+            output = output[len(str(run_dir)) + 1:]
+        lines.append(f"| {number} | {stage.get('stage')} | {stage.get('role') or ''} | {stage.get('iteration', '')} "
+                     f"| {stage.get('finished_at') or stage.get('completed_at') or ''} "
+                     f"| {'' if seconds is None else round(seconds, 1)} | {stage.get('exit_code', '')} "
+                     f"| {used.get('input_tokens') or 0}/{used.get('output_tokens') or 0} | `{output}` |")
+    lines += ["", "## Code changes", ""]
+    diff = ""
+    if base:
+        lines += ["Against the base commit, including uncommitted work:", "", "```",
+                  git(workspace, "diff", "--stat", base).rstrip() or "(no changes to tracked files)", "```"]
+        diff = git(workspace, "diff", base)
+    status = git(workspace, "status", "--porcelain", "--untracked-files=all").rstrip()
+    untracked = [line[3:] for line in status.splitlines() if line.startswith("?? ") and not line[3:].startswith(".autocode/")]
+    if untracked:
+        lines += ["", "Untracked files (new, not committed): " + ", ".join(f"`{name}`" for name in untracked)]
+        for name in untracked:
+            # --no-index exits 1 when files differ, so read its output directly.
+            diff += subprocess.run(["git", "-C", str(workspace), "diff", "--no-index", "--", os.devnull, name],
+                                   stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False).stdout
+    lines += ["", "Commits on the task branch:", "", "```",
+              (git(workspace, "log", "--oneline", f"{base}..HEAD") if base else git(workspace, "log", "--oneline", "-10")).rstrip() or "(none)",
+              "```"]
+    text = "\n".join(lines) + "\n"
+    if out:
+        out.mkdir(parents=True, exist_ok=True)
+        (out / "analysis.md").write_text(text)
+        (out / "changes.diff").write_text(diff)
+        text += f"\nSaved `{out / 'analysis.md'}` and the full diff to `{out / 'changes.diff'}`.\n"
+    sys.stdout.write(text)
+    return 0
+
+
 def run(argv: list[str]) -> int:
+    if "--analyze" in argv:
+        parser = argparse.ArgumentParser(prog="autocode-unattended --analyze", allow_abbrev=False)
+        parser.add_argument("--analyze", action="store_true")
+        parser.add_argument("--run-dir", type=Path, required=True)
+        parser.add_argument("--workspace", type=Path, help="Accepted for symmetry; the run records its own")
+        parser.add_argument("--out", type=Path)
+        args = parser.parse_args(argv)
+        return analyze(args.run_dir, args.out)
     reason = refused(argv)
     if reason:
         print(f"autocode-unattended: refused: {reason}", file=sys.stderr)
         return 2
     command = autocode_command()
     status_only = "--status" in argv or "--dry-run" in argv
-    process = subprocess.Popen([*command, *argv, "--no-chat"], stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     run_dir = option_value(argv, "--run-dir")
-    assert process.stdout is not None
-    for line in process.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        match = re.match(r"Run: (.+)$", line.rstrip("\n"))
-        if match:
-            run_dir = match.group(1)
-    rc = process.wait()
+    with subprocess.Popen([*command, *argv, "--no-chat"], stdin=subprocess.DEVNULL,
+                          stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) as process:
+        assert process.stdout is not None
+        for line in process.stdout:
+            sys.stdout.write(line)
+            sys.stdout.flush()
+            match = re.match(r"Run: (.+)$", line.rstrip("\n"))
+            if match:
+                run_dir = match.group(1)
+    rc = process.returncode
     if status_only:
         return rc
     if run_dir:
@@ -105,7 +223,16 @@ def run(argv: list[str]) -> int:
         sys.stdout.write(result.stdout)
     if rc != 0:
         print("\n" + STOP_NOTICE.format(rc=rc), flush=True)
+    elif run_dir and completed(Path(run_dir)):
+        print("\n" + DONE_NOTICE.format(run_dir=run_dir), flush=True)
     return rc
+
+
+def completed(run_dir: Path) -> bool:
+    try:
+        return json.loads((run_dir / "state.json").read_text()).get("status") == "TASK_COMPLETE"
+    except (OSError, ValueError):
+        return False
 
 
 def cli() -> int:
@@ -114,7 +241,9 @@ def cli() -> int:
             prog="autocode-unattended",
             description=__doc__.split("\n\n")[1],
             epilog="Takes AutoCode's own arguments, minus operator decisions: "
-                   + ", ".join(OPERATOR_FLAGS)).print_help()
+                   + ", ".join(OPERATOR_FLAGS)
+                   + ". Use --analyze --run-dir RUN [--out DIR] to report on a saved run without launching anything."
+            ).print_help()
         return 0
     return run(sys.argv[1:])
 
