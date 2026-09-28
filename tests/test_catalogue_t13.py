@@ -7,6 +7,7 @@ network and a temporary workspace.
 import json
 import os
 from pathlib import Path
+import platform
 import subprocess
 import sys
 import tempfile
@@ -192,14 +193,18 @@ class CompatScenarios(CompatCase):
 
     def test_cfg11_platform_matrix_reported_honestly(self):
         """CFG-11. Explicit matrix: tested cells distinguished from untested."""
+        current = f"{sys.platform}/{platform.machine()}"
         matrix = {
-            "darwin/arm64 python 3.14 (this environment)": "TESTED",
+            "darwin/arm64": "UNTESTED",
             "darwin/x86_64": "UNTESTED",
-            "linux x86_64": "UNTESTED",
+            "linux/x86_64": "UNTESTED",
             "windows native": "UNSUPPORTED (posix process assumptions; not claimed)",
             "WSL": "UNTESTED",
         }
-        self.check("platform_recorded", True, "darwin" in sys.platform or "Darwin" in os.uname().sysname)
+        # CI runs this on more than one platform: only the one running it is tested.
+        matrix[current] = "TESTED"
+        self.check("platform_recorded", ["TESTED", [current]],
+                   [matrix[current], [cell for cell, value in matrix.items() if value == "TESTED"]])
         for cell, status_value in matrix.items():
             self.bundle.log("platform_cell", platform=cell, status=status_value)
         self.check("untested_cells_not_claimed", True,
