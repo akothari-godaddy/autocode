@@ -8,13 +8,19 @@ changes, then reports in one of two modes:
   the report if the stage changed anything in the workspace outside ``review/``,
   writes ``REPORT_PATH`` from the validated report (goals the design meets,
   concerns with severities, questions only the user can answer) and completes
-  the run. Nothing is built.
+  the run. Nothing is built. Every blocking concern states the problem as a
+  plain-English example, and a concern about what the CODE does today (an
+  invariant the design breaks) carries a ``probe``: a command that exits 0
+  exactly when that is so. The runner runs every probe in a scratch copy of the
+  code and rejects the report if one fails (autocode_test_cases.run_probes). A
+  concern about the design text alone has no probe.
 - ``propose``: the request asks for a new design. For now that is produced by
   the build pipeline, as before this stage existed: the run continues at the
   stage saved when recognition began.
 
-Pure module: prompt, schema, transition, rendering. Imports nothing from the
-runner. State key written: ``design_review``.
+Pure module: prompt, schema, transition, rendering; the unit passes in the
+function that runs probes. Imports nothing from the runner. State key written:
+``design_review``.
 """
 from __future__ import annotations
 
@@ -24,8 +30,10 @@ from pathlib import Path
 
 try:
     from . import autocode_workflows as workflows
+    from .autocode_test_cases import run_probes
 except ImportError:
     import autocode_workflows as workflows
+    from autocode_test_cases import run_probes
 
 STAGE = workflows.DESIGN_STAGE
 REPORT_PATH = "review/design-review.json"
@@ -35,9 +43,12 @@ TEXT = {"type": "string"}
 TEXTS = {"type": "array", "items": TEXT}
 CONCERN = {
     "type": "object", "additionalProperties": False,
-    "required": ["id", "area", "severity", "summary", "evidence"],
+    "required": ["id", "area", "severity", "summary", "evidence", "example", "probe"],
+    # example: the problem as one concrete case in plain English; probe: a shell command, run from the
+    # repository root, that exits 0 exactly when the code behaves as the concern says. "" when the
+    # concern is about the design text alone.
     "properties": {"id": TEXT, "area": TEXT, "severity": {"type": "string", "enum": list(SEVERITIES)},
-                   "summary": TEXT, "evidence": TEXT},
+                   "summary": TEXT, "evidence": TEXT, "example": TEXT, "probe": TEXT},
 }
 QUESTION = {
     "type": "object", "additionalProperties": False, "required": ["id", "question", "options"],
@@ -80,6 +91,13 @@ First decide the mode:
    - advisory: worth fixing, not a reason to stop.
    Give evidence: the part of the design and the code that shows it. A concern the design already
    answers is not a concern. Do not pad the list to look thorough.
+   Give every blocking concern an example: the problem as one concrete case in plain English, "Given
+   <exact starting state>, when <exact event or action>, then <what goes wrong>". When the concern rests
+   on what the CODE does today (an invariant, an ordering check, a charge per call), also give probe: a
+   shell command run from the repository root that exits 0 exactly when the code behaves as you say (for
+   example: python3 -c "from events.processor import Processor; assert Processor.STRICT_SEQ"). The runner
+   runs every probe in a scratch copy and rejects the review if one fails, so only probe what you have
+   checked. A concern about the design text alone (a missing rollback step) has probe "".
 5. questions: only decisions the requester must make (for example which consumers need strict ordering),
    each with the realistic options.
 verdict: request_changes when there is at least one blocking concern, otherwise approve.
@@ -115,15 +133,22 @@ def check(value: dict, changed_files) -> None:
     blocking = sum(1 for concern in value["concerns"] if concern["severity"] == "blocking")
     if value["verdict"] == "not_applicable" or (value["verdict"] == "approve") != (blocking == 0):
         raise ValueError("verdict must be request_changes exactly when there is a blocking concern")
+    unexampled = [c["id"] for c in value["concerns"] if c["severity"] == "blocking" and not c.get("example", "").strip()]
+    if unexampled:
+        raise ValueError(f"Every blocking concern needs an example of the problem in plain English: {unexampled}")
 
 
-def apply(state: dict, value: dict, record: dict, workspace) -> None:
+def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> None:
+    """``run_probe(command)`` runs a probe in a scratch copy (the unit passes autocode_verify.scratch_run);
+    without it a probed concern is rejected rather than trusted."""
     check(value, record.get("changed_files"))
     if value["mode"] == "propose":
         state["design_review"] = {"mode": "propose", "output": record.get("output")}
         state.update(status="RUNNING", phase="DISCOVERING",
                      next_stage=(state.get("workflow") or {}).get("then") or "requirements_gather")
         return
+    shown = run_probes(value["concerns"], run_probe or (lambda command: {"error": "no probe runner was given"}),
+                       what="concern", key="id")
     report = {key: value[key] for key in ("design_under_review", "verdict", "summary", "satisfied",
                                            "concerns", "questions")}
     target = Path(workspace) / REPORT_PATH
@@ -132,7 +157,7 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
     counts = {severity: sum(1 for c in value["concerns"] if c["severity"] == severity) for severity in SEVERITIES}
     state["design_review"] = {"mode": "review", **counts, "verdict": value["verdict"], "report_path": REPORT_PATH,
                               "questions": len(value["questions"]), "design_under_review": value["design_under_review"],
-                              "output": record.get("output")}
+                              "output": record.get("output"), "probes": shown}
     state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,
                  completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
 

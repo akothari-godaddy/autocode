@@ -401,7 +401,7 @@ raw report is kept and every semantic check still runs. Reports that omit a list
 carrying a decision (requirements, questions, concerns, responses) still go to
 report repair.
 
-## Reviews and discussions: findings and claims shown by running code
+## Reviews, discussions and designs: findings and claims shown by running code
 
 The review and discuss workflows produce findings and answers, not code. The
 same idea applies: a finding or a claim is stated as a plain-English example,
@@ -438,6 +438,25 @@ and the runner, not a model, runs something that shows it.
 - Claims without a probe stay grounded by their source file only, as before.
 - Probed claims are recorded in the run state (`answer.probes`) and shown in
   the answer's evidence list.
+
+### Design: a concern about today's code carries a probe
+
+The design workflow's Architect judges a document, so nothing is applied. The
+same probe rule as discussions applies to what it says about the code.
+
+- **Reviewing a design (`review_design`).** Every blocking concern carries
+  `example`, the problem as one concrete case in plain English. A concern that
+  rests on what the code does today (an ordering check, a charge per call)
+  also carries `probe`, a command that exits 0 exactly when the code behaves
+  that way. The runner runs every probe in a scratch copy and rejects the
+  review if one fails. A concern about the design text alone (a missing
+  rollback step) has no probe. Probed concerns are recorded in
+  `design_review.probes`.
+- **Checking an approved design (`check_design`).** Every conflict carries
+  `example`. A conflict with something the code enforces today carries
+  `probe`; a constraint that lives in prose (a README rule) has none. The
+  blockers file written beside the design records each conflict's proving
+  probe in `proven_by`.
 
 The scratch runs are `autocode_verify.scratch_run`. A Python test delivered
 into a project with no test suite of its own still runs under unittest.

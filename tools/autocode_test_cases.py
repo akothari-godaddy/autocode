@@ -91,6 +91,31 @@ def match_cases(cases: list[dict], test_ids: list[str]) -> dict[str, list[str]]:
     return matched
 
 
+def run_probes(rows: list[dict], run_probe, *, what: str = "claim", key: str = "claim") -> list[dict]:
+    """Run every row's ``probe`` (``run_probe(command)``, a scratch run); each must exit 0.
+
+    A probed row needs its ``example`` in plain English. Returns the receipts of the rows shown;
+    raises ValueError naming the rows whose probe did not exit 0. ``what`` names the rows in
+    messages (claim, concern, conflict) and ``key`` is the field that identifies a row.
+    """
+    shown, failed = [], []
+    for row in rows:
+        probe = str(row.get("probe") or "").strip()
+        if not probe:
+            continue
+        if not str(row.get("example") or "").strip():
+            raise ValueError(f"A probed {what} needs its example in plain English: {row.get(key)!r}")
+        run = run_probe(probe)
+        receipt = {key: row.get(key), "probe": probe, "exit_code": run.get("exit_code"),
+                   "tail": (run.get("tail") or run.get("error") or "")[-600:]}
+        (shown if run.get("exit_code") == 0 and not run.get("error") else failed).append(receipt)
+    if failed:
+        raise ValueError(f"These {what}s' probes did not exit 0 on the code as it is, so they are not shown: "
+                         + "; ".join(f"{row[key]!r} ({row['probe']}: exit {row['exit_code']}) {row['tail'][-200:]}"
+                                     for row in failed))
+    return shown
+
+
 BUILDER_NOTE = """
 TESTS NAMED IN THE PLAN: every acceptance criterion of your milestone whose verification_method starts with
 "test:" is a concrete example you must write as its own test, named with that criterion's id (C2 ->

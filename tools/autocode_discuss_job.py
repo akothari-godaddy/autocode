@@ -27,8 +27,10 @@ from pathlib import Path
 
 try:
     from . import autocode_workflows as workflows
+    from .autocode_test_cases import run_probes
 except ImportError:
     import autocode_workflows as workflows
+    from autocode_test_cases import run_probes
 
 STAGE = workflows.DISCUSS_STAGE
 NOTES_PREFIX = "docs/"
@@ -135,31 +137,11 @@ def check(value: dict, changed_files, workspace) -> None:
         raise ValueError("note_content without a note_path")
 
 
-def run_probes(value: dict, run_probe) -> list[dict]:
-    """Run every claim's probe (``run_probe(command)``, a scratch run); each must exit 0."""
-    shown, failed = [], []
-    for row in value["evidence"]:
-        probe = row.get("probe", "").strip()
-        if not probe:
-            continue
-        if not row.get("example", "").strip():
-            raise ValueError(f"A probed claim needs its example in plain English: {row['claim']!r}")
-        run = run_probe(probe)
-        receipt = {"claim": row["claim"], "probe": probe, "exit_code": run.get("exit_code"),
-                   "tail": (run.get("tail") or run.get("error") or "")[-600:]}
-        (shown if run.get("exit_code") == 0 and not run.get("error") else failed).append(receipt)
-    if failed:
-        raise ValueError("These claims' probes did not exit 0 on the code as it is, so the claims are not shown: "
-                         + "; ".join(f"{row['claim']!r} ({row['probe']}: exit {row['exit_code']}) {row['tail'][-200:]}"
-                                     for row in failed))
-    return shown
-
-
 def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> None:
     """``run_probe(command)`` runs a probe in a scratch copy (the unit passes autocode_verify.scratch_run);
     without it, an answer with probes is rejected rather than trusted."""
     check(value, record.get("changed_files"), workspace)
-    shown = run_probes(value, run_probe or (lambda command: {"error": "no probe runner was given"}))
+    shown = run_probes(value["evidence"], run_probe or (lambda command: {"error": "no probe runner was given"}))
     note = value["note_path"].strip()
     if note:
         target = Path(workspace) / note
