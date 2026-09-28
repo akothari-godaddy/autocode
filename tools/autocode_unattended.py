@@ -39,7 +39,8 @@ OPERATOR_FLAGS = (
     "--chat",
 )
 # Subcommands that submit interventions or run other flows.
-OPERATOR_SUBCOMMANDS = ("tasks", "ui", "program", "compare-baseline", "capture", "registry", "intervention")
+OPERATOR_SUBCOMMANDS = ("tasks", "ui", "program", "compare-baseline", "capture", "registry", "intervention",
+                       "fix", "verify-fix")
 
 STOP_NOTICE = """\
 AUTOCODE STOPPED FOR THE OPERATOR (exit {rc}).
@@ -125,6 +126,31 @@ def activity_summary(run_dir: Path) -> list[str]:
     return lines
 
 
+def cost_by_role(stages: list[dict]) -> list[str]:
+    """Model calls, seconds and tokens per role (#15). Runner-owned stages spend no tokens."""
+    rows: dict[str, dict] = {}
+    repairs = 0
+    for stage in stages:
+        name = str(stage.get("stage") or "")
+        if name == "orchestrator":
+            continue
+        role = stage.get("route_role") or stage.get("role") or name or "unknown"
+        repairs += name.endswith("_report_repair")
+        row = rows.setdefault(role, {"calls": 0, "seconds": 0.0, "in": 0, "out": 0})
+        used = (stage.get("metrics") or {}).get("provider_tokens") or {}
+        row["calls"] += 1
+        row["seconds"] += stage.get("duration_seconds") or 0
+        row["in"] += used.get("input_tokens") or 0
+        row["out"] += used.get("output_tokens") or 0
+    lines = ["", "## Cost by role", "", "| Role | Model calls | Seconds | Tokens in/out |", "| --- | ---: | ---: | --- |"]
+    for role, row in sorted(rows.items(), key=lambda item: -item[1]["calls"]):
+        lines.append(f"| {role} | {row['calls']} | {round(row['seconds'], 1)} | {row['in']}/{row['out']} |")
+    total = {key: sum(row[key] for row in rows.values()) for key in ("calls", "seconds", "in", "out")}
+    lines.append(f"| **total** | {total['calls']} | {round(total['seconds'], 1)} | {total['in']}/{total['out']} |")
+    lines += ["", f"Report-format repair calls: {repairs}."]
+    return lines
+
+
 def analyze(run_dir: Path, out: Path | None) -> int:
     """Print a read-only report of a saved run. Launches no AutoCode stage."""
     run_dir = run_dir.resolve()
@@ -191,6 +217,7 @@ def analyze(run_dir: Path, out: Path | None) -> int:
                      f"| {stage.get('finished_at') or stage.get('completed_at') or ''} "
                      f"| {'' if seconds is None else round(seconds, 1)} | {stage.get('exit_code', '')} "
                      f"| {used.get('input_tokens') or 0}/{used.get('output_tokens') or 0} | `{output}` |")
+    lines += cost_by_role(state.get("stages") or [])
     lines += activity_summary(run_dir)
     lines += ["", "## Code changes", ""]
     diff = ""
