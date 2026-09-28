@@ -19,7 +19,9 @@ class Paused(Exception):
 def state_for(workspace="/nowhere", next_stage="terra", status="RUNNING", **extra):
     state = {"version": 3, "task": "Fix the rounding drift", "workspace": workspace, "status": status,
              "phase": "EXECUTING", "next_stage": next_stage, "stages": [], "iteration": 1,
-             "settings": {"limits": {"no_progress_batches": 3}, "roles": {
+             # An OpenCode run records its transport at creation (autocode.py configure).
+             "settings": {"limits": {"no_progress_batches": 3}, "transport_identities": {"opencode": {"fixture": True}},
+                          "roles": {
                  "astra": {"model": "openai/gpt-6-astra", "engine": "opencode"},
                  "plan_reviewer": {"model": "openai/gpt-6-astra", "engine": "opencode", "reasoning_effort": "high"},
                  "glm": {"model": "zai-coding-plan/glm-5.3"}, "terra": {"model": "openai/gpt-6-sol"},
