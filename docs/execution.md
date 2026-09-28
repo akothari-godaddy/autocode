@@ -339,6 +339,30 @@ addresses in `next_task.findings`; an empty or missing list takes every open fin
 REWORK task that bundles more than `N` open findings, so the correction has to be
 split. The default is unlimited, and `0` disables the check on a saved run.
 
+## Activity log
+
+Every run keeps an append-only `activity.jsonl` next to `state.json`. It is always on
+and records what AutoCode itself did, one JSON object per event:
+
+| Event | Recorded |
+| --- | --- |
+| `invocation` | Program, flag names (never values), and caller: `unattended` through `autocode-unattended`, otherwise `direct`. Written by any command that saves the run. |
+| `transition` | Status, phase, next stage, iteration, task ID, which of those changed, and the runner's stop reason (up to 500 characters) when the status changed. |
+| `stage_started` / `stage_finished` | Stage, role, route role, iteration, engine, model, task ID, times, duration, exit code, timeout, rejection, number of changed files, token counts. |
+| `findings` | Counts by status and severity. |
+| `plan_revision` / `plan_approval` / `human_review` | Brief revision numbers, approval status, and criterion IDs reviewed by a person. |
+| `builders` / `stages_rewound` | Parallel Builder milestone statuses; a shortened stage history. |
+
+It holds no content: no task text, prompts, plans, answers, feedback, findings
+text, file names, code, diffs or model output. Those stay in `state.json` and the
+per-stage artifacts. Nothing is trimmed, unlike `progress_messages` in
+`state.json`. Only saves that change the run add lines, so read-only commands such
+as `--status` add none. A failure to append never fails the checkpoint.
+
+`autocode-unattended --analyze` summarizes the log (calls by caller, stages, stops,
+operator decisions) and `--out` copies it. Runs saved before this log existed have
+no `activity.jsonl`; their log starts with the next save.
+
 ## Pause, recovery, and abandonment
 
 ### Reported-token guard
