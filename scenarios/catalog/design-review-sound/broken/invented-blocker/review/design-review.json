@@ -1,12 +1,12 @@
 {
-  "satisfied": ["Throughput", "Replay", "Independent consumers", "Per-domain ordering"],
+  "satisfied": ["Exactly once for a single consumer", "Admin CLI unchanged", "No schema change"],
   "concerns": [
     {
       "id": "F1",
-      "area": "duplicate processing",
+      "area": "concurrency",
       "severity": "blocking",
-      "summary": "At-least-once delivery means a renew can be charged twice on redelivery.",
-      "evidence": "Consumers paragraph says delivery is at-least-once."
+      "summary": "If two consumers pick the same event, both record a charge, so the event is charged twice.",
+      "evidence": "Design step 3 records the charge before marking the event processed."
     }
   ],
   "questions": []

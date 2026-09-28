@@ -1,33 +1,18 @@
 {
   "satisfied": [
-    "Throughput: 24 partitions at ~400 events/s covers the 5,000/s peak; hot domains are bounded at 10 events/s so a single key cannot saturate a partition.",
-    "Replay: 7-day retention; idempotent consumers make replay safe.",
-    "Independent consumers: one consumer group per service.",
-    "Per-domain ordering: keyed by domain name, so a domain's events share a partition; DLQ drained in offset order per partition.",
-    "Duplicate processing: every consumer records event_id transactionally with its side effect; producer is idempotent.",
-    "Migration: sweeper plus nightly reconciliation on event_id; rollback is a flag flip made safe by consumer idempotency."
+    "Exactly once, including the deploy: charge and guarded processed_at update commit in one transaction; record_charge skips an event_id that already has a charge, so a charge the old code committed before a hard stop is not repeated; the deploy replaces the replica, so old and new never run at the same time.",
+    "Notifications: sent before the commit, so a crash repeats a send (ignored per event_id) and never loses one; the 2-second timeout bounds lock time; the outage stall is a stated tradeoff.",
+    "Other callers: charge() keeps committing; manual charges have a NULL event_id and are never looked up, so the admin CLI is unchanged.",
+    "Rollback: no column or data change; the one additive index is ignored by the previous version."
   ],
   "concerns": [
     {
       "id": "S1",
       "area": "operations",
       "severity": "advisory",
-      "summary": "The processed_events tables grow without bound; the design should say how long entries are kept (at least the 7-day retention plus DLQ age, else a replay could re-apply a purged event).",
-      "evidence": "Consumers paragraph specifies the table but not its retention."
-    },
-    {
-      "id": "S2",
-      "area": "operations",
-      "severity": "advisory",
-      "summary": "A domain transfer between registries changes nothing for the key (domain name), which is good; worth stating explicitly since the current table is per registry.",
-      "evidence": "Producer paragraph."
+      "summary": "While the notification service is down the queue stalls (as today). A metric on the age of the oldest unprocessed event would make that visible.",
+      "evidence": "'Questions we expect': the notification-outage paragraph."
     }
   ],
-  "questions": [
-    {
-      "id": "Q1",
-      "question": "How long should processed_events entries be retained per consumer?",
-      "options": ["37 days (retention + DLQ)", "90 days", "forever"]
-    }
-  ]
+  "questions": []
 }
