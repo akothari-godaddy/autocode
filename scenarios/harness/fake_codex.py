@@ -178,7 +178,8 @@ def investigate() -> dict:
             "conclusion": text("conclusion", "finding", "fix") or "Scripted conclusion",
             "fix_size": (saved.get("fix_size") or "small") if reproduced else "none",
             "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
-            "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"]}
+            "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"],
+            "plan_approval_requested": bool(saved.get("plan_approval_requested"))}
 
 
 def design() -> dict:

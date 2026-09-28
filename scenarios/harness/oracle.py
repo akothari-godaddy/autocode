@@ -159,7 +159,7 @@ BUILD_STAGES = ("orchestrator", "astra_plan", "terra")
 
 
 def run_checks(run: dict | None, *, workflow: str, no_build: bool = False, no_requirements: bool = False,
-               no_plan_review: bool = False, max_questions: int | None = None,
+               no_plan_review: bool = False, plan_approved: bool = False, max_questions: int | None = None,
                max_model_stages: int | None = None) -> list[Check]:
     """Checks on how AutoCode worked, from the run record the harness passes to oracles.
 
@@ -190,6 +190,12 @@ def run_checks(run: dict | None, *, workflow: str, no_build: bool = False, no_re
     if no_plan_review:
         reviewed = [stage for stage in stages if stage in PLAN_REVIEW_STAGES]
         checks.append(Check("no_plan_review_rounds", not reviewed, f"ran {reviewed}"))
+    if plan_approved:
+        # The plan was challenged by the Plan Reviewer and put to the user, who approved it.
+        reviewed = [stage for stage in stages if stage in PLAN_REVIEW_STAGES]
+        checks.append(Check("plan_reviewed", bool(reviewed), f"plan review stages: {reviewed}"))
+        approved = "approve-plan" in run.get("cli_calls", [])
+        checks.append(Check("plan_approved_by_user", approved, "" if approved else "no plan was put up for approval"))
     if max_questions is not None:
         asked = len(run.get("answers") or [])
         checks.append(Check("question_budget", asked <= max_questions, f"asked {asked}, allowed {max_questions}"))

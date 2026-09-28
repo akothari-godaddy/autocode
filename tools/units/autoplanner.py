@@ -9,9 +9,11 @@ import re
 
 try:
     from .. import autocode_goals as goals, autocode_support as s, autocode_workflows as workflows
+    from .. import autocode_bug_job as bug_job
 except ImportError:
     import autocode_goals as goals
     import autocode_support as s
+    import autocode_bug_job as bug_job
     import autocode_workflows as workflows
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
@@ -23,6 +25,16 @@ against this repository with no conflicts. It is a constraint, not a suggestion:
 specifies (module and file layout, names, signatures, rules, rejected alternatives). Do not redesign it,
 do not revisit its rejected alternatives, and do not ask the user about decisions it already makes; ask
 only about something it genuinely leaves open. Trace each of its constraints to a milestone.
+"""
+# A reproduced bug the Investigator sized large (autocode_bug_job.large_correction) is
+# planned from its diagnosis; requirements gathering is skipped.
+BUG_DIAGNOSIS_RULE = """
+BUG FIX: bug_diagnosis in the handoff data is the Investigator's diagnosis of a reproduced bug, saved in the
+repository at its note_path. It is the requirements: plan the correction of its root_cause, not a feature.
+Every plan must uphold its invariant as an acceptance criterion, with a regression test that fails on the
+original code and passes after the fix, and must keep the project's existing tests passing. Fix the cause,
+not the symptom, and do not widen the change beyond what the root cause needs. Do not ask the user what the
+fix should achieve; ask only about a genuine choice the diagnosis leaves open.
 """
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
@@ -369,6 +381,9 @@ def context(state, stage, state_path):
     packet['user_events'] = state.get('user_events', [])
     if state.get('design_constraint'):
         packet['approved_design'] = state['design_constraint']
+    diagnosis = bug_job.large_correction(state)
+    if diagnosis:
+        packet['bug_diagnosis'] = diagnosis
     if stage == "requirements_gather":
         packet['previous_requirements_handoff'] = state.get('requirements_handoff')
     if stage in ("requirements_gather", "astra_discovery"):
@@ -380,7 +395,7 @@ def context(state, stage, state_path):
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
         goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY)
-    design_rule = APPROVED_DESIGN_RULE if state.get('design_constraint') else ""
+    design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
     prompt = PROMPTS[stage] + design_rule + figma_instruction + planning_policy + s.COMMON + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n" + json.dumps(packet, indent=2)
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
                     "soft_budget_tokens": state["settings"].get("context_soft_tokens", 10000)}

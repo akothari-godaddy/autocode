@@ -10,7 +10,11 @@ cause, and returns a diagnosis. The runner then:
   validated report, before any fix exists,
 - ends the run when the report did not reproduce (the note says so and lists
   what the reporter must supply), or hands a reproduced bug to the build
-  pipeline, which starts at the stage saved when recognition began.
+  pipeline: a small fix becomes one Builder task at once (``small_correction``,
+  started by the AutoResolver unit) unless the request asked to approve the plan;
+  a large one, or one the user asked to approve, goes to the Planner with the
+  diagnosis as its brief (``large_correction``), skipping requirements gathering
+  but keeping plan review and the user's approval.
 
 Pure module: prompt, schema, transition, rendering. Imports nothing from the
 runner. State key written: ``investigation`` (the report, its note path and output).
@@ -27,6 +31,7 @@ except ImportError:
     import autocode_workflows as workflows
 
 STAGE = workflows.INVESTIGATE_STAGE
+PLANNER_STAGE = "astra_discovery"
 NOTES_PREFIX = "docs/bugs/"
 OUTCOMES = ("reproduced", "not_reproduced")
 TEXT = {"type": "string"}
@@ -34,7 +39,8 @@ TEXTS = {"type": "array", "items": TEXT}
 SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["outcome", "note_path", "observed", "reproduction", "root_cause", "affected_paths",
-                 "test_paths", "invariant", "conclusion", "fix_size", "fix_plan", "questions", "tests_run"],
+                 "test_paths", "invariant", "conclusion", "fix_size", "fix_plan", "questions", "tests_run",
+                 "plan_approval_requested"],
     "properties": {
         "outcome": {"type": "string", "enum": list(OUTCOMES)},
         "note_path": TEXT,
@@ -49,6 +55,7 @@ SCHEMA = {
         "fix_plan": TEXTS,
         "questions": TEXTS,
         "tests_run": TEXTS,
+        "plan_approval_requested": {"type": "boolean"},
     },
 }
 
@@ -72,6 +79,8 @@ What to do:
      large otherwise. A small fix goes straight to a Builder and an independent Validator without a
      planning round, so say large whenever the fix needs design choices or touches several modules.
    - fix_plan: the steps of the fix, and the regression test that fails before it and passes after it.
+   - plan_approval_requested: true when the request asks to see, review or approve the plan or the fix
+     before code changes; the fix is then planned and put to the user whatever its size. Otherwise false.
 4. If it does NOT reproduce (outcome not_reproduced): say so plainly. Do not invent a cause and do not
    propose a "defensive" change to code that works. reproduction says what you tried; conclusion says
    what the code actually does and why the report may differ (old version, different input, upstream data);
@@ -145,8 +154,18 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
         state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,
                      completed_at=dt.datetime.now(dt.timezone.utc).isoformat())
         return
-    state.update(status="RUNNING", phase="DISCOVERING",
-                 next_stage=(state.get("workflow") or {}).get("then") or "requirements_gather")
+    # A large fix is planned from the diagnosis: the bug report already is the requirements,
+    # so the run skips requirements gathering. Plan review and the user's approval still apply.
+    state.update(status="RUNNING", phase="PLANNING", next_stage=PLANNER_STAGE)
+
+
+def large_correction(state: dict) -> dict | None:
+    """The diagnosis the Planner plans a fix from (a large one, or any the user asked to approve), or None."""
+    found = state.get("investigation") or {}
+    if found.get("outcome") != "reproduced" or small_correction(state):
+        return None
+    return {"note_path": found["note_path"], **{key: found[key] for key in (
+        "observed", "reproduction", "root_cause", "affected_paths", "test_paths", "invariant", "fix_plan")}}
 
 
 # A small, reproduced bug skips requirements gathering and plan review: the runner turns
@@ -161,7 +180,8 @@ SMALL_FIX_POLICY = ("A reproduced bug the Investigator sized small becomes one B
 
 def small_correction(state: dict) -> bool:
     found = state.get("investigation") or {}
-    return found.get("outcome") == "reproduced" and found.get("fix_size") == "small"
+    return (found.get("outcome") == "reproduced" and found.get("fix_size") == "small"
+            and not found.get("plan_approval_requested"))
 
 
 def correction_contract(state: dict) -> dict:

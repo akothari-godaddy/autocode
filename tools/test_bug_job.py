@@ -29,7 +29,8 @@ def diagnosis(outcome="reproduced", **overrides):
              "affected_paths": ["epp/client.py"], "test_paths": ["tests/test_client.py"],
              "invariant": "one logical renew, at most one mutation",
              "conclusion": "Reconcile before resending.", "fix_size": "small",
-             "fix_plan": ["keep one cl_trid", "poll before resending"], "questions": [], "tests_run": ["python3 -m unittest"]}
+             "fix_plan": ["keep one cl_trid", "poll before resending"], "questions": [], "tests_run": ["python3 -m unittest"],
+             "plan_approval_requested": False}
     if outcome == "not_reproduced":
         value.update(root_cause="", affected_paths=[], test_paths=[], invariant="", fix_size="none", fix_plan=[],
                      note_path="docs/bugs/none-cells.json", conclusion="export() already writes None as empty.",
@@ -68,14 +69,15 @@ class ApplyTests(unittest.TestCase):
         bug_job.apply(state, value, {"changed_files": list(changed), "output": "/run/investigate_bug-01.json"}, workspace)
         return state, Path(workspace)
 
-    def test_a_reproduced_bug_writes_the_diagnosis_and_hands_over_to_the_build_pipeline(self):
+    def test_a_large_reproduced_bug_writes_the_diagnosis_and_goes_to_the_planner(self):
         state, workspace = self.apply(diagnosis(fix_size="large"))
         note = json.loads((workspace / "docs/bugs/duplicate-renew.json").read_text())
         self.assertEqual((True, []), (note["reproduced"], note["changed"]))
         for field in ("observed", "reproduction", "root_cause", "affected_paths", "invariant"):
             self.assertTrue(note[field], field)
-        self.assertEqual(("RUNNING", "requirements_gather"), (state["status"], state["next_stage"]))
+        self.assertEqual(("RUNNING", "astra_discovery"), (state["status"], state["next_stage"]))
         self.assertIsNone(jobs.ended_in(state))
+        self.assertEqual("docs/bugs/duplicate-renew.json", bug_job.large_correction(state)["note_path"])
 
     def test_a_report_that_does_not_reproduce_ends_the_run_with_questions(self):
         state, workspace = self.apply(diagnosis("not_reproduced"))
@@ -155,7 +157,32 @@ class SmallCorrectionTests(unittest.TestCase):
     def test_a_large_fix_is_not_auto_approved(self):
         state = self.start(fix_size="large")
         self.assertNotEqual(bug_job.ORIGIN, (state.get("goal_contract") or {}).get("origin"))
-        self.assertEqual("requirements_gather", state["next_stage"])
+        # Planned from the diagnosis: no requirements gathering, but plan review and the user's approval.
+        self.assertEqual("astra_discovery", state["next_stage"])
+        self.assertIsNone(bug_job.large_correction({**state, "investigation": {**state["investigation"], "fix_size": "small"}}))
+
+    def test_a_small_fix_the_user_asked_to_approve_is_planned_and_put_to_the_user(self):
+        state = self.start(fix_size="small", plan_approval_requested=True)
+        self.assertNotEqual(bug_job.ORIGIN, (state.get("goal_contract") or {}).get("origin"))
+        self.assertEqual("astra_discovery", state["next_stage"])
+        self.assertFalse(bug_job.small_correction(state))
+        self.assertIsNotNone(bug_job.large_correction(state))
+
+    def test_the_schema_requires_the_approval_flag(self):
+        self.assertIn("plan_approval_requested", bug_job.SCHEMA["required"])
+        self.assertEqual({"type": "boolean"}, bug_job.SCHEMA["properties"]["plan_approval_requested"])
+
+    def test_the_planner_plans_a_large_fix_from_the_diagnosis(self):
+        from .units import autoplanner
+        state = self.start(fix_size="large")
+        state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+        prompt, _ = autoplanner.context(state, "astra_discovery", Path(state["workspace"]) / "state.json")
+        self.assertIn(autoplanner.BUG_DIAGNOSIS_RULE, prompt)
+        self.assertIn('"bug_diagnosis"', prompt)
+        self.assertIn(json.dumps(state["investigation"]["invariant"]), prompt)
+        small, _ = autoplanner.context({**state, "investigation": {**state["investigation"], "fix_size": "small"}},
+                                       "astra_discovery", Path(state["workspace"]) / "state.json")
+        self.assertNotIn(autoplanner.BUG_DIAGNOSIS_RULE, small)
 
     def test_the_policy_actor_cannot_approve_an_ordinary_contract(self):
         from . import autocode_goals as goals
