@@ -103,7 +103,7 @@ DELTA_SCHEMA = obj({"schema_version": {"type": "integer", "enum": [1]}, "stage":
 # bodies without it are "build".
 TASK_KINDS = ("build", "bugfix")
 TASK_KIND = {"type": "string", "enum": list(TASK_KINDS)}
-for _schema in (LEGACY_BODY_SCHEMA, BODY_SCHEMA, PLANNING_BODY_SCHEMA):
+for _schema in (LEGACY_BODY_SCHEMA, REQUIREMENTS_BODY_SCHEMA, BODY_SCHEMA, PLANNING_BODY_SCHEMA):
     _schema["properties"]["task_kind"] = TASK_KIND
 DISCOVERY_SCHEMA = obj({"contract": BODY_SCHEMA, "summary": STRING})
 JOB_TYPE_POLICY = """
