@@ -24,6 +24,20 @@ import live_trial  # noqa: E402
 from autopilot_testkit import Bundle, artifacts_root  # noqa: E402
 
 
+def git_workspace(path):
+    """What make_workspace really returns: a Git project with a committed baseline.
+
+    The driver snapshots it (oracle fingerprint), which needs a repository.
+    """
+    path = Path(path)
+    path.mkdir(parents=True, exist_ok=True)
+    if not (path / ".git").exists():
+        subprocess.run(["git", "init", "-q", str(path)], check=True)
+        subprocess.run(["git", "-C", str(path), "-c", "user.name=t", "-c", "user.email=t@example.test",
+                        "commit", "--allow-empty", "-qm", "baseline"], check=True)
+    return path
+
+
 class ProfilesTest(unittest.TestCase):
     def test_resolve_rejects_unknown_profile(self):
         with self.assertRaisesRegex(ValueError, "unknown live profile"):
@@ -147,7 +161,7 @@ class TrialVerdictTest(unittest.TestCase):
             spec = {"title": "Fixture", "task": "fixture", "oracle_name": "FX01",
                     "oracle": mock.Mock(return_value=oracle)}
             with (mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": str(root / "evidence")}),
-                  mock.patch.object(live_trial, "make_workspace", return_value=root),
+                  mock.patch.object(live_trial, "make_workspace", return_value=git_workspace(root / "project")),
                   mock.patch.object(scenarios, "scenario", return_value=spec),
                   mock.patch.object(live_trial, "drive", side_effect=live_trial.TrialError("deadline exhausted"))):
                 self.assertEqual(1, live_trial.main(["LIVE-01", "--workspace", str(root)]))
@@ -199,7 +213,7 @@ class TrialVerdictTest(unittest.TestCase):
                 spec = {"title": "Fixture", "task": "fixture", "oracle_name": "FX01",
                         "oracle": mock.Mock(return_value=oracle)}
                 with (mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": str(root / "evidence")}),
-                      mock.patch.object(live_trial, "make_workspace", return_value=root),
+                      mock.patch.object(live_trial, "make_workspace", return_value=git_workspace(root / "project")),
                       mock.patch.object(scenarios, "scenario", return_value=spec),
                       mock.patch.object(live_trial, "drive", return_value={"state": {"status": status}})):
                     code = live_trial.main(["LIVE-01", "--workspace", str(root)])
@@ -287,10 +301,17 @@ class DrivingBoundsTest(unittest.TestCase):
             script = ("import subprocess,sys,time; from pathlib import Path; "
                       "child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],start_new_session=True); "
                       f"Path({str(marker)!r}).write_text(str(child.pid)); time.sleep(60)")
-            with self.assertRaisesRegex(live_trial.TrialError, "budget exhausted"):
+            # invoke raises TimeoutExpired carrying the stopped processes; the driver's step()
+            # turns it into a TrialError recording timed_out (the budget stop).
+            with self.assertRaises(subprocess.TimeoutExpired) as stopped:
                 live_trial.invoke([sys.executable, "-c", script], dict(os.environ), root, 1)
+            self.assertIsNotNone(getattr(stopped.exception, "processes", None))
             pid = int(marker.read_text())
-            self.assertFalse(psutil.pid_exists(pid))
+            try:  # killed; a zombie awaiting a reaper (containers whose PID 1 never reaps) is stopped too
+                running = psutil.Process(pid).status() != psutil.STATUS_ZOMBIE
+            except psutil.NoSuchProcess:
+                running = False
+            self.assertFalse(running)
 
 
 class ProgramModeTest(unittest.TestCase):
@@ -352,7 +373,7 @@ class ProgramModeTest(unittest.TestCase):
         self.assertEqual([18, 15, 12], [call.args[-1] for call in invoke.call_args_list])
 
     def test_cli_deployment_opt_in_is_independent_of_live_spend(self):
-        spec = {"title": "Fixture", "program_manifest": {"version": 1, "name": "x"},
+        spec = {"title": "Fixture", "task": "fixture program", "program_manifest": {"version": 1, "name": "x"},
                 "oracle_name": "T", "oracle": lambda project: scenarios.OracleResult(scenarios.PASS, "ok", [])}
         for profile in ("fixture", "glm53"):
             for authorize in (False, True):
@@ -362,13 +383,18 @@ class ProgramModeTest(unittest.TestCase):
                     flags = ["--i-authorize-live-model-spend"] if profile != "fixture" else []
                     if authorize:
                         flags.append("--authorize-deployment")
-                    with (mock.patch.object(live_trial, "make_workspace", return_value=self.project),
+                    with (mock.patch.object(live_trial, "make_workspace", return_value=git_workspace(self.project)),
                           mock.patch.object(scenarios, "scenario", return_value=spec),
                           mock.patch.object(live_trial, "invoke", side_effect=self.fake_invoke)):
                         code = live_trial.main(["PROGRAM-01", "--mode", "program", "--profile", profile,
                                                 "--workspace", str(self.root), *flags])
-                    self.assertEqual(0, code)
-                    self.assertEqual(3, len(self.calls))
+                    if profile == "fixture":
+                        self.assertEqual(0, code)
+                        self.assertEqual(3, len(self.calls))
+                    else:
+                        # A live profile stops at goal approval: the harness never approves for a human.
+                        self.assertEqual(1, code)
+                        self.assertEqual([["program", "run"]], [cmd[2:4] for cmd in self.calls])
                     for cmd in self.calls:
                         is_program = cmd[2:4] == ["program", "run"]
                         self.assertEqual(authorize and is_program, "--authorize-deployment" in cmd)
