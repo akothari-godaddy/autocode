@@ -463,12 +463,6 @@ def completion_ready(state, decision, current, *, require_human_reviews=True, re
     pins = sol.get("evidence_hashes", {})
     if not pins:
         return False
-    try:
-        from . import autocode_regression as regression
-    except ImportError:
-        import autocode_regression as regression
-    if not regression.complete(state, current["revision"]):
-        return False  # a bug fix needs the runner's passing regression proof for this exact source
     return all(Path(p).is_file() and file_hash(p) == h for p, h in pins.items())
 
 
@@ -836,24 +830,6 @@ def review_generation_schema(schema, state, stage):
     return result
 
 
-# Bug-fix runs: the runner has already executed the regression proof (autocode_regression).
-# The reviewers use it instead of re-running the same tests, and never override it.
-REGRESSION_PROOF_NOTES = {
-    "passed": {
-        "validator": "\nREGRESSION PROOF: regression_proof records that the runner already ran the new or changed "
-                     "tests (failing on the original code, passing now) and the project suite. Do not re-run the "
-                     "whole suite. Run the regression command once as your own executed check, then spend your "
-                     "effort on what those tests do not cover in the acceptance criteria.\n",
-        "owner": "\nREGRESSION PROOF: regression_proof and the Validator's report are executed evidence for this "
-                 "exact source. Do not re-run tests to re-establish them; decide from the recorded evidence.\n"},
-    "open": {
-        "validator": "\nREGRESSION PROOF: regression_proof is not PASS for this source. The fix is not proven; "
-                     "report FAIL and cite its failures or unverified reasons as findings.\n",
-        "owner": "\nREGRESSION PROOF: regression_proof is not PASS, so the runner will refuse completion. Do not "
-                 "request COMPLETE; return REWORK whose findings are the proof's failures or unverified reasons.\n"},
-}
-
-
 def context_packet(state, stage, state_path):
     try:
         from . import autocode_milestones as checkpoints
@@ -927,25 +903,11 @@ def context_packet(state, stage, state_path):
         validation = state.get("validation", {})
         base.update(implementation=impl, validation=validation,
                     unresolved_findings=state.get("unresolved_findings", []))
-    if stage in ("sol", "astra_checkpoint", "astra_review"):
-        try:
-            from . import autocode_regression as regression
-        except ImportError:
-            import autocode_regression as regression
-        proof = regression.handoff(state)
-        if proof:
-            base["regression_proof"] = proof
-            proof_note = REGRESSION_PROOF_NOTES["passed" if proof["verdict"] == "PASS" else "open"][
-                "validator" if stage == "sol" else "owner"]
-        else:
-            proof_note = ""
-    else:
-        proof_note = ""
     import shlex
     import sys
     base["capture_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "capture"])
     base["baseline_compare_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "compare-baseline"])
-    instruction = STABLE.get(stage, "") + proof_note
+    instruction = STABLE.get(stage, "")
     if figma_file:
         try:
             from . import autocode_figma as figma
@@ -973,8 +935,7 @@ def context_packet(state, stage, state_path):
         base["prior_validation_reports"] = [
             {k: entry["validation"].get(k) for k in ("output", "source_revision", "contract_revision", "verdict")}
             for entry in state.get("validation_archive", [])]
-        instruction = (goals.DISCOVERY_PROMPT + goals.JOB_TYPE_POLICY + goals.DECISION_PROVENANCE
-                       if stage == "astra_discovery" else instruction + goals.EXECUTION_PROMPT)
+        instruction = goals.DISCOVERY_PROMPT + goals.DECISION_PROVENANCE if stage == "astra_discovery" else instruction + goals.EXECUTION_PROMPT
         if stage in ("astra_plan", "astra_review"):
             instruction += ASTRA_DECISIONS
     # No previous transcripts or history array is forwarded; exact goals are never truncated.

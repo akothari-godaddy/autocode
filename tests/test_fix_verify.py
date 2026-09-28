@@ -1,4 +1,4 @@
-"""Model-free fix verification (autocode_verify).
+"""Model-free fix verification (autocode_verify) and bug-report intake (autocode_issue).
 
 These tests execute real test suites in scratch Git worktrees; they never launch
 a provider. Each negative control is a way a candidate could look fixed without
@@ -6,17 +6,20 @@ being fixed, and each must be rejected by execution, not by reading a report.
 """
 from __future__ import annotations
 
+import io
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
+import autocode_issue as issues  # noqa: E402
 import autocode_verify as verify  # noqa: E402
 import scenario_references as references  # noqa: E402
 import task_scenarios as scenarios  # noqa: E402
@@ -386,6 +389,66 @@ class VerifyCase(unittest.TestCase):
         result = verify.verify(project.root, project.base, project.evidence, framework=framework,
                                base_suite=base_suite, timeout=120)
         self.assertEqual(verify.FAIL, result["verdict"], result)
+
+
+class IssueCase(unittest.TestCase):
+    def test_references(self):
+        self.assertEqual({"owner": "psf", "repo": "requests", "number": 6100},
+                         issues.parse_reference("https://github.com/psf/requests/issues/6100"))
+        self.assertEqual({"owner": "a", "repo": "b.c", "number": 3}, issues.parse_reference("a/b.c#3"))
+        self.assertIsNone(issues.parse_reference("The parser crashes on empty input"))
+        with tempfile.TemporaryDirectory() as temp:
+            git(temp, "init", "-q")
+            git(temp, "remote", "add", "origin", "git@github.com:octo/widgets.git")
+            self.assertEqual({"owner": "octo", "repo": "widgets", "number": 12}, issues.parse_reference("#12", temp))
+
+    def test_fetch_uses_issue_and_comments_and_marks_pull_requests(self):
+        pages = {
+            "https://api.test/repos/o/r/issues/5": {"title": "Crash on empty", "body": "<!-- template -->Steps: run x",
+                                                     "comments": 1, "labels": [{"name": "bug"}],
+                                                     "html_url": "https://github.com/o/r/issues/5",
+                                                     "user": {"login": "reporter"}},
+            "https://api.test/repos/o/r/issues/5/comments?per_page=100": [
+                {"user": {"login": "maint"}, "body": "Reproduced on 2.1", "created_at": "2026-01-01"}],
+        }
+        seen = []
+
+        def opener(request, timeout):
+            seen.append((request.full_url, request.get_header("Authorization")))
+            return io.BytesIO(json.dumps(pages[request.full_url]).encode())
+
+        issue = issues.fetch({"owner": "o", "repo": "r", "number": 5}, token="t0k", api="https://api.test",
+                             opener=opener)
+        self.assertEqual(("Crash on empty", ["bug"], "o/r", False),
+                         (issue["title"], issue["labels"], issue["repository"], issue["is_pull_request"]))
+        self.assertEqual("Bearer t0k", seen[0][1])
+        text = issues.render(issue)
+        self.assertIn("Reproduced on 2.1", text)
+        self.assertNotIn("template", text)
+        self.assertEqual("5-crash-on-empty", issues.slug(issue))
+
+    def test_fetch_error_names_the_remedy(self):
+        def opener(request, timeout):
+            raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+        with self.assertRaisesRegex(RuntimeError, "GITHUB_TOKEN"):
+            issues.fetch({"owner": "o", "repo": "r", "number": 1}, api="https://api.test", opener=opener)
+
+    def test_long_reports_and_discussions_are_bounded(self):
+        issue = issues.from_text("Title\n\n" + "x" * (issues.BODY_LIMIT + 50))
+        issue["comments"] = [{"author": "a", "body": "y" * 6000} for _ in range(5)]
+        text = issues.render(issue)
+        self.assertIn("truncated", text)
+        self.assertIn("comments total", text)
+        self.assertLess(len(text), issues.BODY_LIMIT + issues.COMMENTS_LIMIT + 2000)
+
+    def test_json_issue_file(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "issue.json"
+            path.write_text(json.dumps({"title": "Bad total", "body": "Totals are off by one",
+                                        "labels": ["bug"], "number": 9, "repository": "o/r"}))
+            issue = issues.load(issue_file=path)
+            self.assertEqual(("Bad total", 9, ["bug"]), (issue["title"], issue["number"], issue["labels"]))
 
 
 if __name__ == "__main__":

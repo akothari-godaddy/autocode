@@ -15,7 +15,7 @@ GRAPH_PATH = "planning/graph.json"
 
 
 def _boundaries(milestone):
-    values = milestone.get("affected_paths", milestone.get("boundaries", []))
+    values = milestone.get("boundaries", [])
     return set(values)
 
 

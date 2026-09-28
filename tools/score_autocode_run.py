@@ -9,10 +9,10 @@ Dimensions (each scored PASS / FAIL / HONEST_BLOCKER / PARTIAL / N/A):
   evidence         — COMPLETE/ACCEPT requires evidence, not just claims
   token_discipline — per-stage tokens recorded; budget flags work
 
-Cost note: USD values use historical comparison rates, not verified current
-prices or invoices. Inclusive input/output totals are priced once at those flat
-rates (no cache discount). Missing usage or rates remain unknown. Subscription
-fees and quota consumption are not measured by this estimate.
+Cost note: OpenCode reports cost=0 on subscription routes (Z.AI Coding Plan,
+Xiaomi Token Plan). We record tokens per stage and an *estimated API-equivalent*
+USD using reference list prices so runs are comparable. Actual billed cost on
+these subscriptions is the plan fee, not per-token.
 """
 from __future__ import annotations
 
@@ -23,11 +23,12 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-# Historical comparison rates, USD per 1M inclusive input/output tokens.
-# These are not verified current provider prices or subscription charges.
+# Reference list prices USD per 1M tokens (input, output). Used only to make
+# stages comparable; subscription routes are not billed this way.
 REFERENCE_PRICES = {
     "zai-coding-plan/glm-5.3": {"input": 0.60, "output": 2.20},
     "xiaomi-token-plan-sgp/mimo-v2.6-pro": {"input": 0.30, "output": 1.20},
+    "default": {"input": 1.00, "output": 4.00},
 }
 
 ALLOWED_MODEL_PREFIXES = (
@@ -68,63 +69,14 @@ def _family(model: str) -> str:
     return model.split("/", 1)[0]
 
 
-def token_count(value):
-    return value if type(value) is int and value >= 0 else None
-
-
-def known_sum(values):
-    values = list(values)
-    return sum(values) if values and all(v is not None for v in values) else None
-
-
-def normalized_tokens(tokens: dict) -> dict:
-    """Runner totals include cached input and reasoning; raw OpenCode does not.
-
-    Match providers/opencode.py normalization, including cache writes. Missing
-    fields cannot be inferred to be zero, and explicit zero must survive.
-    """
-    tokens = tokens if isinstance(tokens, dict) else {}
-    if any(k in tokens for k in ("input_tokens", "output_tokens",
-                                 "cached_input_tokens", "reasoning_output_tokens")):
-        result = {k: token_count(tokens.get(k)) for k in (
-            "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")}
-        for subset, total in (("cached_input_tokens", "input_tokens"),
-                              ("reasoning_output_tokens", "output_tokens")):
-            if tokens.get(subset) is not None and (
-                    result[subset] is None or (result[total] is not None and result[subset] > result[total])):
-                result[total] = None
-        return result
+def estimate_cost(model: str, tokens: dict) -> float:
+    prices = REFERENCE_PRICES.get(model, REFERENCE_PRICES["default"])
     cache = tokens.get("cache") if isinstance(tokens.get("cache"), dict) else {}
-    cached, written = token_count(cache.get("read")), token_count(cache.get("write"))
-    reasoning = token_count(tokens.get("reasoning"))
-    return {"input_tokens": known_sum([token_count(tokens.get("input")), cached, written]),
-            "cached_input_tokens": cached,
-            "output_tokens": known_sum([token_count(tokens.get("output")), reasoning]),
-            "reasoning_output_tokens": reasoning}
-
-
-def estimate_cost(model: str, tokens: dict) -> float | None:
-    prices = REFERENCE_PRICES.get(model)
-    usage = normalized_tokens(tokens)
-    inp, out = usage["input_tokens"], usage["output_tokens"]
-    if prices is None or inp is None or out is None:
-        return None
-    return (inp * prices["input"] + out * prices["output"]) / 1e6
-
-
-def recorded_model(record: dict) -> str:
-    """The launch command wins; mutable current role settings are not history."""
-    command = record.get("command")
-    if isinstance(command, list):
-        for i, arg in enumerate(command):
-            if arg in ("--model", "-m") and i + 1 < len(command):
-                value = command[i + 1]
-                if isinstance(value, str) and value and not value.startswith("-"):
-                    return value
-            if isinstance(arg, str) and arg.startswith("--model="):
-                return arg.partition("=")[2]
-    model = record.get("model")
-    return model if isinstance(model, str) else ""
+    inp = (tokens.get("input_tokens") or tokens.get("input") or 0)
+    inp += (tokens.get("cached_input_tokens") or cache.get("read") or 0)
+    out = (tokens.get("output_tokens") or tokens.get("output") or 0)
+    out += (tokens.get("reasoning_output_tokens") or tokens.get("reasoning") or 0)
+    return round(inp / 1e6 * prices["input"] + out / 1e6 * prices["output"], 4)
 
 
 def load_state(run_dir: Path) -> dict:
@@ -132,6 +84,8 @@ def load_state(run_dir: Path) -> dict:
 
 
 def stage_token_rows(state: dict) -> list[dict]:
+    roles = (state.get("settings") or {}).get("roles") or {}
+    role_model = {role: (cfg or {}).get("model") for role, cfg in roles.items()}
     # stage id -> role key used in settings
     stage_role = {
         "requirements_gather": "requirements", "requirements_gather_report_repair": "requirements",
@@ -142,47 +96,45 @@ def stage_token_rows(state: dict) -> list[dict]:
         "astra_plan": "astra",
     }
     rows = []
-    records = [(st, False) for st in state.get("stages") or []]
-    active = state.get("active_stage") or {}
-    if active.get("stage"):
-        records.append((active, True))
-    for st, is_active in records:
+    for st in state.get("stages") or []:
         metrics = st.get("metrics") or {}
         tokens = metrics.get("provider_tokens") or {}
         stage = st.get("stage") or ""
         role = st.get("role") or stage_role.get(stage) or ""
-        model = recorded_model(st)
-        runner_owned = st.get("runner_owned") is True and st.get("engine") == "runner"
+        model = st.get("model") or role_model.get(role) or ""
+        cmd = st.get("command") or []
+        if not model and isinstance(cmd, list) and "--model" in cmd:
+            model = cmd[cmd.index("--model") + 1]
         rows.append({
             "stage": stage,
             "name": st.get("name"),
             "role": role,
             "model": model,
-            "tokens": normalized_tokens(tokens),
-            "estimated_usd": 0.0 if runner_owned else estimate_cost(model, tokens),
+            "tokens": tokens,
+            "estimated_usd": estimate_cost(model, tokens) if tokens else 0.0,
             "finished_at": st.get("finished_at"),
-            "active": is_active,
-            "runner_owned": runner_owned,
+        })
+    active = state.get("active_stage") or {}
+    if active.get("stage"):
+        metrics = active.get("metrics") or {}
+        tokens = metrics.get("provider_tokens") or {}
+        cmd = active.get("command") or []
+        model = ""
+        if isinstance(cmd, list) and "--model" in cmd:
+            model = cmd[cmd.index("--model") + 1]
+        role = active.get("role") or stage_role.get(active.get("stage") or "", "")
+        model = model or role_model.get(role) or ""
+        rows.append({
+            "stage": active.get("stage"),
+            "name": active.get("name"),
+            "role": role,
+            "model": model,
+            "tokens": tokens,
+            "estimated_usd": estimate_cost(model, tokens) if tokens else 0.0,
+            "finished_at": None,
+            "active": True,
         })
     return rows
-
-
-def usage_summary(state: dict) -> dict:
-    """Serializable accounting snapshot; does not inspect files or run checks."""
-    rows = stage_token_rows(state)
-    return {
-        "per_stage": rows,
-        "totals": {k: known_sum(r["tokens"].get(k) for r in rows) for k in (
-            "input_tokens", "cached_input_tokens", "output_tokens", "reasoning_output_tokens")},
-        "estimated_api_equivalent_usd": None if any(r["active"] for r in rows)
-            else known_sum(r["estimated_usd"] for r in rows),
-        "known_estimated_api_equivalent_usd": sum(
-            r["estimated_usd"] for r in rows if r["estimated_usd"] is not None),
-        "unpriced_stages": sum(r["estimated_usd"] is None for r in rows),
-        "pricing_basis": {"kind": "historical_flat_comparison_rates", "usd_per_million": REFERENCE_PRICES},
-        "billed_note": "Historical flat comparison rates, not verified current prices or actual billing; "
-                       "inclusive input/output priced once, without cache discounts. Unknown is not zero.",
-    }
 
 
 MODEL_ID_RE = re.compile(
@@ -198,9 +150,8 @@ def model_route_checks(state: dict, run_dir: Path) -> dict:
     def take_command(cmd):
         if not isinstance(cmd, list):
             return
-        model = recorded_model({"command": cmd})
-        if model:
-            launched.append(model)
+        if "--model" in cmd:
+            launched.append(cmd[cmd.index("--model") + 1])
 
     for st in state.get("stages") or []:
         take_command(st.get("command"))
@@ -277,8 +228,7 @@ def score_run(run_dir: Path) -> dict:
     status = state.get("status") or ""
     stages = state.get("stages") or []
     stage_names = [s.get("stage") for s in stages]
-    usage = usage_summary(state)
-    rows = usage["per_stage"]
+    rows = stage_token_rows(state)
     routing = model_route_checks(state, run_dir)
 
     # --- repair loops ---
@@ -342,26 +292,25 @@ def score_run(run_dir: Path) -> dict:
         evidence_notes = [f"{len(stages)} staged artifacts recorded"]
 
     # --- token discipline ---
-    token_score = "PASS" if rows and all(
-        r["tokens"][k] is not None for r in rows for k in ("input_tokens", "output_tokens")) else "PARTIAL"
+    token_score = "PASS" if rows and any(r.get("tokens") for r in rows) else "PARTIAL"
     token_notes = []
-    total_usd = usage["estimated_api_equivalent_usd"]
-    known_usd = usage["known_estimated_api_equivalent_usd"]
-    unknown_rows = usage["unpriced_stages"]
+    total_tokens = defaultdict(int)
+    for r in rows:
+        t = r.get("tokens") or {}
+        for k, v in t.items():
+            if isinstance(v, int):
+                total_tokens[k] += v
+    total_usd = round(sum(r.get("estimated_usd") or 0.0 for r in rows), 4)
     step_summary = {"per_stage": {}, "total": {}}
     try:
-        try:
-            from . import live_token_sampler as sampler
-        except ImportError:
-            import live_token_sampler as sampler
+        import live_token_sampler as sampler
         _, step_summary = sampler.sample_run(run_dir)
         token_notes.append(f"per-step sampler: {step_summary['total'].get('steps', 0)} provider steps")
     except Exception as exc:
         token_notes.append(f"per-step sampler unavailable: {exc}")
     if rows:
         token_notes.append(f"{len(rows)} stage metric rows")
-        token_notes.append(f"historical-rate estimate: {money(total_usd)}; "
-                           f"known subtotal {money(known_usd)}, {unknown_rows} unpriced stage(s)")
+        token_notes.append(f"est. API-equivalent ${total_usd:.4f} (subscription routes bill plan fee, cost=0 per call)")
     limits = state.get("limits") or {}
     if limits.get("max_reported_tokens"):
         token_notes.append(f"max_reported_tokens={limits['max_reported_tokens']} enforced")
@@ -386,18 +335,13 @@ def score_run(run_dir: Path) -> dict:
             "token_discipline": {"score": token_score, "notes": token_notes},
         },
         "token_usage": {
-            **usage,
+            "per_stage": rows,
+            "totals": dict(total_tokens),
+            "estimated_api_equivalent_usd": total_usd,
+            "billed_note": "OpenCode reports cost=0 on these subscription routes; USD above is API-equivalent estimate only.",
             "per_step": step_summary,
         },
     }
-
-
-def money(value) -> str:
-    return "unknown" if value is None else f"${value:.6f}"
-
-
-def count_text(value) -> str:
-    return "unknown" if value is None else str(value)
 
 
 def render(report: dict) -> str:
@@ -420,26 +364,21 @@ def render(report: dict) -> str:
     for r in report["token_usage"]["per_stage"]:
         t = r.get("tokens") or {}
         lines.append(
-            f"| {r.get('stage')} | {r.get('name') or '—'} | `{r.get('model') or 'unknown'}` | {count_text(t.get('input_tokens'))} "
-            f"| {count_text(t.get('cached_input_tokens'))} | {count_text(t.get('output_tokens'))} "
-            f"| {count_text(t.get('reasoning_output_tokens'))} | {money(r.get('estimated_usd'))} |"
+            f"| {r.get('stage')} | {r.get('name') or '—'} | `{r.get('model') or '—'}` | {t.get('input_tokens') or 0} "
+            f"| {t.get('cached_input_tokens') or 0} | {t.get('output_tokens') or 0} "
+            f"| {t.get('reasoning_output_tokens') or 0} | {r.get('estimated_usd') or 0:.4f} |"
         )
     tot = report["token_usage"]["totals"]
     lines.append("")
-    lines.append(f"**Recorded totals:** input={count_text(tot.get('input_tokens'))} cached={count_text(tot.get('cached_input_tokens'))} "
-                 f"output={count_text(tot.get('output_tokens'))} reasoning={count_text(tot.get('reasoning_output_tokens'))}")
+    lines.append(f"**Totals:** input={tot.get('input_tokens', 0)} cached={tot.get('cached_input_tokens', 0)} "
+                 f"output={tot.get('output_tokens', 0)} reasoning={tot.get('reasoning_output_tokens', 0)}")
     lines.append("")
-    lines.append(f"**Estimated API-equivalent cost:** {money(report['token_usage']['estimated_api_equivalent_usd'])} "
+    lines.append(f"**Estimated API-equivalent cost:** ${report['token_usage']['estimated_api_equivalent_usd']:.4f} "
                  f"({report['token_usage']['billed_note']})")
-    lines.append(f"**Known subtotal:** {money(report['token_usage']['known_estimated_api_equivalent_usd'])}; "
-                 f"unpriced stages={report['token_usage']['unpriced_stages']}")
     per_step = (report.get("token_usage") or {}).get("per_step") or {}
     if per_step.get("per_stage"):
         try:
-            try:
-                from . import live_token_sampler as sampler
-            except ImportError:
-                import live_token_sampler as sampler
+            import live_token_sampler as sampler
             lines.append("")
             lines.append(sampler.render_summary(per_step))
         except Exception:

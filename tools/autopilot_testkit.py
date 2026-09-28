@@ -140,7 +140,7 @@ class Bundle:
     def finish(self, status: str = PASS, summary: str = "") -> bool:
         assert not self.finished
         self.finished = True
-        if status in (PASS, BLOCKED_ENV) and self.failures:
+        if status == PASS and self.failures:
             status = FAIL
         if status == FAIL and not summary:
             summary = "; ".join(f"{row['name']}: expected {row['expected']!r} got {row['observed']!r}"
@@ -153,9 +153,7 @@ class Bundle:
         }, indent=2))
         self.log("bundle_finished", status=status)
         if status == FAIL:
-            detail = "; ".join(f"{row['name']}: expected {row['expected']!r} got {row['observed']!r}"
-                               for row in self.failures)
-            raise AssertionError(f"{self.scenario_id} failed: {summary}; {detail}")
+            raise AssertionError(f"{self.scenario_id} failed: {summary}")
         return True
 
 
@@ -219,16 +217,8 @@ class CatalogueCase(unittest.TestCase):
     def expect_raises(self, name, exc_type, fn, *args, **kwargs):
         return self.bundle.expect_raises(name, exc_type, fn, *args, **kwargs)
 
-    def skipTest(self, reason):
-        if hasattr(self, "bundle") and not self.bundle.finished:
-            self.bundle.finish(status=BLOCKED_ENV, summary=reason)
-        super().skipTest(reason)
-
-    def finish(self, summary="", *, status=PASS):
-        result = self.bundle.finish(status=status, summary=summary)
-        if status == BLOCKED_ENV:
-            self.skipTest(summary or status)
-        return result
+    def finish(self, summary="", status=PASS):
+        return self.bundle.finish(status=status, summary=summary)
 
 
 class FindingsOracle:

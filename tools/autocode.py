@@ -25,9 +25,7 @@ import uuid
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures
     from . import autocode_gocode as gocode
-    from . import autocode_regression as regression
 except ImportError:
-    import autocode_regression as regression
     import autocode_support as support
     import autocode_goals as goals
     import autocode_interventions as interventions
@@ -48,10 +46,6 @@ try:
     from . import autocode_milestones as milestones
     from . import autocode_dispatch as dispatch
     from . import autocode_resolver_runtime as resolver_runtime
-    from . import autocode_resolver_human as resolver_human
-    from . import autocode_reviewer_fallback as reviewer_fallback
-    from . import autocode_planning_artifacts as planning_artifacts
-    from . import autocode_budget_recovery as budget_recovery
     from . import autocode_findings as findings_ledger
     from .autocode_activity import ActivityMonitor
 except ImportError:
@@ -62,10 +56,6 @@ except ImportError:
     import autocode_milestones as milestones
     import autocode_dispatch as dispatch
     import autocode_resolver_runtime as resolver_runtime
-    import autocode_resolver_human as resolver_human
-    import autocode_reviewer_fallback as reviewer_fallback
-    import autocode_planning_artifacts as planning_artifacts
-    import autocode_budget_recovery as budget_recovery
     import autocode_findings as findings_ledger
     from autocode_activity import ActivityMonitor
 
@@ -84,26 +74,6 @@ DEFAULT_ROLE_MODELS = {
 # GoCode-native runs select --engine gocode explicitly and never launch OpenCode.
 DEFAULT_ENGINE = "opencode"
 
-BUDGET_ARGUMENTS = {
-    'iteration_ceiling': ('max_iterations', 'legacy_iteration_ceiling', 'unlimited_iterations'),
-    'max_seconds': ('max_seconds',), 'stage_timeout_seconds': ('max_stage_seconds',),
-    'idle_timeout_seconds': ('max_idle_seconds',), 'tool_timeout_seconds': ('max_tool_seconds',),
-    'max_reported_tokens': ('max_reported_tokens',), 'no_progress_batches': ('no_progress_limit',),
-    'milestone_max_seconds': ('max_milestone_seconds',),
-}
-
-
-def budget_origins(args):
-    explicit = getattr(args, '_explicit_budget_flags', None)
-    if explicit is None:
-        explicit = {flag for flags in BUDGET_ARGUMENTS.values() for flag in flags
-                    if getattr(args, flag, None) is not None
-                    and (flag != 'unlimited_iterations' or getattr(args, flag, False))}
-    delegated = getattr(args, 'autoresolver_managed_limits', False)
-    return {kind: ('resolver_delegated' if delegated else
-                   'user_explicit' if any(flag in explicit for flag in flags) else 'runner_default')
-            for kind, flags in BUDGET_ARGUMENTS.items()}
-
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -111,7 +81,6 @@ def now() -> str:
 
 def write_json(path: Path, value: Any) -> None:
     if Path(path).name == "state.json" and isinstance(value, dict):
-        normalize_human_boundary(value, Path(path).parent)
         try:
             from . import autocode_status
         except ImportError:
@@ -119,155 +88,6 @@ def write_json(path: Path, value: Any) -> None:
         autocode_status.persist(path, value)
     else:
         support.atomic_json(path, value)
-
-
-def normalize_human_boundary(state, run_dir):
-    """Adjudicate private proposals before persisted state can ask a human."""
-    if not all(key in state for key in ('task', 'workspace', 'status')):
-        return
-    if run_dir is not None:
-        state['run_dir'] = str(Path(run_dir).resolve())
-    if state.get('parent_run'):
-        # Workers report to their parent; they never publish their own requests.
-        state.pop(resolver_human.PUBLIC, None)
-        state.pop('user_request', None)
-        state['pending_questions'] = []
-        return
-    if (state.get('active_stage') or state.get('uncertain_artifacts')) and (
-            state.get(resolver_human.PRIVATE, {}).get('scope') != 'operational_exhaustion'):
-        return
-    public = resolver_human.current(state)
-    if public:
-        return
-    proposal = state.get(resolver_human.PRIVATE)
-    if not proposal and state.get('status') in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL', 'PAUSED_GOAL_UNAPPROVED'):
-        # Explicit locked reconciliation of legacy decisions. Read-only status
-        # and dashboard projections never enter this writer path.
-        request = copy.deepcopy(state.get('user_request') or {})
-        questions = copy.deepcopy(state.get('pending_questions') or [])
-        origin = {'stage': 'legacy_decision_reconciliation'}
-        if state.get('status') in ('AWAITING_GOAL_APPROVAL', 'PAUSED_GOAL_UNAPPROVED'):
-            blockers = (state.get('goal_contract') or {}).get('body', {}).get('open_blocking_questions', [])
-            if blockers:
-                resolver_human.queue(state, 'clarification', origin, questions=blockers,
-                                     phase='DISCOVERING', next_stage=state.get('next_stage'))
-            else:
-                resolver_human.queue(state, 'goal_approval', origin, status='AWAITING_GOAL_APPROVAL',
-                                     next_stage=state.get('next_stage'))
-        elif request.get('kind') == 'human_review':
-            evidence = {'review_token': goals.review_token(state),
-                        'hashes': copy.deepcopy((state.get('validation') or {}).get('evidence_hashes', {}))}
-            resolver_human.queue(state, 'human_review', origin, request=request, questions=questions,
-                                 evidence=evidence, next_stage=state.get('next_stage'))
-        elif request:
-            scope = request['kind'] if request.get('kind') in ('permission', 'goal_change') else 'blocker'
-            source = next((row for row in reversed(state.get('stages', []))
-                           if not row.get('runner_owned') and not row.get('rejected') and row.get('output')), None)
-            if source:
-                origin = {'stage': source.get('original_stage') or source['stage'], 'output': source['output']}
-            resolver_human.queue(state, scope, origin, request=request, questions=questions,
-                                 next_stage=state.get('next_stage'))
-        elif questions:
-            resolver_human.queue(state, 'clarification', origin, questions=questions,
-                                 phase=state.get('phase'), next_stage=state.get('next_stage'))
-        proposal = state.get(resolver_human.PRIVATE)
-    if not proposal:
-        return
-    # An internal diagnostic is already scheduled; repeated persistence must
-    # neither ask the user nor requeue the same provider call.
-    if state.get('next_stage') == 'astra_resolve' and state.get('resolution_request'):
-        return
-    disposition = resolver_human.evaluate(state)
-    if disposition == 'escalate':
-        return
-    if disposition == 'defer' and proposal['scope'] == 'goal_approval':
-        if planning.enabled(state) and not (state.get('goal_contract') or {}).get('body', {}).get('open_blocking_questions'):
-            if not state.get('planning') or not planning.is_planning(state, state.get('next_stage')):
-                planning.start(state)
-            state.update(status='RUNNING', phase='PLANNING')
-            state.pop(resolver_human.PRIVATE, None)
-            return
-    if disposition == 'defer' and proposal['scope'] == 'clarification':
-        reason = state['resolver']['human_disposition']['reason']
-        if reason.startswith('An authenticated answer already exists'):
-            identity = support.digest({'task_id': state.get('task_id'), 'questions': proposal['questions'],
-                                       'answers': state.get('answers', {})})
-            retries = state['resolver'].setdefault('saved_answer_retries', {})
-            if retries.get(identity, 0) < 2:
-                retries[identity] = retries.get(identity, 0) + 1
-                state['recovery_context'] = {'kind': 'saved_answer_reconciliation',
-                    'instruction': 'Honor the existing authenticated answers. Do not ask the same questions again.',
-                    'question_ids': [q['id'] for q in proposal['questions']]}
-                state.pop(resolver_human.PRIVATE, None)
-                first = ('requirements_gather' if 'requirements' in state.get('settings', {}).get('roles', {})
-                         else 'astra_discovery')
-                state.update(status='RUNNING', phase='DISCOVERING', next_stage=first)
-                return
-    if disposition == 'defer' and proposal['scope'] == 'blocker' and goals.approved(state):
-        output = proposal['origin'].get('output')
-        source = next((row for row in reversed(state.get('stages', [])) if output and row.get('output') == output
-                       and not row.get('rejected') and not row.get('runner_owned')), None)
-        if source and proposal['origin']['stage'] != 'astra_resolve':
-            value = read_json(Path(output))
-            semantic = source.get('original_stage') or source['stage']
-            autopilot.queue_resolution(state, value, source, source_stage=semantic,
-                                       source_report=not semantic.startswith('astra'))
-            state.update(status='RUNNING', phase='RESOLVING')
-            return
-    # A deferred or rejected proposal is not permission to display its raw text
-    # as a question. Keep the proposal/evidence available for resolver diagnosis.
-    state.update(status='RESOLVER_PENDING', phase='RESOLVING')
-
-
-def finish_human_action(state, published):
-    """Consume the checked request after existing material-decision APIs succeed."""
-    entry = state['resolver']['human_escalations'][published['request_id']]
-    entry.update(status='consumed', response={'actor': 'user_cli', 'action': 'material_decision',
-        'at': now(), 'request_id': published['request_id'], 'request_token': published['request_token'],
-        'event': copy.deepcopy((state.get('user_events') or [None])[-1])})
-    state.pop(resolver_human.PUBLIC, None)
-    if state.get(resolver_human.PRIVATE):
-        return
-    if state.get('status') == 'WAITING_FOR_USER':
-        if (state.get('user_request') or {}).get('kind') == 'human_review':
-            request = copy.deepcopy(state['user_request'])
-            request['criteria'] = goals.missing_human_reviews(state)
-            goals.wait_for_user(state, request, origin={'stage': 'resolver_response'},
-                                next_stage=state.get('next_stage'))
-        elif state.get('pending_questions'):
-            resolver_human.queue(state, 'clarification', {'stage': 'resolver_response'},
-                questions=state['pending_questions'], phase=state.get('phase'), next_stage=state.get('next_stage'))
-
-
-def recover_default_budget(state, run_dir, workspace, kind):
-    """AutoResolver may extend a proven internal default, never erase its usage."""
-    with interventions.serialized(run_dir):
-        if (state.get(resolver_human.PRIVATE) or resolver_human.current(state)
-                or (Path(run_dir) / 'pause-requested').exists() or interventions.pending(run_dir)):
-            return False
-        latest = next((row for row in reversed(state.get('stages', [])) if not row.get('runner_owned')), None)
-        if not latest or latest.get('source_revision') != support.snapshot(workspace)['revision']:
-            return False
-        candidate = copy.deepcopy(state)
-        if not budget_recovery.recover(candidate, kind=kind, now=now()):
-            return False
-        extension = candidate['resolver']['budget_extensions'][-1]
-        output = extension['evidence'].get('output')
-        if not output or not Path(output).is_file():
-            return False
-        if kind == 'planning_review_call_limit':
-            state['planning']['review_call_limit'] = candidate['planning']['review_call_limit']
-            state['planning']['review_call_limit_origin'] = 'runner_default'
-        elif kind == 'milestone_max_seconds':
-            state['settings']['milestone_checkpoints']['max_seconds'] = extension['to']
-        else:
-            state['settings']['limits'][kind] = extension['to']
-        state.setdefault('resolver', {})['budget_extensions'] = candidate['resolver']['budget_extensions']
-        resolver_runtime._operational_receipt(state, run_dir, 'extend_default_budget',
-            f"AutoResolver extended internal {kind} from {extension['from']} to {extension['to']} "
-            "once after verified progress; usage and failure history are retained.", extension)
-        write_json(Path(run_dir) / 'state.json', state)
-        return True
 
 
 def read_json(path: Path) -> dict[str, Any]:
@@ -336,52 +156,6 @@ def normalize_plan_challenge_blocking(value, record):
         for row in concerns]}
 
 
-# Planning-report lists that only cite provenance. A report that omits one is otherwise
-# complete; an empty list claims nothing, and every semantic check (requirement coverage,
-# concern responses, obligations) still runs on the normalized report. Lists that carry a
-# decision (requirements, open_questions, concerns, responses, decisions, assumptions)
-# are never defaulted: a missing one still goes to report repair.
-PROVENANCE_LISTS = frozenset({
-    "code_refs", "source_refs", "alternatives", "uncertainties", "contract_changes",
-    "conflict_resolutions", "requirement_trace", "remediation_records", "machine_resolutions",
-    "access_blockers", "ignored_statements", "conflicts", "proposed_reframes",
-    "ignored_requirements", "obligation_decisions"})
-PLANNING_STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
-
-
-def default_missing_provenance(value, record):
-    """Fill omitted provenance lists instead of paying for a report-repair model call.
-
-    Two recorded live trials spent their whole remaining budget repairing a planning
-    report that only lacked such a list (VALIDATION.md: `$: missing code_refs`).
-    """
-    stage = str(record.get("stage", "")).removesuffix("_report_repair")
-    if stage not in PLANNING_STAGES or not isinstance(value, dict):
-        return value
-    try:
-        properties = read_json(Path(record["schema"])).get("properties", {})
-    except (OSError, ValueError, KeyError):
-        return value
-    missing = sorted(key for key in PROVENANCE_LISTS
-                     if key in properties and key not in value and properties[key].get("type") == "array")
-    defaults = {key: [] for key in missing}
-    # An omitted job type is "build", as for every run before task_kind existed; approval
-    # always shows the job type, so a wrong default is visible before any build starts.
-    if "task_kind" in properties and "task_kind" not in value:
-        defaults["task_kind"] = "build"
-    contract = value.get("contract")
-    contract_schema = properties.get("contract", {}).get("properties", {})
-    if isinstance(contract, dict) and "task_kind" in contract_schema and "task_kind" not in contract:
-        defaults["contract"] = {**contract, "task_kind": "build"}
-        missing.append("contract.task_kind")
-    elif "task_kind" in defaults:
-        missing.append("task_kind")
-    if not defaults:
-        return value
-    record["defaulted_fields"] = sorted(missing)
-    return {**value, **defaults}
-
-
 def load_stage_report(record, workspace=None, evidence_record=None):
     if record.get("engine") == "opencode":
         # Raw provider events are authoritative, including during recovery.
@@ -395,7 +169,6 @@ def load_stage_report(record, workspace=None, evidence_record=None):
         value = final_json(Path(record["output"]))
     reported = copy.deepcopy(value)
     value = normalize_plan_challenge_blocking(value, record)
-    value = default_missing_provenance(value, record)
     evidence_record = evidence_record or record
     validation = value.get('validation', value)
     checks = validation.get('checks') if isinstance(validation, dict) else None
@@ -452,9 +225,9 @@ class ReportRepairQueued(Exception):
 
 
 def repair_limit(state):
-    limit = state.get('settings', {}).get('report_repair', {}).get('max_attempts', 0)
-    if type(limit) is not int or not 0 <= limit <= 2:
-        raise ValueError('report_repair.max_attempts must be an integer from 0 to 2')
+    limit = state.get('settings', {}).get('report_repair', {}).get('max_attempts', 4)
+    if type(limit) is not int or not 0 <= limit <= 6:
+        raise ValueError('report_repair.max_attempts must be an integer from 0 to 6')
     return limit
 
 
@@ -625,11 +398,6 @@ def run_role(
     if (joint_stage or stage == "astra_discovery") and (
             role != planning.role_for(state, stage) or allow_write or sandbox != "read-only"):
         raise support.Paused("PAUSED_DISCOVERY_WRITE", "Planning must use its assigned role read-only")
-    if original_stage in planning.V2_STAGES:
-        try:
-            planning_artifacts.verify_predecessor(state, original_stage, run_dir)
-        except ValueError as error:
-            raise support.Paused('PAUSED_INVALID_PREDECESSOR', str(error)) from error
     if not dry_run:
         processes.process_table()  # fail before creating an active request
     if report_only:
@@ -650,17 +418,12 @@ def run_role(
         schema = base.with_suffix('.schema.json')
         write_json(schema, bound_schema)
     route_role = planning.route_for(state, original_stage, role)
-    fallback_route = reviewer_fallback.pending_route(state, original_stage) if joint_stage and not report_only else None
-    if fallback_route:
-        route_role = fallback_route['role']
     supports_sessions = getattr(opencode, "SUPPORTS_SESSIONS", True)
     configured_tool = getattr(opencode, "CONFIGURED", False)
     session = None if joint_stage or report_only or not supports_sessions else state.setdefault("sessions", {}).get(route_role)
     engine = planning.engine_for(state["settings"], route_role)
     transport_args = support.transport_arguments(state["settings"])
-    route = fallback_route or state["settings"]["roles"][route_role]
-    if fallback_route:
-        model = route['model']
+    route = state["settings"]["roles"][route_role]
     effort = route.get("reasoning_effort")
     limits = state["settings"].get("limits", {})
     stage_timeout = limits.get("stage_timeout_seconds")
@@ -709,8 +472,6 @@ def run_role(
     if route_role != role:
         record["route_role"] = route_role
     record["engine"] = engine
-    record['reasoning_effort'] = effort
-    record['launch_route'] = {key: route.get(key) for key in ('engine', 'provider', 'model', 'reasoning_effort')}
     record['output_mode'] = getattr(opencode, 'OUTPUT', 'opencode_events') if engine == 'opencode' else 'codex_events'
     if report_only:
         record.update(report_only=True, original_stage=original_stage)
@@ -750,15 +511,7 @@ def run_role(
             # active request and launch, with submission using the same short lock.
             with interventions.admission(run_dir):
                 if joint_stage and not report_only:
-                    planning.charge(state, original_stage, record=record, workspace=workspace)
-                    if fallback_route:
-                        admitted = reviewer_fallback.admit(state, run_dir, workspace, original_stage)
-                        if admitted != fallback_route:
-                            raise support.Paused('PAUSED_REVIEWER_FALLBACK',
-                                                 'Reviewer fallback changed before provider admission')
-                        record['reviewer_fallback_grant'] = next(
-                            grant['id'] for grant in state['planning']['reviewer_route_fallbacks']
-                            if grant.get('consumed') and grant['binding']['selected_route'] == admitted)
+                    planning.charge(state, original_stage)
                 resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], state, run_dir, workspace, record)
                 state["active_stage"] = record
                 write_json(run_dir / "state.json", state)
@@ -932,23 +685,6 @@ def accept_repaired_report(state, run_dir, workspace, value, repair_record):
     commit_boundary_candidate(owner, state, run_dir, workspace)
 
 
-def original_report_for_repair(original):
-    """Expose terminal output directly, including reports rejected before saving.
-
-    OpenCode's schema-invalid JSON may exist only in a long raw event line.
-    Read tools cannot reliably recover those lines. Extract the same terminal
-    report as admission does, without validating, accepting or altering it.
-    """
-    try:
-        if original.get('engine') == 'opencode':
-            value = opencode.final_report(original['events'])
-        else:
-            value = read_json(Path(original['output']))
-        return {'report': value, 'extraction_error': None}
-    except (OSError, ValueError, RuntimeError, KeyError) as error:
-        return {'report': None, 'extraction_error': str(error)}
-
-
 def execute_report_repair(state, run_dir, workspace):
     pending = state['pending_report_repair']
     original = pending['original']
@@ -1081,8 +817,6 @@ def execute_report_repair(state, run_dir, workspace):
         if error.status in ("PAUSED_INTERVENTION_PENDING", "PAUSED_REPORT_REPAIR_INPUT") and not state.get("active_stage"):
             pending["attempts"] -= 1
             write_json(run_dir / 'state.json', state)
-        if automatically_recover_report_repair_timeout(state, run_dir, workspace, error):
-            raise ReportRepairQueued() from error
         raise
     account_stage(state, record)
     accept_repaired_report(state, run_dir, workspace, value, record)
@@ -1168,7 +902,6 @@ def abandon_stage(state, run_dir, workspace, selected):
     write_json(after_path, after)
     record.update(after_ref=str(after_path), source_revision=after["revision"],
                   changed_files=support.changed_paths(before, after), abandoned=True)
-    resolver_human.supersede_operational(state, 'Operator explicitly abandoned the selected uncertain attempt')
     originals = archive_rejected_stage(state, run_dir, record, "Operator abandoned uncertain response; workspace edits retained")
     if record.get("report_only") and state.get("pending_report_repair"):
         state.setdefault("report_repair_archive", []).append({
@@ -1208,101 +941,8 @@ def abandon_stage(state, run_dir, workspace, selected):
         artifact.unlink(missing_ok=True)
 
 
-MAX_AUTOMATIC_RECOVERIES = 3
+MAX_AUTOMATIC_RECOVERIES = 6
 MAX_AUTOMATIC_CAPACITY_RECOVERIES = 3
-
-
-def automatically_recover_report_repair_timeout(state, run_dir, workspace, error):
-    """Retire only a proven stopped repair; never replay its completed owner."""
-    record = state.get('active_stage') or {}
-    if not record.get('report_only') or not record.get('timed_out'):
-        return False
-    if (run_dir / 'pause-requested').exists():
-        raise support.Paused('PAUSED_REQUESTED', 'Pause requested; timed-out report repair retained')
-    if interventions.pending(run_dir):
-        raise support.Paused('PAUSED_INTERVENTION_PENDING', 'Intervention pending; report repair retained')
-
-    def stop(reason):
-        raise support.Paused('PAUSED_RESOLVER_OPERATIONAL',
-            'AutoResolver cannot safely retry the timed-out report repair: ' + reason)
-
-    pending = state.get('pending_report_repair') or {}
-    original = pending.get('original') or {}
-    request = state.get('user_request') or (state.get('agent_request') or {}).get('request')
-    if (state.get('uncertain_artifacts') or state.get('pending_questions')
-            or (request and request.get('kind') != 'none')
-            or (state.get('pause_intent') and not state['pause_intent'].get('acknowledged_at'))):
-        stop('an unresolved question, pause or intervention owns this boundary')
-    try:
-        if (not record.get('finished_at') or type(record.get('exit_code')) is not int
-                or not record.get('processes') or record.get('interrupted')):
-            stop('durable stopped-process evidence is missing')
-        assert_stage_stopped(record)
-        if not Path(record['events']).is_file():
-            stop('the repair event log is missing')
-        if (any(event.get('type') in ('turn.completed', 'turn.failed')
-                for event in support.events(record['events']))
-                or (not stage_supports_sessions(state, record) and Path(record['output']).is_file())):
-            stop('a terminal response raced the timeout; retain it for reconciliation')
-        before = read_json(Path(record['before_ref']))
-        after = support.snapshot(workspace)
-        pins = pending.get('pins') or {}
-        required = ('events', 'before_ref', 'after_ref', 'schema')
-        if (not original.get('source_revision') or before['revision'] != after['revision']
-                or after['revision'] != original['source_revision']
-                or state.get('next_stage') != original.get('stage')
-                or record.get('original_stage') != original.get('stage')
-                or record.get('stage') != original.get('stage', '') + '_report_repair'
-                or record.get('iteration') != original.get('iteration')
-                or record.get('role') != original.get('role')
-                or not Path(record.get('schema', '')).is_file()
-                or support.file_hash(record['schema']) != support.file_hash(original['schema'])
-                or record.get('contract_hash') != original.get('contract_hash')
-                or record.get('task_id') != original.get('task_id')
-                or (original.get('task_id') is not None
-                    and original['task_id'] != (state.get('current_task') or {}).get('id'))
-                or record.get('criteria_revision') != original.get('criteria_revision')
-                or (original.get('criteria_revision') is not None
-                    and original['criteria_revision'] != state.get('criteria_revision'))
-                or (state.get('goal_contract') or {}).get('hash') != pending.get('contract_hash')
-                or any(not original.get(key) or original[key] not in pins for key in required)
-                or any(not Path(p).is_file() or support.file_hash(p) != h for p, h in pins.items())
-                or original.get('exit_code') != 0 or original.get('timed_out')
-                or not stage_completed(state, original)):
-            stop('source, original evidence or stage bindings changed')
-        attempts = pending.get('attempts')
-        if type(attempts) is not int or not 1 <= attempts < repair_limit(state):
-            stop('bounded report-only repair allowance exhausted or invalid; consumed attempts stay charged')
-    except (KeyError, TypeError, ValueError, OSError, processes.ProcessError) as invalid:
-        stop(str(invalid))
-    except support.Paused as blocked:
-        if blocked.status == 'PAUSED_RESOLVER_OPERATIONAL':
-            raise
-        stop(str(blocked))
-
-    # Persist the archive and resolver receipt together. No implementation/session,
-    # validation, original pins or pending attempt counters are reset here.
-    with interventions.admission(run_dir):
-        record['metrics'] = support.event_metrics(record['events'])
-        account_stage(state, record)
-        after_path = Path(record['output']).with_suffix('.after.json')
-        write_json(after_path, after)
-        record.update(after_ref=str(after_path), source_revision=after['revision'],
-                      changed_files=[], abandoned=True, automatic_recovery=True)
-        originals = archive_rejected_stage(state, run_dir, record,
-            'AutoResolver retained stopped nonterminal report repair; retry remaining report-only allowance')
-        resolver_runtime._operational_receipt(state, run_dir, 'retry',
-            'Retry only the remaining bounded report repair; preserve the completed original and charged attempts.',
-            {'origin_output': record['output'], 'events': record['events'],
-             'pins': copy.deepcopy(pending['pins']), 'source_revision': after['revision'],
-             'next_stage': original['stage'], 'repair_attempts_used': attempts,
-             'timeout_kind': record.get('timeout_kind'), 'timeout_reason': str(error)})
-        state.update(status='RUNNING', phase='REPORT_REPAIR')
-        state.pop('stop_reason', None)
-        write_json(run_dir / 'state.json', state)
-        for artifact in originals:
-            artifact.unlink(missing_ok=True)
-    return True
 
 
 def automatically_recover_capacity_stage(state, run_dir, workspace, error):
@@ -1331,8 +971,8 @@ def automatically_recover_capacity_stage(state, run_dir, workspace, error):
         raise support.Paused(
             "PAUSED_PROVIDER_CAPACITY",
             f"Model capacity retry limit reached ({MAX_AUTOMATIC_CAPACITY_RECOVERIES}); "
-            "AutoResolver exhausted its bounded capacity recovery. Failed attempts and partial "
-            "work remain saved; the task is incomplete and no further calls will launch.")
+            "the failed attempt and partial work remain saved. Wait for provider capacity, "
+            "inspect the recovery history, then explicitly resume.")
 
     before = read_json(Path(record["before_ref"]))
     after = support.snapshot(workspace)
@@ -1367,48 +1007,12 @@ def automatically_recover_capacity_stage(state, run_dir, workspace, error):
         "at": recovery["at"], "attempt_id": recovery["attempt_id"], "retry_number": retry_number,
         "next_stage": next_stage, "changed_files": record["changed_files"]})
     state["recovery_context"] = recovery
-    resolver_runtime.observe_operational_recovery(sys.modules[__name__], state, run_dir, workspace, recovery)
     state.update(status="RUNNING", phase=phase, next_stage=next_stage)
     state.pop("stop_reason", None)
     write_json(run_dir / "state.json", state)
     for artifact in originals:
         artifact.unlink(missing_ok=True)
     time.sleep(2 ** (retry_number - 1))
-    return True
-
-
-def reconcile_rate_limited_stage(state, run_dir, workspace):
-    """AutoResolver retires a proven stopped rate-limit attempt without replay."""
-    record = state.get('active_stage') or {}
-    event_path = Path(record.get('events', ''))
-    if (not event_path.is_file() or support.failure_status(event_path) != 'PAUSED_RATE_LIMIT'
-            or any(event.get('type') == 'turn.completed' for event in support.events(event_path))
-            or not record.get('before_ref') or not Path(record['before_ref']).is_file()):
-        return False
-    assert_stage_stopped(record)
-    before = read_json(Path(record['before_ref']))
-    after = support.snapshot(workspace)
-    if support.changed_paths(before, after):
-        raise support.Paused('PAUSED_PROVIDER_UNCERTAIN',
-            'Rate-limited attempt changed source; AutoResolver retained it for reconciliation and will not replay it')
-    record['metrics'] = support.event_metrics(event_path)
-    account_stage(state, record)
-    after_path = Path(record['output']).with_suffix('.after.json')
-    write_json(after_path, after)
-    record.update(after_ref=str(after_path), source_revision=after['revision'], changed_files=[], abandoned=True)
-    originals = archive_rejected_stage(state, run_dir, record,
-        'AutoResolver archived a stopped rate-limited response; no automatic replay')
-    route = record.get('route_role') or record.get('role')
-    if route:
-        state.setdefault('sessions', {}).pop(route, None)
-    state['recovery_context'] = {'kind': 'provider_rate_limit', 'stage': record.get('original_stage') or record.get('stage'),
-        'events': record['events'], 'source_revision': after['revision'], 'instruction':
-        'Provider rate limit was observed. Preserve this attempt and do not retry or change billing routes automatically.'}
-    state.update(status='PAUSED_RATE_LIMIT', phase='PAUSED_OR_BLOCKED', next_stage=record.get('original_stage') or record.get('stage'),
-                 stop_reason='Provider rate limit retained by AutoResolver; human assistance is required and no replay was authorized')
-    write_json(Path(run_dir) / 'state.json', state)
-    for artifact in originals:
-        artifact.unlink(missing_ok=True)
     return True
 
 
@@ -1423,17 +1027,15 @@ def recovery_count(state):
 def timeout_recovery_guard(state):
     limit = state.get("settings", {}).get("limits", {}).get("no_progress_batches", 3)
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
-    # Match the CLI's no-progress policy: 0 disables this threshold. The
-    # independent aggregate recovery guard above still bounds automatic replay.
-    consecutive = bool(limit) and state.get("consecutive_timeout_recoveries", 0) >= limit
+    # A configured limit of 0 means zero tolerance, not "no limit" — `limit and ...`
+    # would treat 0 as falsy and silently skip the check.
+    consecutive = limit is not None and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
         ctx = state.get("recovery_context") or {}
         cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")
         raise support.Paused("PAUSED_TIMEOUT_RECOVERY",
             f"Automatic recovery budget exhausted; no further provider will launch. Last cause: {cause}. "
-            "AutoResolver retained the diagnosis and failure history; this is an operational "
-            "stop, not a request for approval. After fixing the cause, authorize more recoveries "
-            "explicitly with --resume-paused --grant-recovery N.")
+            "Fix the cause, then explicitly resume with --resume-paused to reset the recovery budget.")
 
 
 def count_automatic_recovery(state):
@@ -1472,8 +1074,6 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     consume the existing no-progress budget before another provider is launched.
     """
     record = state.get("active_stage")
-    if record and record.get('report_only'):
-        return automatically_recover_report_repair_timeout(state, run_dir, workspace, error)
     # Startup reconciliation classifies a non-terminal saved log as uncertain;
     # the durable timeout record still proves why the stopped request ended.
     if (error.status not in ("PAUSED_PROVIDER_TIMEOUT", "PAUSED_PROVIDER_UNCERTAIN")
@@ -1512,9 +1112,6 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     state.pop("displayed_review", None)
 
     next_stage, phase = timeout_recovery_route(state, record)
-    # Final-audit-only runs keep the Builder in charge of implementation. Other routing
-    # modes retain the established Plan Reviewer recovery review before another writer.
-    semantic_stage = record.get('original_stage') or record['stage']
     recovery = {"at": now(), "attempt_id": attempt_id(record), "role": record["role"],
                 "stage": record["stage"], "source_revision": after["revision"],
                 "task_id": record.get("task_id", (state.get("current_task") or {}).get("id")),
@@ -1535,11 +1132,6 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
                                                    "at": recovery["at"], "attempt_id": recovery["attempt_id"],
                                                    "next_stage": next_stage, "changed_files": record["changed_files"]})
     state["recovery_context"] = recovery
-    resolver_runtime.observe_operational_recovery(sys.modules[__name__], state, run_dir, workspace, recovery)
-    if record.get('reviewer_fallback_grant'):
-        reviewer_fallback.record_failed(state, record['reviewer_fallback_grant'], record)
-    elif planning.is_planning(state, semantic_stage):
-        reviewer_fallback.reserve(state, run_dir, workspace, semantic_stage)
     state["no_progress_batches"] = state.get("no_progress_batches", 0) + 1
     state["consecutive_timeout_recoveries"] = state.get("consecutive_timeout_recoveries", 0) + 1
     state.update(status="RUNNING", phase=phase, next_stage=next_stage)
@@ -1606,9 +1198,7 @@ def automatically_recover_external_directory_denial(state, run_dir, workspace, e
                                                    "next_stage": next_stage, "changed_files": record["changed_files"]})
     state["recovery_context"] = recovery
     state["no_progress_batches"] = state.get("no_progress_batches", 0) + 1
-    resolver_runtime.observe_operational_recovery(sys.modules[__name__], state, run_dir, workspace, recovery)
-    state.update(status="RUNNING", phase="PLANNING" if planning.is_planning(state, next_stage) else "EXECUTING",
-                 next_stage=next_stage)
+    state.update(status="RUNNING", phase="EXECUTING", next_stage=next_stage)
     state.pop("stop_reason", None)
     write_json(run_dir / "state.json", state)
     for artifact in originals:
@@ -1771,7 +1361,7 @@ def prepare_abandoned_completion_revalidation(state, run_dir, workspace):
     # may follow this boundary. Never reinterpret later accepted work.
     retries = [r for r in stages[index + 1:]
                if not (r.get('runner_owned') and r.get('stage') == 'resolver'
-                       and (r.get('decision') or {}).get('action') in ('retry', 'hold'))]
+                       and (r.get('decision') or {}).get('action') == 'retry')]
     if any(not r.get('rejected') or r.get('abandoned') or r.get('source_revision') != revision
            or (r.get('original_stage') or r.get('stage')) != 'astra_review' for r in retries):
         return False
@@ -1796,7 +1386,6 @@ def prepare_abandoned_completion_revalidation(state, run_dir, workspace):
     state.setdefault('reconciliation_notes', []).append({
         'at': now(), 'attempt_id': selected, 'previous_status': state['status'], 'stage': stage,
         'reason': 'Explicit resume requires fresh validation after abandoned completion'})
-    resolver_human.supersede_operational(state, 'Scoped completion-abandonment recovery was proven')
     state.update(status='PAUSED_STAGE_ABANDONED', phase='PAUSED_OR_BLOCKED', next_stage=stage,
                  stop_reason='Completion abandonment invalidated validation. Resume explicitly for fresh review.')
     write_json(run_dir / 'state.json', state)
@@ -1806,74 +1395,33 @@ def prepare_abandoned_completion_revalidation(state, run_dir, workspace):
 def authorize_failure_retry(state, run_dir, workspace):
     """Authorize one fresh attempt for an inspected, unchanged repeated failure.
 
-    The durable record is audit only. The returned exception is consumed in this
-    invocation; loading the checkpoint cannot grant another execution attempt.
+    Explicit operator action only: it never runs from a plain resume. It clears
+    exactly the recorded failure identity, keeps every other failure and its
+    history, and records the authorization durably for audit.
     """
-    issued = resolver_human.current(state)
-    issued_cause = (state.get('resolver', {}).get('human_escalations', {}).get(issued['request_id'], {})
-                    .get('identity', {}).get('proposal', {}).get('origin', {}).get('pause_status')) if issued else None
-    if (state.get('status') != 'PAUSED_REPEATED_FAILURE'
-            and not (issued and issued['scope'] == 'operational_exhaustion' and issued_cause == 'PAUSED_REPEATED_FAILURE')):
+    if state.get('status') != 'PAUSED_REPEATED_FAILURE':
         raise ValueError('--retry-failed-stage requires a run paused for repeated failure')
-    if any(state.get(key) for key in ('active_stage', 'uncertain_artifacts', 'pending_report_repair')):
-        raise ValueError('Reconcile the active attempt or pending report repair before authorizing a retry')
-    record = next(
+    pending = state.get('pending_report_repair') or {}
+    record = pending.get('original') or next(
         (row for row in reversed(state.get('stages', [])) if row.get('failure_key')), None)
     repeated = failures.repeated(state, record) if record else None
     if not repeated:
         raise ValueError('No unchanged repeated failure to authorize; fix the cause, then resume')
     selected = record.get('failure_key')
-    revision = support.snapshot(workspace)['revision']
-    identity = repeated['identity']
-    if ((state.get('failure_history') or {}).get(selected) is not repeated
-            or failures.key(identity) != selected
-            or identity['artifact_hash'] != revision or record.get('source_revision') != revision
-            or identity['stage'] != (record.get('original_stage') or record.get('stage'))
-            or identity['stage'] != state.get('next_stage')):
-        raise ValueError('Retry authorization requires the exact current source, stage and failure identity')
-    authorization = {'at': now(), 'failure_key': selected, 'identity': copy.deepcopy(identity),
-                     'count': repeated['count'], 'source_revision': revision}
-    resolver_human.supersede_operational(state, 'Operator explicitly authorized one scoped failure retry')
-    state.setdefault('failure_retry_authorizations', []).append(authorization)
+    state.setdefault('failure_retry_authorizations', []).append({
+        'at': now(), 'failure_key': selected, 'identity': repeated['identity'],
+        'count': repeated['count'], 'source_revision': support.snapshot(workspace)['revision']})
     state.setdefault('user_events', []).append({
         'kind': 'failure_retry_authorized', 'at': now(), 'failure_key': selected,
         'stage': repeated['identity'].get('stage'), 'count': repeated['count']})
+    state.setdefault('failure_history', {}).pop(selected, None)
+    for row in state.get('stages', []):
+        if row.get('failure_key') == selected:
+            row.pop('failure_key', None)
     write_json(run_dir / 'state.json', state)
-    return copy.deepcopy(authorization)
 
 
-def grant_recovery_allowance(state, run_dir, amount):
-    """Authorize N more automatic timeout recoveries for an exhausted run.
-
-    Acknowledging a pause never restores a spent allowance; only this explicit,
-    audited operator grant does. The automatic_timeout_recoveries history stays
-    intact for audit, and the answered request is retired, not deleted.
-    """
-    issued = resolver_human.current(state)
-    issued_cause = (state.get('resolver', {}).get('human_escalations', {}).get(issued['request_id'], {})
-                    .get('identity', {}).get('proposal', {}).get('origin', {}).get('pause_status')) if issued else None
-    if (state.get('status') != 'PAUSED_TIMEOUT_RECOVERY'
-            and not (issued and issued['scope'] == 'operational_exhaustion' and issued_cause == 'PAUSED_TIMEOUT_RECOVERY')):
-        raise ValueError('--grant-recovery requires a run paused for exhausted timeout recovery')
-    previous = recovery_count(state)
-    remaining = max(0, previous - amount)
-    state['automatic_recoveries_since_resume'] = remaining
-    state['consecutive_timeout_recoveries'] = 0
-    state.setdefault('recovery_grants', []).append({
-        'at': now(), 'actor': 'user_cli', 'amount': amount,
-        'request_id': issued['request_id'] if issued else None,
-        'previous_count': previous, 'remaining_count': remaining})
-    state.setdefault('user_events', []).append({
-        'kind': 'recovery_grant', 'at': now(), 'actor': 'user_cli', 'amount': amount,
-        'request_id': issued['request_id'] if issued else None, 'previous_count': previous})
-    resolver_human.supersede_operational(state, f'Operator granted {amount} more automatic recoveries')
-    write_json(run_dir / 'state.json', state)
-    print(f"Recovery grant recorded: {amount} more automatic timeout recoveries authorized "
-          f"({previous} -> {remaining} counted); history retained.", flush=True)
-    return remaining
-
-
-def repeated_failure_resume_guard(state, workspace, *, authorization=None):
+def repeated_failure_resume_guard(state, workspace):
     """A restart or plain resume cannot erase an unchanged repeated failure.
 
     A recognized recovery path that reroutes the run changes the saved status
@@ -1889,13 +1437,6 @@ def repeated_failure_resume_guard(state, workspace, *, authorization=None):
         return
     repeated = failures.repeated(state, record)
     if repeated and support.snapshot(workspace)['revision'] == record.get('source_revision'):
-        if (authorization and not authorization.get('consumed')
-                and authorization.get('failure_key') == record.get('failure_key')
-                and authorization.get('identity') == repeated['identity']
-                and authorization.get('count') == repeated['count']
-                and authorization.get('source_revision') == record.get('source_revision')):
-            authorization['consumed'] = True
-            return
         raise support.Paused('PAUSED_REPEATED_FAILURE',
             f"Unchanged {record.get('original_stage') or record['stage']} artifact failed "
             f"{repeated['count']} times with {repeated['identity']['error_class']}; "
@@ -1907,15 +1448,6 @@ def reconcile_active(state, run_dir, workspace):
     record = state.get("active_stage")
     if not record:
         return
-    if record.get('report_only') and record.get('timed_out'):
-        if automatically_recover_report_repair_timeout(state, run_dir, workspace,
-                support.Paused('PAUSED_PROVIDER_TIMEOUT', record.get('timeout_reason', 'Saved repair timeout'))):
-            return
-    recorded_events = record.get('events')
-    if (recorded_events and Path(recorded_events).is_file()
-            and support.failure_status(recorded_events) == 'PAUSED_RATE_LIMIT'
-            and reconcile_rate_limited_stage(state, run_dir, workspace)):
-        raise support.Paused('PAUSED_RATE_LIMIT', state['stop_reason'])
     if record.get('rejected'):
         raise support.Paused('PAUSED_INVALID_OUTPUT',
             'This completed attempt was already rejected. Explicitly retry planning with --resume-paused; do not recover the rejected output.')
@@ -2067,10 +1599,6 @@ def configure(args, state):
         joint = True
     if joint and engine not in ("codex", "opencode", "gocode"):
         raise ValueError("--joint-planning requires a supported planning engine")
-    if getattr(args, 'planning_v2', False) and not joint:
-        raise ValueError('--planning-v2 requires --joint-planning or an engine where joint planning is default')
-    if started and getattr(args, 'planning_v2', False) and state.get('settings', {}).get('planning_flow') != 'v2' and not enable_saved_joint:
-        raise ValueError('Start a new run, or explicitly enable joint planning at its supported migration boundary, to select planning-v2')
     if (getattr(args, "requirements_model", None) or getattr(args, "requirements_reasoning_effort", None)
             or getattr(args, "glm_reasoning_effort", None) or getattr(args, "plan_reviewer_model", None)
             or getattr(args, "plan_reviewer_reasoning_effort", None)) and not joint:
@@ -2132,7 +1660,6 @@ def configure(args, state):
             selected = getattr(args, flag, None)
             if selected is not None:
                 settings.setdefault("limits", {})[name] = selected
-                settings.setdefault('budget_origins', {})[name] = 'user_explicit'
         if enable_saved_joint and engine == "opencode":
             settings["joint_planning"] = True
             settings["roles"]["requirements"] = {"engine": "opencode", "provider": None,
@@ -2149,17 +1676,13 @@ def configure(args, state):
                 configure_gocode_joint(settings, args, fresh=False)
             else:
                 configure_joint(settings, args, fresh=False)
-        if getattr(args, 'planning_v2', False):
-            settings['planning_flow'] = 'v2'
         if getattr(args,'unlimited_iterations',False):
             settings.setdefault('limits',{})['iteration_ceiling']=None
-            settings.setdefault('budget_origins', {})['iteration_ceiling'] = 'user_explicit'
         if getattr(args, 'max_milestone_seconds', None) is not None:
             if not milestones.enabled({"settings": settings}) and not getattr(args, 'milestone_checkpoints', False):
                 raise ValueError("Enable --milestone-checkpoints before setting its budget")
             if milestones.enabled({"settings": settings}):
                 settings['milestone_checkpoints']['max_seconds'] = args.max_milestone_seconds
-                settings.setdefault('budget_origins', {})['milestone_max_seconds'] = 'user_explicit'
         if getattr(args, 'max_milestone_replans', None) is not None:
             if not milestones.enabled({"settings": settings}) and not getattr(args, 'milestone_checkpoints', False):
                 raise ValueError("Enable --milestone-checkpoints before setting the replan limit")
@@ -2219,7 +1742,6 @@ def configure(args, state):
     for role in getattr(args, "pin_model_role", []):
         roles[role]["model_pinned"] = True
     settings = {"roles": roles, "transport_identity": local, "engine": engine, "provider": provider_name,
-            'budget_origins': budget_origins(args),
             "builder_retry": {**autopilot.builder_policy.DEFAULTS,
                 "strong_model": getattr(args, 'builder_strong_model', None) or autopilot.builder_policy.DEFAULTS['strong_model']},
             "orchestration": {"enabled": joint or getattr(args, "max_parallel_builders", None) is not None,
@@ -2232,8 +1754,6 @@ def configure(args, state):
                     getattr(args, 'max_milestone_replans', None)
                     if getattr(args, 'max_milestone_replans', None) is not None else milestones.DEFAULTS['max_replans'])},
             "headroom": {"enabled": args.headroom == "on", "verified": False},
-            "regression": {key: value for key, value in (("test_command", getattr(args, "test_command", None)),
-                           ("regression_command", getattr(args, "regression_command", None))) if value},
             "context_soft_tokens": args.context_soft_tokens if args.context_soft_tokens is not None else 10000,
             "rotation_after_input_tokens": args.rotate_after_input_tokens if args.rotate_after_input_tokens is not None else 1000000,
             "limits": {"iteration_ceiling": args.legacy_iteration_ceiling if args.legacy_iteration_ceiling is not None
@@ -2259,8 +1779,6 @@ def configure(args, state):
             configure_gocode_joint(settings, args, fresh=True)
         else:
             configure_joint(settings, args, fresh=True)
-    if getattr(args, 'planning_v2', False):
-        settings['planning_flow'] = 'v2'
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
     return settings
@@ -2330,12 +1848,6 @@ def configure_joint(settings, args, *, fresh):
             settings["roles"]["requirements"]["model"] = args.requirements_model
         if getattr(args, "requirements_reasoning_effort", None):
             settings["roles"]["requirements"]["reasoning_effort"] = args.requirements_reasoning_effort
-    if getattr(args, "resolver_model", None) or getattr(args, "resolver_reasoning_effort", None):
-        settings["roles"].setdefault("resolver", copy.deepcopy(settings["roles"]["astra"]))
-        if getattr(args, "resolver_model", None):
-            settings["roles"]["resolver"]["model"] = args.resolver_model
-        if getattr(args, "resolver_reasoning_effort", None):
-            settings["roles"]["resolver"]["reasoning_effort"] = args.resolver_reasoning_effort
     if getattr(args, "glm_reasoning_effort", None):
         settings["roles"]["glm"]["reasoning_effort"] = args.glm_reasoning_effort
     if getattr(args, "plan_reviewer_model", None):
@@ -2595,8 +2107,7 @@ def commit_user_action(state, candidate, run_dir):
         state.update(candidate)
         return
     with interventions.admission(run_dir):
-        planning_artifacts.commit_pending(candidate, run_dir,
-            lambda value: write_json(run_dir / 'state.json', value))
+        write_json(run_dir / "state.json", candidate)
         state.clear()
         state.update(candidate)
 
@@ -2614,61 +2125,23 @@ def commit_boundary_candidate(state, candidate, run_dir, workspace):
         # Validate inbox readability before changing the owner state. A corrupt
         # inbox leaves the terminal stage available for explicit recovery.
         interventions.pending(run_dir)
-        original = copy.deepcopy(state)
-        def persist(value):
-            state.clear(); state.update(value)
-            try:
-                if not consume_interventions(state, run_dir, workspace, lock_held=True):
-                    write_json(run_dir / 'state.json', state)
-            except Exception:
-                state.clear(); state.update(original)
-                raise
-        planning_artifacts.commit_pending(candidate, run_dir, persist)
+        state.clear()
+        state.update(candidate)
+        if not consume_interventions(state, run_dir, workspace, lock_held=True):
+            write_json(run_dir / "state.json", state)
 
 
 def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
     """Collect discovery answers and goal approval in a single terminal conversation."""
-    speaker = "AutoResolver"
-    normalize_human_boundary(state, run_dir)
-    def action(callback, published=None):
+    speaker = "Planner" if planning.enabled(state) else "Plan Reviewer"
+    def action(callback):
         candidate = copy.deepcopy(state)
-        if run_dir is not None and interventions.pending(run_dir):
-            raise support.Paused('PAUSED_INTERVENTION_PENDING', 'Queued intervention takes precedence over this human response')
-        if published:
-            try:
-                resolver_human.require_response(candidate, published['request_id'], published['request_token'])
-            except ValueError:
-                if run_dir is not None and interventions.pending(run_dir):
-                    raise support.Paused('PAUSED_INTERVENTION_PENDING', 'Queued intervention takes precedence over this human response')
-                raise
         callback(candidate)
-        if published:
-            finish_human_action(candidate, published)
-        normalize_human_boundary(candidate, run_dir)
         commit_user_action(state, candidate, run_dir)
 
     if state.get("discovery_summary") and state.get("phase") == "DISCOVERING":
         print(f"\n{speaker}: " + state["discovery_summary"])
     while state["status"] == "WAITING_FOR_USER":
-        published = resolver_human.current(state)
-        if not published:
-            print('AutoResolver must evaluate this request before collecting an answer.')
-            return False
-        if published['scope'] in ('operational_exhaustion', 'blocker'):
-            print('AutoResolver: ' + published['request']['decision_needed'])
-            print('No retry, approval, permission or budget increase is implied by a response.')
-            try:
-                reply = input('Corrective information, or /pause: ').strip()
-            except (EOFError, KeyboardInterrupt):
-                return False
-            if not reply:
-                return False
-            candidate = copy.deepcopy(state)
-            resolver_human.respond_operational(candidate, published['request_id'], published['request_token'],
-                'leave_paused' if reply == '/pause' else 'provide_information', '' if reply == '/pause' else reply)
-            resolver_human.review_operational_response(candidate)
-            commit_user_action(state, candidate, run_dir)
-            return False
         if state.get("user_request", {}).get("kind") == "human_review":
             print(goals.present(state))
             for criterion in goals.missing_human_reviews(state):
@@ -2681,8 +2154,7 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                     print("Artifact review remains pending.")
                     return False
                 current = support.snapshot(Path(state["workspace"]))
-                action(lambda candidate: goals.approve_review(candidate, criterion, state["displayed_review"], current),
-                       resolver_human.current(state))
+                action(lambda candidate: goals.approve_review(candidate, criterion, state["displayed_review"], current))
             return state["status"] == "RUNNING"
         if not state.get("pending_questions"):
             print(goals.present(state))
@@ -2690,9 +2162,6 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
         if state.get("user_request"):
             print("Decision needed: " + json.dumps(state["user_request"], indent=2))
         for question in list(state.get("pending_questions", [])):
-            published = resolver_human.current(state)
-            if not published or question['id'] not in {q['id'] for q in published['questions']}:
-                continue
             print(f"\n{speaker}: {question['question']}")
             print(f"Why: {question['why']}")
             for option in question.get("options", []):
@@ -2712,23 +2181,20 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                     action(lambda candidate: goals.feedback(candidate, reply[len("/feedback "):]))
                     return True
                 if reply == "/default" and default:
-                    action(lambda candidate: goals.answer(candidate, question["id"], "accept default", delegated=True), published)
+                    action(lambda candidate: goals.answer(candidate, question["id"], "accept default", delegated=True))
                     break
                 if reply:
                     if reply.startswith("/"):
                         print("Use /default, /feedback TEXT or /pause, or type your answer.")
                         continue
-                    if published['scope'] == 'permission':
-                        action(lambda candidate: goals.resolve_permission(candidate, question['id'], reply), published)
+                    if goals.is_operational_response(state.get("user_request")):
+                        action(lambda candidate: goals.resolve_permission(candidate, question["id"], reply))
                     else:
-                        action(lambda candidate: goals.answer(candidate, question["id"], reply), published)
+                        action(lambda candidate: goals.answer(candidate, question["id"], reply))
                     break
                 print("Please enter an answer, or /default when a suggested default is available.")
     if state["status"] == "AWAITING_GOAL_APPROVAL":
-        published = resolver_human.current(state)
-        if not published or published['scope'] != 'goal_approval':
-            return False
-        print('\nAutoResolver: proposed plan ready for your decision:\n')
+        print("\nJoint proposed build brief:\n" if planning.enabled(state) else "\nPlan Reviewer's proposed build brief:\n")
         print(goals.present(state))
         while True:
             try:
@@ -2737,7 +2203,7 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                 print("\nChat paused; the brief remains available for approval.")
                 return False
             if reply.lower() in ("y", "yes", "/approve"):
-                action(lambda candidate: goals.approve(candidate, state["displayed_goal"]), published)
+                action(lambda candidate: goals.approve(candidate, state["displayed_goal"]))
                 return True
             if reply.lower() in ("", "n", "no", "/pause"):
                 print("Brief not approved. Resume this run when you are ready.")
@@ -2798,6 +2264,18 @@ def _main_body(unit=None) -> int:
         except ImportError:
             import autocode_program
         return autocode_program.cli(sys.argv[2:])
+    if sys.argv[1:2] == ["fix"]:
+        try:
+            from . import autocode_fix
+        except ImportError:
+            import autocode_fix
+        return autocode_fix.cli(sys.argv[2:])
+    if sys.argv[1:2] == ["verify-fix"]:
+        try:
+            from . import autocode_verify
+        except ImportError:
+            import autocode_verify
+        return autocode_verify.cli(sys.argv[2:])
     if sys.argv[1:2] == ["compare-baseline"]:
         try:
             from . import autocode_baseline
@@ -2832,25 +2310,16 @@ def _main_body(unit=None) -> int:
                              "~/.config/autocode/config.toml, then opencode. Other names load ~/.config/autocode/providers/<name>.toml")
     parser.add_argument("--joint-planning", action="store_true",
                         help="Separate requirements, planning, and independent review; default for new OpenCode/GoCode runs, opt-in for Codex")
-    parser.add_argument('--planning-v2', action='store_true',
-                        help='Opt in to transactional planning-v2 artifacts; never changes role models or the default planning flow')
     parser.add_argument("--glm-model", help="Planner model: OpenCode provider/model or native Codex GPT name")
     parser.add_argument("--glm-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override planner draft and revision reasoning effort")
     parser.add_argument("--requirements-model", help="Independent requirements-gatherer model for the saved engine")
     parser.add_argument("--requirements-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override independent requirements-gatherer reasoning effort")
-    parser.add_argument("--resolver-model", help="Override the saved Resolver model without changing its engine")
-    parser.add_argument("--resolver-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
-                        help="Override the saved Resolver reasoning effort")
     parser.add_argument("--plan-reviewer-model",
                         help="Override the independent plan-reviewer model for the saved engine")
     parser.add_argument("--plan-reviewer-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override independent plan-reviewer reasoning effort")
-    parser.add_argument("--test-command", help="New runs: shell command for the project's test suite, used by the "
-                        "runner's regression proof on bug-fix tasks (default: detected)")
-    parser.add_argument("--regression-command", help="New runs: shell command that runs only the new or changed "
-                        "tests of a bug fix (default: derived from the detected test framework)")
     parser.add_argument("--max-iterations", type=int, help="Total iteration ceiling (new-run default: 15; resumes keep saved limits)")
     parser.add_argument('--unlimited-iterations',action='store_true',help='Remove only the iteration ceiling; other safety and usage limits remain')
     for role, model in DEFAULT_ROLE_MODELS.items():
@@ -2904,27 +2373,18 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--max-tool-seconds", type=int,
                         help="Maximum time for a running tool or unreported descendant-tool interval (default: 1800; 0 disables)")
     parser.add_argument("--max-reported-tokens", type=int)
-    parser.add_argument('--autoresolver-managed-limits', action='store_true',
-                        help='Delegate finite CLI safety limits to bounded AutoResolver recovery; never changes billing/model routes')
     parser.add_argument("--no-progress-limit", type=int, help="Pause after this many unchanged batches (new-run default: 3)")
     parser.add_argument("--max-findings-per-task", type=int,
                         help="Reject a REWORK task that bundles more than this many open findings (default: unlimited; 0 disables)")
     parser.add_argument("--resume-paused", action="store_true", help="Acknowledge a saved pause; uncertain stages still require reconciliation")
-    parser.add_argument('--resolver-request', help='Exact AutoResolver request ID for an operational response')
-    parser.add_argument('--resolver-token', help='Exact current AutoResolver token for a human response')
-    parser.add_argument('--resolver-response', choices=('provide_information', 'leave_paused'),
-                        help='Respond to AutoResolver without authorizing execution or increasing limits')
-    parser.add_argument('--resolver-message', default='', help='Corrective information for AutoResolver')
     parser.add_argument("--retry-failed-stage", action="store_true",
                         help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
     parser.add_argument("--diagnose-failed-stage", action="store_true",
                         help="For a recorded repeated Builder report failure, admit one bounded "
                              "read-only model diagnosis instead of a blind retry; requires --resume-paused; "
                              "cannot combine with --retry-failed-stage")
-    parser.add_argument("--grant-recovery", type=int, metavar="N",
-                        help="With --resume-paused, authorize N more automatic timeout recoveries for a run paused at PAUSED_TIMEOUT_RECOVERY; the recovery history stays intact")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
-                        help="Save a review allowance at a planning-budget pause; 0 disables the cap persistently and is also allowed at a reconciled stopped checkpoint; no agent launched")
+                        help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
                         help="With --resume-paused, retry an exact exhausted format-failed report as fresh independent validation")
     parser.add_argument("--accept-transport-change", action="store_true",
@@ -2952,19 +2412,6 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--review-token", help="Exact displayed contract/artifact/validation token; "
                         "also required by --delegate-all and --reject-assumption")
     args = parser.parse_args()
-    args._explicit_budget_flags = set()
-    budget_flags = {flag for flags in BUDGET_ARGUMENTS.values() for flag in flags}
-    for argument in sys.argv[1:]:
-        if argument == '--':
-            break
-        if argument.startswith('--'):
-            option = argument.split('=', 1)[0]
-            # Preserve argparse's supported unambiguous abbreviations too.
-            exact = parser._option_string_actions.get(option)
-            matched = ({exact.dest} if exact else {action.dest for name, action in parser._option_string_actions.items()
-                                                  if name.startswith(option)})
-            if len(matched) == 1:
-                args._explicit_budget_flags.update(matched & budget_flags)
     if args.max_parallel_builders is not None and args.max_parallel_builders < 1:
         parser.error('--max-parallel-builders must be positive')
     if args.retry_builder and (not args.run_dir or not args.resume_paused):
@@ -2981,18 +2428,8 @@ def _main_body(unit=None) -> int:
         parser.error("--diagnose-failed-stage requires --run-dir and --resume-paused")
     if args.diagnose_failed_stage and args.retry_failed_stage:
         parser.error("--diagnose-failed-stage and --retry-failed-stage are alternative responses to the same pause; use one")
-    if args.grant_recovery is not None and (not args.run_dir or not args.resume_paused):
-        parser.error("--grant-recovery requires --run-dir and --resume-paused")
-    if args.grant_recovery is not None and args.grant_recovery < 1:
-        parser.error("--grant-recovery needs a positive number of recoveries")
-    if args.resolver_response and not (args.run_dir and args.resolver_request and args.resolver_token):
-        parser.error('--resolver-response requires --run-dir, --resolver-request and --resolver-token')
-    if args.resolver_response and any((args.answer, args.delegate, args.approve_goal, args.approve_review,
-                                      args.feedback is not None, args.retry_failed_stage, args.grant_recovery is not None,
-                                      args.resume_paused)):
-        parser.error('A resolver response cannot be combined with approval, feedback or execution authorization')
-    if args.planning_review_call_limit is not None and args.planning_review_call_limit != 0 and args.planning_review_call_limit < 2:
-        parser.error("--planning-review-call-limit must be 0 (unlimited) or at least 2")
+    if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
+        parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
     if unit and args.unit != unit:
         parser.error(f"This entry point runs only {unit}")
     if args.unit in ("autocode", "autoreview", "autoresolver") and not args.run_dir:
@@ -3073,13 +2510,10 @@ def _main_body(unit=None) -> int:
         state_path = run_dir / "state.json"
         state = {"version": 2, "target": "code", "task": task, "workspace": str(workspace), "created_at": now(),
                  "iteration": 1, "status": "RUNNING", "sessions": {}, "history": [], "stages": [],
-                 "no_progress_batches": 0,
                  "next_stage": "astra_plan", "acceptance_criteria": []}
         isolated = task_workspaces.metadata(workspace)
         if isolated:
             state.update(project_workspace=isolated["project_workspace"], task_branch=isolated["branch"])
-        # The revision a bug fix is proven against (autocode_regression).
-        state["base_commit"] = (isolated or {}).get("base_commit") or regression.head(workspace)
         if args.ui_run:
             state["ui_run"] = str(args.ui_run.resolve())
         if args.legacy_iteration_ceiling is None:
@@ -3107,10 +2541,12 @@ def _main_body(unit=None) -> int:
         if stale:
             print(f"STALE CHECKPOINT: saved status is RUNNING but the recorded "
                   f"{active.get('stage')} workers are gone and no terminal report was saved. "
-                  "AutoResolver must reconcile the retained attempt before any further provider call.", file=sys.stderr)
+                  f"Next: inspect the attempt, then resume with --resume-paused or "
+                  f"set it aside with --abandon-stage {attempt_id(active)}.", file=sys.stderr)
         print(json.dumps({"run_dir":str(run_dir), "workspace":str(workspace), "project_workspace":state.get("project_workspace", str(workspace)), "task_branch":state.get("task_branch"), "status":state["status"], "iteration":state["iteration"],
                           "stale":stale,
-                          "next_action": (f"AutoResolver must reconcile retained attempt {attempt_id(active)} before any provider call"
+                          "next_action": (f"Inspect the abandoned attempt {attempt_id(active)}, then "
+                                          f"--resume-paused to reconcile or --abandon-stage {attempt_id(active)}"
                                           if stale else None),
                           "active_stage_workers":worker_state,
                           "active_stage_finished":active_finished,
@@ -3127,8 +2563,7 @@ def _main_body(unit=None) -> int:
                            "orchestration_batch": state.get("orchestration_batch"),
                            "unit_handoffs": state.get("unit_handoffs", {}),
                            "milestone_activation_pending": (run_dir / 'milestone-checkpoints-requested.json').exists(),
-                           "interventions": intervention_metadata(workspace, run_dir, state),
-                           **resolver_human.projection(state)}, indent=2))
+                           "interventions": intervention_metadata(workspace, run_dir, state)}, indent=2))
         return 0
     saved_provider = dict(state.get("settings") or {})
     if state.get("settings") and "provider" not in saved_provider:
@@ -3160,17 +2595,10 @@ def _main_body(unit=None) -> int:
                     "repair": state.pop("pending_report_repair")})
                 write_json(state_path, state)
         settings = configure(args, state)
-        if args.run_dir and args.autoresolver_managed_limits:
-            origins = settings.setdefault('budget_origins', {})
-            for kind in BUDGET_ARGUMENTS:
-                if origins.get(kind) == 'user_explicit':
-                    origins[kind] = 'resolver_delegated'
         # A new checkpoint must exist before it is registered, so a failed registry
         # update leaves the same run directory available for an explicit retry.
         if not args.run_dir:
             state["settings"] = settings
-            if settings.get('planning_flow') == 'v2':
-                state['next_stage'] = planning.entry_stage(state)
             write_json(state_path, state)
         try:
             registry.register_run(workspace, run_dir, state)
@@ -3179,35 +2607,7 @@ def _main_body(unit=None) -> int:
             state.update(status="PAUSED_REGISTRY", phase="PAUSED_OR_BLOCKED", stop_reason=message, paused_at=now())
             write_json(state_path, state)
             raise support.Paused("PAUSED_REGISTRY", message) from error
-        if args.run_dir and args.autoresolver_managed_limits:
-            published = resolver_human.current(state)
-            if published and published['scope'] == 'operational_exhaustion':
-                proposal = state['resolver']['human_escalations'][published['request_id']]['identity']['proposal']
-                kind = proposal['origin'].get('budget', {}).get('kind')
-                pause_status = proposal['origin'].get('pause_status')
-                if kind and settings.get('budget_origins', {}).get(kind) == 'resolver_delegated':
-                    if resolver_human.supersede_operational(state,
-                            'User delegated this finite harness limit to bounded AutoResolver recovery'):
-                        state['_authorized_bound_change'] = {'pause_status': pause_status, 'at': now()}
         if state.get("settings") and settings != state["settings"]:
-            published = state.get(resolver_human.PUBLIC) or {}
-            entry = state.get('resolver', {}).get('human_escalations', {}).get(published.get('request_id'), {})
-            paused_for = entry.get('identity', {}).get('proposal', {}).get('origin', {}).get('pause_status')
-            relevant = {'PAUSED_ITERATION_LIMIT': ('max_iterations', 'legacy_iteration_ceiling', 'unlimited_iterations'),
-                        'PAUSED_TIME_LIMIT': ('max_seconds',),
-                        'PAUSED_MILESTONE_TIME_LIMIT': ('max_milestone_seconds',),
-                        'PAUSED_USAGE_UNKNOWN': ('max_reported_tokens',)}
-            if (paused_for == 'PAUSED_BUDGET' and entry.get('identity', {}).get('proposal', {}).get('origin', {})
-                    .get('budget', {}).get('kind') == 'max_reported_tokens'):
-                relevant[paused_for] = ('max_reported_tokens',)
-            if any(flag in args._explicit_budget_flags for flag in relevant.get(paused_for, ())):
-                if resolver_human.supersede_operational(state, 'Operator explicitly changed the exhausted bound'):
-                    state['_authorized_bound_change'] = {'pause_status': paused_for, 'at': now()}
-            if args.autoresolver_managed_limits and entry.get('identity', {}).get('proposal', {}).get('origin', {}).get('budget', {}).get('kind'):
-                kind = entry['identity']['proposal']['origin']['budget']['kind']
-                if settings.get('budget_origins', {}).get(kind) == 'resolver_delegated':
-                    if resolver_human.supersede_operational(state, 'User delegated this finite harness limit to bounded AutoResolver recovery'):
-                        state['_authorized_bound_change'] = {'pause_status': paused_for, 'at': now()}
             previous_settings = state["settings"]
             enabling_joint = settings.get("joint_planning") and not previous_settings.get("joint_planning")
             if enabling_joint:
@@ -3228,8 +2628,6 @@ def _main_body(unit=None) -> int:
                 state.pop("paused_at", None)
             write_json(state_path, state)
         state["settings"] = settings
-        if args.run_dir and settings.get('planning_flow') == 'v2' and planning_artifacts.reconcile_orphans(state, run_dir):
-            write_json(state_path, state)
         state["intervention_capability"] = {"supported": True, "version": interventions.INBOX_VERSION}
         if state.get("version",1) == 1:
             backup = run_dir / "state.pre-v2.json"
@@ -3240,115 +2638,6 @@ def _main_body(unit=None) -> int:
                 state["iteration"] = 1
             write_json(state_path, state)
         try:
-            decision_action = any((args.answer, args.delegate, args.approve_goal, args.edit_goal,
-                                   args.approve_review, args.reconcile_review, args.feedback is not None,
-                                   args.show_goal, args.accept_completion, args.resolver_response,
-                                   args.planning_review_call_limit is not None))
-            active = state.get('active_stage') or {}
-            if (not decision_action and active and support.failure_status(active.get('events', '')) == 'PAUSED_RATE_LIMIT'):
-                prior = resolver_human.current(state)
-                if reconcile_rate_limited_stage(state, run_dir, workspace):
-                    if prior:
-                        old = state.get('resolver', {}).get('human_escalations', {}).get(prior['request_id'])
-                        if old and old.get('status') == 'pending':
-                            old.update(status='superseded', superseded_at=now(),
-                                       superseded_reason='AutoResolver reconciled the retained rate-limit attempt')
-                        state.pop(resolver_human.PUBLIC, None)
-                        state.pop('user_request', None)
-                        state['pending_questions'] = []
-                    error = support.Paused('PAUSED_RATE_LIMIT', state['stop_reason'])
-                    resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir, error)
-                    write_json(state_path, state)
-                    print(goals.render(state))
-                    return 2
-            specific_recovery = False
-            issued = resolver_human.current(state)
-            if args.resume_paused and issued and issued['scope'] == 'operational_exhaustion':
-                cause = state['resolver']['human_escalations'][issued['request_id']]['identity']['proposal']['origin'].get('pause_status')
-                if cause == 'PAUSED_REPEATED_FAILURE':
-                    published_status = state['status']
-                    state['status'] = cause
-                    specific_recovery = prepare_abandoned_completion_revalidation(state, run_dir, workspace)
-                    if not specific_recovery:
-                        state['status'] = published_status
-            if (not decision_action and not specific_recovery and not any((args.retry_builder, args.retry_failed_stage,
-                                                    args.retry_report, args.abandon_stage,
-                                                    args.grant_recovery is not None))
-                    and resolver_human.response_holds_current_frontier(state)):
-                print('AutoResolver retained the human guidance. No new execution allowance or changed cause was established; '
-                      'the run remains paused without repeating the same request.')
-                return 2
-            acknowledged_planning_extension = (args.resume_paused and state.get('status') == 'PAUSED_PLANNING_BUDGET'
-                and bool(state.get('user_events')) and state['user_events'][-1].get('kind') == 'planning_budget_change'
-                and state['user_events'][-1].get('limit') == planning.review_call_limit(state)
-                and state['user_events'][-1].get('calls_used') == state.get('planning', {}).get('astra_calls'))
-            marker = state.get('_authorized_bound_change', {})
-            current_request = resolver_human.current(state)
-            current_pause = (state.get('resolver', {}).get('human_escalations', {}).get(
-                current_request['request_id'], {}).get('identity', {}).get('proposal', {}).get('origin', {}).get('pause_status')
-                if current_request else state.get('status'))
-            acknowledged_bound_change = (args.resume_paused and bool(marker)
-                                         and marker.get('pause_status') == current_pause)
-            if acknowledged_bound_change:
-                resolver_human.supersede_operational(state, 'Delegated finite bound is ready for bounded AutoResolver recovery')
-                state['status'] = marker['pause_status']
-                state.pop('_authorized_bound_change', None)
-                write_json(state_path, state)
-            default_budget_kind = {'PAUSED_ITERATION_LIMIT': 'iteration_ceiling',
-                                   'PAUSED_TIME_LIMIT': 'max_seconds',
-                                   'PAUSED_MILESTONE_TIME_LIMIT': 'milestone_max_seconds'}.get(state.get('status'))
-            if (not decision_action and not resolver_human.current(state) and not state.get(resolver_human.PRIVATE)
-                    and default_budget_kind and recover_default_budget(state, run_dir, workspace, default_budget_kind)):
-                state.update(status='RUNNING', phase='EXECUTING')
-                state.pop('stop_reason', None)
-                write_json(state_path, state)
-            if (not decision_action and args.grant_recovery is None
-                    and state.get('status') != 'RUNNING'
-                    and not acknowledged_planning_extension and not acknowledged_bound_change
-                    and str(state.get('status', '')).startswith('PAUSED_')
-                    and not resolver_human.current(state) and not state.get(resolver_human.PRIVATE)):
-                # Unbound legacy fields are not authority and must not suppress
-                # the resolver's current, evidenced escalation for this pause.
-                state.pop('user_request', None)
-                state['pending_questions'] = []
-                error = support.Paused(state['status'], state.get('stop_reason', 'Operational recovery stopped'))
-                if resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir, error):
-                    write_json(state_path, state)
-                    if resolver_human.current(state):
-                        print(goals.render(state))
-                        return 2
-            if args.resolver_response:
-                candidate = copy.deepcopy(state)
-                try:
-                    resolver_human.respond_operational(candidate, args.resolver_request, args.resolver_token,
-                                                       args.resolver_response, args.resolver_message)
-                    resolver_human.review_operational_response(candidate)
-                except ValueError as error:
-                    print(f'Input rejected: {error}', file=sys.stderr)
-                    return 2
-                commit_user_action(state, candidate, run_dir)
-                print('AutoResolver received the response. Work, approvals and budgets remain unchanged; no provider launched.')
-                return 0
-            if (not decision_action and not any((args.retry_builder, args.retry_failed_stage,
-                                                   args.retry_report, args.abandon_stage,
-                                                   args.grant_recovery is not None))
-                    and not (args.chat and state.get('status') == 'WAITING_FOR_USER'
-                             and resolver_human.current(state))
-                    and (state.get(resolver_human.PUBLIC) or {}).get('scope') == 'operational_exhaustion'):
-                if not resolver_runtime.reconsider_operational_request(
-                        sys.modules[__name__], state, run_dir, workspace):
-                    if state.get('stop_reason'):
-                        print(state['stop_reason'])
-                    print('AutoResolver retained the operational request; no unchanged, permitted recovery credit was proven.')
-                    return 2
-            if (not decision_action and args.grant_recovery is None
-                    and state.get('status') in ('PAUSED_RESOLVER_OPERATIONAL', 'PAUSED_TIMEOUT_RECOVERY')
-                    and planning.is_planning(state, state.get('next_stage'))):
-                resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir,
-                    support.Paused(state['status'], state.get('stop_reason', 'Operational recovery exhausted')))
-                write_json(state_path, state)
-                print(goals.render(state))
-                return 2
             if args.abandon_stage is not None:
                 try:
                     abandon_stage(state, run_dir, workspace, args.abandon_stage)
@@ -3360,10 +2649,12 @@ def _main_body(unit=None) -> int:
             # Recovery interprets terminal artifacts only. It never replays a model call.
             try:
                 if args.resume_paused:
-                    # Acknowledgement is not a new spending/recovery allowance.
-                    # Counts, elapsed time, repair attempts and receipts persist;
-                    # an operator who fixed the cause grants more explicitly
-                    # with --grant-recovery N.
+                    # Explicit resume resets the recovery budget so operators can
+                    # retry after fixing the underlying cause (provider timeout,
+                    # rate limit, transient failure).
+                    state["automatic_recoveries_since_resume"] = 0
+                    state["consecutive_timeout_recoveries"] = 0
+                    state.setdefault("automatic_timeout_recoveries", [])
                     if state.get("recovery_context") is None:
                         state["recovery_context"] = {}
                     # Reset milestone budget counters when raising the limit
@@ -3383,10 +2674,9 @@ def _main_body(unit=None) -> int:
                             print(f"Input rejected: {error}", file=sys.stderr)
                             return 2
                     else:
-                        authorization = None
                         if args.retry_failed_stage:
                             try:
-                                authorization = authorize_failure_retry(state, run_dir, workspace)
+                                authorize_failure_retry(state, run_dir, workspace)
                                 print("Failure retry authorized for the recorded repeated failure; "
                                       "one fresh attempt proceeds under existing limits.", flush=True)
                             except ValueError as error:
@@ -3400,14 +2690,8 @@ def _main_body(unit=None) -> int:
                             except ValueError as error:
                                 print(f"Input rejected: {error}", file=sys.stderr)
                                 return 2
-                        elif args.grant_recovery is not None:
-                            try:
-                                grant_recovery_allowance(state, run_dir, args.grant_recovery)
-                            except ValueError as error:
-                                print(f"Input rejected: {error}", file=sys.stderr)
-                                return 2
                         prepare_abandoned_completion_revalidation(state, run_dir, workspace)
-                        repeated_failure_resume_guard(state, workspace, authorization=authorization)
+                        repeated_failure_resume_guard(state, workspace)
                         prepare_planning_retry(state, run_dir)
                         prepare_exhausted_execution_report_retry(state, run_dir, workspace)
                     # Reset report repair attempts on explicit resume, for whatever
@@ -3453,9 +2737,6 @@ def _main_body(unit=None) -> int:
             if args.migrate_only:
                 print("Migrated to an unapproved draft; saved work retained; no agent launched")
                 return 0
-            if args.retry_builder:
-                dispatch.request_retry(state, run_dir, args.retry_builder)
-            normalize_human_boundary(state, run_dir)
             user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
                                args.approve_goal, args.edit_goal,
                                args.approve_review, args.reconcile_review,
@@ -3468,28 +2749,6 @@ def _main_body(unit=None) -> int:
                                          "Queued intervention must be applied before approval, review, or completion")
                 candidate = copy.deepcopy(state)
                 try:
-                    published = resolver_human.current(candidate)
-                    if args.answer or args.delegate:
-                        if not published or not args.resolver_token:
-                            raise ValueError('Answers require the current --resolver-token shown by AutoResolver')
-                        resolver_human.require_response(candidate, published['request_id'], args.resolver_token)
-                        if published['scope'] in ('blocker', 'operational_exhaustion'):
-                            raise ValueError('Use --resolver-response for this operational request; it is not a requirements answer')
-                    if args.approve_goal and (not published or published['scope'] != 'goal_approval'):
-                        raise ValueError('Goal approval requires a current AutoResolver-issued plan request')
-                    if args.approve_review and (not published or published['scope'] != 'human_review'):
-                        replay = all(isinstance(candidate.get('human_reviews', {}).get(cid), dict)
-                                     and candidate['human_reviews'][cid].get('token') == args.review_token
-                                     and candidate['human_reviews'][cid] in candidate.get('user_events', [])
-                                     for cid in args.approve_review)
-                        issued = any(entry.get('status') == 'consumed'
-                                     and entry.get('identity', {}).get('proposal', {}).get('scope') == 'human_review'
-                                     and entry['identity']['proposal'].get('evidence', {}).get('review_token') == args.review_token
-                                     and set(args.approve_review) <= set(goals.requested_review_criteria(
-                                         candidate, entry['identity']['proposal']['request']))
-                                     for entry in candidate.get('resolver', {}).get('human_escalations', {}).values())
-                        if not (replay and issued):
-                            raise ValueError('Artifact acceptance requires a current AutoResolver-issued review request')
                     if args.planning_review_call_limit is not None:
                         planning.set_review_call_limit(candidate, args.planning_review_call_limit)
                     for item in args.answer:
@@ -3514,7 +2773,6 @@ def _main_body(unit=None) -> int:
                         goals.feedback(candidate, args.feedback)
                     if args.edit_goal:
                         goals.install_draft(candidate, read_json(args.edit_goal), origin="user_cli_edit")
-                        planning_artifacts.prepare_user_cli_edit(candidate, run_dir=run_dir)
                     if args.approve_goal:
                         goals.approve(candidate, args.approve_goal)
                     for criterion in args.approve_review:
@@ -3527,12 +2785,9 @@ def _main_body(unit=None) -> int:
                                                       args.review_token, support.snapshot(workspace))
                     if args.accept_completion:
                         accept_completion(candidate, workspace)
-                    if published and any((args.answer, args.delegate, args.approve_goal, args.approve_review)):
-                        finish_human_action(candidate, published)
                 except (ValueError, KeyError) as error:
                     print(f"Input rejected: {error}", file=sys.stderr)
                     return 2
-                normalize_human_boundary(candidate, run_dir)
                 rendered = goals.present(candidate)
                 autopilot.publish_handoffs(candidate, run_dir)
                 commit_user_action(state, candidate, run_dir)
@@ -3557,12 +2812,6 @@ def _main_body(unit=None) -> int:
                     write_json(state_path, state)
                     print(rendered)
                     return 2
-            if state['status'] == 'PAUSED_PLANNING_BUDGET' and not user_action:
-                if (recover_default_budget(state, run_dir, workspace, 'planning_review_call_limit')
-                        or resolver_runtime.operational_boundary(sys.modules[__name__], state, run_dir, workspace)):
-                    state.update(status='RUNNING', phase='PLANNING')
-                    state.pop('stop_reason', None)
-                    write_json(state_path, state)
             if state["status"] != "RUNNING":
                 # A pre-v0.5.4 terminal response with one missing event
                 # citation can be repaired without implementation replay.  It
@@ -3574,6 +2823,9 @@ def _main_body(unit=None) -> int:
                     return 2
                 else:
                     resumed_at = now()
+                    if state["status"] == "PAUSED_TIMEOUT_RECOVERY":
+                        state["consecutive_timeout_recoveries"] = 0
+                        state["automatic_recoveries_since_resume"] = 0
                     if state.get("pause_intent") and not state["pause_intent"].get("acknowledged_at"):
                         state["pause_intent"]["acknowledged_at"] = resumed_at
                     for receipt in state.get("applied_interventions", []):
@@ -3584,6 +2836,8 @@ def _main_body(unit=None) -> int:
                     state.pop('stop_reason', None)
             if state.get("pending_questions"):
                 raise support.Paused("PAUSED_UNANSWERED_QUESTION", "Pending questions cannot be bypassed by resume")
+            if args.retry_builder:
+                dispatch.request_retry(state, run_dir, args.retry_builder)
             if migrate_opencode_roles(state, run_dir, workspace):
                 print("Saved roles now use OpenCode; previous sessions archived and task progress retained.", flush=True)
             if state["settings"].get("engine") == "opencode":
@@ -3613,11 +2867,9 @@ def _main_body(unit=None) -> int:
                 limits = current["settings"]["limits"]
                 timeout_recovery_guard(current)
                 if iteration_limit_reached(current["iteration"], limits["iteration_ceiling"]):
-                    if not recover_default_budget(current, run_dir, workspace, 'iteration_ceiling'):
-                        raise support.Paused("PAUSED_ITERATION_LIMIT", "Saved iteration ceiling reached")
+                    raise support.Paused("PAUSED_ITERATION_LIMIT", "Saved iteration ceiling reached")
                 if limits["max_seconds"] and current.get("active_seconds",0) >= limits["max_seconds"]:
-                    if not recover_default_budget(current, run_dir, workspace, 'max_seconds'):
-                        raise support.Paused("PAUSED_TIME_LIMIT", "Saved active-time limit reached at stage boundary")
+                    raise support.Paused("PAUSED_TIME_LIMIT", "Saved active-time limit reached at stage boundary")
                 support.enforce_reported_token_limit(current)
                 if (not repairing_before_upgrade and (not milestones.enabled(current) or current.get('next_stage') in ('terra', 'orchestrator')) and limits["no_progress_batches"]
                         and current.get("no_progress_batches",0) >= limits["no_progress_batches"]):
@@ -3658,20 +2910,10 @@ def _main_body(unit=None) -> int:
                 # retry lane blocks the serial writer launch here as well.
                 if stage == "terra":
                     autopilot.builder_policy.guard(current)
-                try:
-                    milestones.dispatch_guard(current, stage)
-                except support.Paused as error:
-                    if (error.status != 'PAUSED_MILESTONE_TIME_LIMIT'
-                            or not recover_default_budget(current, run_dir, workspace, 'milestone_max_seconds')):
-                        raise
-                    milestones.dispatch_guard(current, stage)
+                milestones.dispatch_guard(current, stage)
                 workflow.dispatch_guard(current,stage,workspace)
-                if planning.is_planning(current, stage):
-                    if not recover_default_budget(current, run_dir, workspace, 'planning_review_call_limit'):
-                        resolver_runtime.operational_boundary(sys.modules[__name__], current, run_dir, workspace)
                 if stage == "orchestrator":
                     return autopilot.unit_module(stage).dispatch(current, workspace, run_dir)
-                regression.before_review(current, stage, workspace, run_dir)
                 request = autopilot.unit_module(stage).prepare(current, stage, state_path, SCHEMA_DIR)
                 role, route_role = request.role, request.route_role
                 rotate_if_needed(current, route_role, run_dir)
@@ -3706,8 +2948,6 @@ def _main_body(unit=None) -> int:
                         return orchestrator.SKIP
                     if (automatically_recover_timed_out_stage(current, run_dir, workspace, error)
                             or automatically_recover_external_directory_denial(current, run_dir, workspace, error)):
-                        if (current.get('recovery_context') or {}).get('timeout_kind') == 'stage':
-                            recover_default_budget(current, run_dir, workspace, 'stage_timeout_seconds')
                         print(f"{stage}: non-terminal attempt archived; continuing from recovery checkpoint", flush=True)
                         return orchestrator.SKIP
                     raise
@@ -3741,8 +2981,6 @@ def _main_body(unit=None) -> int:
         except (support.Paused, ValueError, RuntimeError, OSError) as error:
             state.update(status=getattr(error,"status","PAUSED_INVALID_OUTPUT"), stop_reason=str(error), paused_at=now())
             state["phase"] = "PAUSED_OR_BLOCKED"
-            if isinstance(error, support.Paused):
-                resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir, error)
             write_json(state_path, state)
             print(f"{state['status']}: {error}", file=sys.stderr)
             return 2

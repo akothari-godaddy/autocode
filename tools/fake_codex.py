@@ -34,10 +34,6 @@ if data.get('report_repair'):
     raise SystemExit(0)
 stage = data["stage"]
 mode = os.environ.get("AUTOCODE_FIXTURE_MODE", "standard")
-# Bug-fix fixtures: the job type the planners propose, and the exact files the Builder writes.
-task_kind = os.environ.get("AUTOCODE_FIXTURE_TASK_KIND", "build")
-builder_files = (json.loads(Path(os.environ["AUTOCODE_FIXTURE_FILES"]).read_text())
-                 if os.environ.get("AUTOCODE_FIXTURE_FILES") else None)
 contract = data["goal_contract"] or {"revision": 0, "hash": ""}
 probe = os.environ.get("AUTOCODE_REGISTRY_LAUNCH_PROBE")
 if probe:
@@ -61,7 +57,7 @@ if os.environ.get("AUTOCODE_FIXTURE_QUOTA_STAGE") == stage:
     print(json.dumps({"type": "error", "error": {"message": "subscription usage limit reached"}}))
     raise SystemExit(3)
 if stage == "requirements_gather":
-    draft = body(questions=not data["saved_answers"], task_kind=task_kind)
+    draft = body(questions=not data["saved_answers"])
     result = {
         "summary": "Requirements for a local greeting CLI, without an implementation plan",
         "intended_outcome": draft["intended_outcome"],
@@ -73,12 +69,9 @@ if stage == "requirements_gather":
         "open_questions": draft["open_blocking_questions"],
         "requirements": [], "ignored_statements": [], "conflicts": [], "proposed_reframes": [],
         "ignored_requirements": [], "machine_resolutions": [], "access_blockers": [],
-        "task_kind": task_kind,
     }
 elif stage == "astra_discovery":
-    draft = body(questions=not data["saved_answers"], human=mode == "standard", task_kind=task_kind)
-    if builder_files:
-        draft["milestones"][0]["affected_paths"] = sorted(builder_files)
+    draft = body(questions=not data["saved_answers"], human=mode == "standard")
     if mode == "milestones":
         draft['acceptance_criteria'].append({'id': 'C2', 'criterion': 'Goodbye CLI prints Goodbye, NAME',
             'verification_method': 'Execute bye.py with Ada', 'human_review': False})
@@ -117,8 +110,7 @@ elif stage == "glm_revise":
                        "change": "Added whitespace case", "acceptance_test": "Whitespace input exits 2"}]}
 elif stage == "astra_finalize":
     draft = dict(contract["body"])
-    draft["initial_task"] = {"objective": "Implement greeting CLI",
-        "affected_paths": sorted(builder_files) if builder_files else ["greet.py"],
+    draft["initial_task"] = {"objective": "Implement greeting CLI", "affected_paths": ["greet.py"],
         "kind": "implement", "milestone_id": "M1", "requirements": ["Greet names; reject empty/whitespace input"],
         "acceptance_criteria": ["C1"], "validation_plan": ["Execute valid, empty and whitespace input"]}
     blocked = mode == "planning-blocked"
@@ -174,9 +166,6 @@ elif stage == "terra":
         Path('greet.py').write_text("import sys\nprint('Hello, ' + sys.argv[1])\n# attempt " + batch + '\n')
     elif mode == "rework" and not data["actionable_findings"]:
         Path("greet.py").write_text("import sys\nprint('Hello, ' + sys.argv[1])\n# attempt " + batch + '\n')
-    elif builder_files:
-        for name, content in builder_files.items():
-            Path(name).write_text(content)
     else:
         Path("greet.py").write_text("import sys\nif len(sys.argv) != 2 or not sys.argv[1].strip():\n    raise SystemExit(2)\nprint('Hello, ' + sys.argv[1])\n# batch " + batch + "\n")
     result = {**common, "summary": "Greeting written", "changed_files": ["greet.py"], "commands_run": [],
@@ -185,8 +174,6 @@ elif stage == "terra":
               "recommended_checks": ["Execute valid and invalid input"]}
     if mode == 'milestones' and milestone == 'M2':
         result.update(changed_files=['bye.py'], evidence_refs=['bye.py'], summary='Goodbye written')
-    elif builder_files:
-        result.update(changed_files=sorted(builder_files), evidence_refs=sorted(builder_files))
 else:
     valid = subprocess.run([sys.executable, "greet.py", "Ada"], capture_output=True, text=True)
     invalid = subprocess.run([sys.executable, "greet.py", ""], capture_output=True, text=True)

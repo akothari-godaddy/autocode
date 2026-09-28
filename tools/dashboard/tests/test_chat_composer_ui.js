@@ -98,8 +98,7 @@ formatting.renderMessageHistory(afterReply, [
 ], 'conversation-one');
 assert.equal(afterReply.children[0].children.some(node => node.tagName === 'DETAILS'), false);
 
-assert.match(source, /Planning continues only if the controller returns to Running with no pending request\./);
-assert.doesNotMatch(source, /After the final answer is saved, planning continues automatically\./);
+assert.match(source, /After the final answer is saved, planning continues automatically\./);
 assert.match(source, /This does not approve a plan or start implementation\./);
 assert.match(source, /Refresh status and reconcile this request ID before retrying to avoid a duplicate mutation\./);
 assert.doesNotMatch(functionSource('requestRow').split("else if(entry.status==='failed'")[0], /Retry same request/,

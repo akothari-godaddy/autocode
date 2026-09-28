@@ -7,25 +7,17 @@ import re
 from pathlib import Path
 try:
     from . import autocode_support as support, autocode_goals as goals
-    from . import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
-    from . import autocode_resolver_human as human, autocode_failures as failures
     from .units import autoplanner as planning_unit
-    from . import autocode_regression as regression
 except ImportError:
-    import autocode_regression as regression
     import autocode_support as support
     import autocode_goals as goals
-    import autocode_planning_artifacts as planning_artifacts
-    import autocode_planning_graph as planning_graph
     import autocode_workflow as workflow
     import autocode_milestones as milestones
     import autocode_escalation as escalation
     import autocode_findings as findings_ledger
     import autocode_builder_policy as builder_policy
-    import autocode_resolver_human as human
-    import autocode_failures as failures
     from units import autoplanner as planning_unit
 
 SKIP = object()
@@ -73,8 +65,7 @@ UNITS = ("autoplanner", "autocode", "autoreview", "autoresolver")
 def unit_for(stage):
     if stage in ("astra_resolve", "astra_diagnose"):
         return "autoresolver"
-    if stage in ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize",
-                 "requirements", "plan", "plan_review", "plan_revise", "plan_finalize"):
+    if stage in ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
         return "autoplanner"
     if stage in ("astra_plan", "orchestrator", "terra"):
         return "autocode"
@@ -147,7 +138,6 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     unit = unit_module(stage)
     if stage == "orchestrator":
         return unit.dispatch(state, workspace, run_dir)
-    regression.before_review(state, stage, workspace, run_dir)
     state_path = run_dir / "state.json"
     request = unit.prepare(state, stage, state_path, runtime.SCHEMA_DIR)
     runtime.rotate_if_needed(state, request.route_role, run_dir)
@@ -185,14 +175,7 @@ def start_planning(state):
     if state.get("planning"):
         state.setdefault("planning_history", []).append(copy.deepcopy(state["planning"]))
     state["planning"] = {"astra_calls": 0, "reports": {}, "final_token": None}
-    saved_review_limit = state.get('settings', {}).get('planning_review_call_limit')
-    if type(saved_review_limit) is int and saved_review_limit == 0:
-        state['planning'].update(review_call_limit=0, review_call_limit_origin='user_explicit')
-    state.pop(human.PRIVATE, None)
-    state.pop(human.PUBLIC, None)
-    state.pop("user_request", None)
-    next_stage = "plan_review" if state.get("settings", {}).get("planning_flow") == "v2" else "astra_challenge"
-    state.update(status="RUNNING", phase="PLANNING", next_stage=next_stage, pending_questions=[])
+    state.update(status="RUNNING", phase="PLANNING", next_stage="astra_challenge", pending_questions=[])
 
 
 def _check_code_refs(state, refs, field="code_refs"):
@@ -222,7 +205,7 @@ def _check_code_refs(state, refs, field="code_refs"):
                 raise ValueError(f"{field} entry {ref} points past the end of the file")
 
 
-def _bind_plan(state, value, origin, record):
+def _bind_plan(state, value, origin):
     if "contract" not in value:
         return
     if (origin == "glm_draft" and value["contract"].get("open_blocking_questions")
@@ -233,7 +216,7 @@ def _bind_plan(state, value, origin, record):
     goals.check_requirement_trace(state, value, value["contract"])
     if origin in ("glm_draft", "glm_revise"):
         _check_code_refs(state, value.get("code_refs") or [])
-    goals.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [], record=record)
+    goals.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [])
 
 
 # Only a technical fact, or one with no policy weight, can be read from the
@@ -475,60 +458,11 @@ def _apply_obligations(state, stage, value):
             _surface_obligations(remaining, contract["open_blocking_questions"], "Final review")
 
 
-def apply_planning(state, stage, value, record, *, run_dir=None):
+def apply_planning(state, stage, value, record):
     # Older saved reports predate explicit, user-backed conflict resolutions.
     # An absent list supplies no authority to resolve any conflict.
     if "conflict_resolutions" in planning_unit.SCHEMAS[stage]["properties"]:
         value = {"conflict_resolutions": [], **value}
-    if stage in planning_unit.V2_STAGES:
-        support.validate_schema(value, planning_unit.SCHEMAS[stage])
-        prepared = planning_artifacts.prepare(state, stage, value, origin=stage,
-                                              run_dir=run_dir, record=False)
-        if stage == "requirements":
-            goals.apply_requirements(state, value["requirements"],
-                                     artifact_sha256=prepared["artifact"]["sha256"], record=record)
-            planning = state.setdefault("planning", {"astra_calls": 0, "reports": {}, "final_token": None})
-        else:
-            planning = state.setdefault("planning", {"astra_calls": 0, "reports": {}, "final_token": None})
-            reports = planning["reports"]
-            if stage == "plan":
-                derived = planning_graph.validate(value["contract"])
-                goals.install_draft(state, value["contract"], origin="plan", record=record)
-                planning["derived_graph"] = derived
-            elif stage == "plan_review":
-                concerns = value["concerns"]
-                ids = [concern["id"] for concern in concerns]
-                if len(ids) != len(set(ids)) or any(not item.strip() for item in ids):
-                    raise ValueError("Concern IDs must be nonempty and unique")
-                if any(not concern[key].strip() for concern in concerns
-                       for key in ("concern", "requested_change", "acceptance_test")):
-                    raise ValueError("Each concern needs a concrete change and acceptance test")
-                state["next_stage"] = "plan_revise"
-            elif stage == "plan_revise":
-                planning_unit._coverage(value["responses"], reports["plan_review"]["report"]["concerns"])
-                if any(not response["evidence_refs"] for response in value["responses"]):
-                    raise ValueError("Planner responses must cite investigated evidence")
-                derived = planning_graph.validate(value["contract"])
-                goals.install_draft(state, value["contract"], origin="plan_revise", record=record)
-                planning["derived_graph"] = derived
-            elif stage == "plan_finalize":
-                planning_unit._coverage(value["decisions"], reports["plan_review"]["report"]["concerns"])
-                unresolved = {row["concern_id"] for row in value["decisions"] if not row["resolved"]}
-                if unresolved and not value["contract"]["open_blocking_questions"]:
-                    raise ValueError("Unresolved planning decisions must return as blocking questions")
-                if not value["contract"]["open_blocking_questions"] and "initial_task" not in value["contract"]:
-                    raise ValueError("Final plan needs an initial_task before approval")
-                derived = planning_graph.validate(value["contract"])
-                goals.install_draft(state, value["contract"], origin="plan_finalize", record=record)
-                planning["derived_graph"] = derived
-                planning["final_token"] = goals.token(state["goal_contract"])
-                planning_artifacts.prepare_final_outputs(state, prepared)
-        planning["reports"][stage] = {"report": copy.deepcopy(value), "output": record["output"],
-                                       "artifact": {"artifact": copy.deepcopy(prepared["artifact"]),
-                                                    "delta": copy.deepcopy(prepared["delta"])}}
-        state["discovery_summary"] = value["summary"]
-        planning_artifacts.record_prepared(state, prepared)
-        return
     checked = value
     if stage == "requirements_gather" and isinstance(value.get("proposed_assumptions"), list):
         # A pre-structured report's plain-string assumptions stay readable as legacy.
@@ -580,8 +514,8 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
             missing = pending - preserved - set(state.get("answers", {})) - resolved
             if missing:
                 raise ValueError("Planner dropped unresolved requirements questions: " + ", ".join(sorted(missing)))
-        _bind_plan(state, value, "glm_draft", record)
-        if human.internal_questions(state):
+        _bind_plan(state, value, "glm_draft")
+        if state.get("pending_questions"):
             state["discovery_summary"] = value["summary"]
             return
         # install_draft starts the bounded cycle once clarification is complete.
@@ -600,8 +534,8 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
         planning_unit._coverage(value["responses"], concerns)
         if any(not r["evidence_refs"] for r in value["responses"]):
             raise ValueError("Planner responses must cite investigated evidence")
-        _bind_plan(state, value, stage, record)
-        if human.internal_questions(state):
+        _bind_plan(state, value, stage)
+        if state.get("pending_questions"):
             reports[stage] = {"report": copy.deepcopy(value), "output": record["output"]}
             state["discovery_summary"] = value["summary"]
             return
@@ -614,21 +548,21 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
             raise ValueError("Unresolved planning decisions must return to the user as blocking questions")
         if not value["contract"]["open_blocking_questions"] and "initial_task" not in value["contract"]:
             raise ValueError("Final plan needs an initial_task so approval does not spend another Plan Reviewer call")
-        _bind_plan(state, value, stage, record)
+        _bind_plan(state, value, stage)
         planning["final_token"] = goals.token(state["goal_contract"])
     reports[stage] = {"report": copy.deepcopy(value), "output": record["output"]}
     state["discovery_summary"] = value["summary"]
 
 
-def apply_planning_result(state, stage, value, record, *, run_dir=None):
+def apply_planning_result(state, stage, value, record):
     if planning_unit.is_planning(state, stage):
-        apply_planning(state, stage, value, record, run_dir=run_dir)
+        apply_planning(state, stage, value, record)
         return
     from pathlib import Path
     schema = support.read(Path(record["schema"])) if record.get("schema") else goals.DISCOVERY_SCHEMA
     support.validate_schema(value, schema)
     legacy = not any(key in schema["properties"]["contract"]["properties"] for key in goals.BRIEF_FIELDS)
-    goals.install_draft(state, value["contract"], origin="astra_discovery", allow_legacy=legacy, record=record)
+    goals.install_draft(state, value["contract"], origin="astra_discovery", allow_legacy=legacy)
     state["discovery_summary"] = value["summary"]
 
 
@@ -747,57 +681,22 @@ def apply_review_result(runtime, state, stage, value, record, workspace, run_dir
         state['next_stage']='terra'
 
 
-def queue_resolution(state, decision, record, *, source_stage='astra_review', source_report=False):
-    goals.execution_guard(state, decision)
-    task = state.get('current_task') or {}
-    revision = record.get('source_revision')
-    if (not task.get('id') or task.get('contract_hash') != state['goal_contract']['hash']
-            or task.get('contract_revision') != state['goal_contract']['revision']
-            or not revision or revision != support.snapshot(Path(state['workspace']))['revision']
-            or not record.get('output') or not Path(record['output']).is_file()
-            or record.get('rejected') or record.get('exit_code', 0) != 0
-            or (source_stage != 'terra' and record.get('changed_files'))
-            or record.get('task_id', task['id']) != task['id']):
-        raise support.Paused('PAUSED_STALE_HANDOFF',
-                             'AutoResolver diagnosis requires a current approved task, source and saved source report')
-    previous = state.get('resolution_request') or {}
-    if (previous.get('task_id') == task['id'] and previous.get('source_revision') == revision
-            and previous.get('diagnosis_output')):
-        raise support.Paused('PAUSED_RESOLVER', 'This task and source already received a resolver diagnosis; '
-                             'the existing blocker must be reconciled before another diagnosis')
-    resolved = [row for row in state.get('stages', []) if row.get('stage') == 'astra_resolve'
-                and row.get('source_revision') == revision and not row.get('rejected')]
-    if (len(resolved) >= failures.REPEAT_THRESHOLD
-            or failures.repeated(state, {'stage': 'astra_resolve', 'source_revision': revision})
-            or failures.repeated(state, {**record, 'stage': source_stage})):
-        raise support.Paused('PAUSED_REPEATED_FAILURE', 'Read-only diagnosis exhausted the existing repeated-failure limit for this source')
-    if not source_report:
-        if support.criteria_definition(decision['acceptance_criteria']) != support.criteria_definition(state['acceptance_criteria']):
-            raise support.Paused('PAUSED_CRITERIA_CHANGE', 'Repair cannot change approved acceptance criteria')
-        # Retain the reviewer's unverified statuses even while diagnosis is pending.
-        state['acceptance_criteria'] = copy.deepcopy(decision['acceptance_criteria'])
-    validation = state.get('validation') or {}
-    pins = dict(validation.get('evidence_hashes', {})) if (
-        validation.get('source_revision') == revision and validation.get('task_id') == task['id']
-        and validation.get('contract_hash') == state['goal_contract']['hash']) else {}
+def queue_resolution(state, decision, record):
+    if support.criteria_definition(decision['acceptance_criteria']) != support.criteria_definition(state['acceptance_criteria']):
+        raise support.Paused('PAUSED_CRITERIA_CHANGE', 'Repair cannot change approved acceptance criteria')
+    # Retain the reviewer's unverified statuses even while diagnosis is pending.
+    state['acceptance_criteria'] = copy.deepcopy(decision['acceptance_criteria'])
+    pins = dict(state.get('validation', {}).get('evidence_hashes', {}))
     pins[record['output']] = support.file_hash(Path(record['output']))
-    if record.get('events') and Path(record['events']).is_file():
-        pins[record['events']] = support.file_hash(Path(record['events']))
-    if any(not Path(path).is_file() or support.file_hash(Path(path)) != digest for path, digest in pins.items()):
-        raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis evidence changed before the resolver handoff')
     state['resolution_request'] = {
         'contract_hash': state['goal_contract']['hash'],
-        'task_id': task['id'], 'source_revision': revision,
-        'source_stage': source_stage, 'source_output': record['output'],
-        'provenance': 'source_report_not_accepted_review' if source_report else 'completion_review_decision',
-        **({'source_report': copy.deepcopy(decision)} if source_report else
-           {'review': copy.deepcopy(decision), 'review_output': record['output']}),
+        'task_id': state.get('current_task', {}).get('id'),
+        'source_revision': record['source_revision'],
+        'review': copy.deepcopy(decision),
+        'review_output': record['output'],
         'evidence_hashes': pins,
     }
-    state.pop(human.PRIVATE, None)
-    state.pop(human.PUBLIC, None)
-    state.pop('user_request', None)
-    state.update(status='RUNNING', phase='RESOLVING', next_stage='astra_resolve', pending_questions=[])
+    state['next_stage'] = 'astra_resolve'
 
 
 def finish_resolution(state, value, record):
@@ -805,11 +704,7 @@ def finish_resolution(state, value, record):
     plan = {'kind': 'repair-plan', 'version': 1,
             'contract_hash': request['contract_hash'], 'source_revision': request['source_revision'],
             'diagnosis': value['diagnosis'], 'evidence': value['evidence'],
-            'source_output': request.get('source_output', request.get('review_output')),
-            'source_stage': request.get('source_stage', 'astra_review'),
-            'provenance': request.get('provenance', 'completion_review_decision'),
-            **({'review_output': request['review_output']} if 'review_output' in request else {}),
-            'evidence_hashes': request['evidence_hashes'],
+            'review_output': request['review_output'], 'evidence_hashes': request['evidence_hashes'],
             'output': record['output'],
             'tasks': [{**copy.deepcopy(state['current_task']), 'depends_on': []}]}
     state['repair_plan'] = plan
@@ -854,7 +749,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
         return
     modern = state.get("version", 2) >= 3
     if planning.is_planning(state, stage) or (modern and stage == "astra_discovery"):
-        apply_planning_result(state, stage, value, record, run_dir=run_dir)
+        apply_planning_result(state, stage, value, record)
         save_record(state, record)
         return
     if modern:
@@ -863,17 +758,8 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             if entry not in state.setdefault("deferred_backlog", []):
                 state["deferred_backlog"].append(entry)
         if value["user_request"]["kind"] != "none":
-            request = value['user_request']
-            origin = {'stage': stage, **{key: record[key] for key in
-                      ('output', 'source_revision', 'task_id') if key in record}}
             if workflow.final_only(state) and not stage.startswith('astra'):
-                if stage == 'terra':
-                    assert_within_assignment(state, record)
-                if request['kind'] in ('blocker', 'clarification'):
-                    queue_resolution(state, value, record, source_stage=stage, source_report=True)
-                else:
-                    goals.wait_for_user(state, request, origin=origin,
-                                        evidence={'provenance': 'source_report_not_accepted_review'})
+                goals.wait_for_user(state,value['user_request'])
                 save_record(state,record)
                 return
             if stage.startswith("astra"):
@@ -881,23 +767,8 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                     raise ValueError("The Plan Reviewer must choose BLOCKED when requesting a user decision")
                 # Record the defects already identified, then pause. The early return
                 # below never reaches the normal review path.
-                if stage != 'astra_resolve':
-                    definitions = support.criteria_definition(value['acceptance_criteria'])
-                    if (len({row['id'] for row in definitions}) != len(definitions)
-                            or definitions != support.criteria_definition(state['acceptance_criteria'])):
-                        raise support.Paused('PAUSED_CRITERIA_CHANGE', 'A blocked decision cannot change approved criteria')
-                    findings_ledger.record_decision(state, value, record)
-                if stage != 'astra_resolve' and request['kind'] in ('blocker', 'clarification'):
-                    queue_resolution(state, value, record, source_stage=stage)
-                else:
-                    evidence = {}
-                    if stage == 'astra_resolve':
-                        evidence = {'diagnosis': value['diagnosis'], 'output': record['output'],
-                                    'hashes': dict(state['resolution_request']['evidence_hashes'])}
-                        evidence['hashes'][record['output']] = support.file_hash(Path(record['output']))
-                        state['resolution_request']['diagnosis_output'] = record['output']
-                    goals.wait_for_user(state, request, origin=origin, evidence=evidence,
-                                        next_stage='astra_review')
+                findings_ledger.record_decision(state, value, record)
+                goals.wait_for_user(state, value["user_request"])
                 goals.record_decision(state, value)
                 state.pop("agent_request", None)
                 save_record(state, record)
@@ -941,23 +812,13 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             if modern and goals.missing_human_reviews(state):
                 if not support.completion_ready(state, value, current, require_human_reviews=False):
                     raise support.Paused("PAUSED_COMPLETION_GATE", "Artifact review requires current passing independent evidence first")
-                goals.wait_for_user(state,
-                    {"kind": "human_review", "criteria": goals.missing_human_reviews(state),
-                     "decision_needed": "Review the current artifact and explicitly approve the listed criteria",
-                     "impact": "Completion requires the declared human acceptance of this validated artifact",
-                     "options": [], "discovered": "Independent evidence passed; human review remains", "proposed_delta": ""},
-                    origin={'stage': stage, 'output': record['output'], 'source_revision': current['revision']},
-                    next_stage='astra_review')
+                state.update(status="WAITING_FOR_USER", phase="WAITING_FOR_USER", next_stage="astra_review",
+                    user_request={"kind": "human_review", "criteria": goals.missing_human_reviews(state),
+                                  "decision_needed": "Review the current artifact and explicitly approve the listed criteria"})
                 goals.record_decision(state, value)
                 save_record(state, record)
                 return
             if not support.completion_ready(state, value, current):
-                if not regression.complete(state, current["revision"]):
-                    proof = state.get("regression_proof") or {}
-                    reasons = "; ".join((proof.get("failures") or []) + (proof.get("unverified") or [])) or \
-                        "no proof exists for the current source"
-                    raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: this bug fix has no passing "
-                                         f"regression proof for the current source ({reasons})")
                 raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: missing, stale, failed or unverified independent evidence")
             state.update(status="TASK_COMPLETE", completed_at=now(), final_decision=value, next_stage=None)
             if milestones.enabled(state):
@@ -989,8 +850,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                 state["iteration"] += 1
             if (stage == 'astra_resolve' and builder_policy.enabled(state)
                     and value.get('next_task', {}).get('kind') == 'implement'):
-                request = state['resolution_request']
-                action = builder_policy.failure(state, request.get('source_output', request.get('review_output')), value['diagnosis'])
+                action = builder_policy.failure(state, state['resolution_request']['review_output'], value['diagnosis'])
                 if action == 'pause':
                     # Exhaustion precedes assignment/replan gates and cannot be
                     # converted into another completion-owner/model round trip.
@@ -1004,7 +864,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             except support.Paused as error:
                 if not error.status.startswith("PAUSED_MILESTONE_"):
                     raise
-                milestones.handle_gate(state, error, current, origin={'stage': stage, 'output': record['output']})
+                milestones.handle_gate(state, error, current)
                 goals.record_decision(state, value)
                 save_record(state, record)
                 return

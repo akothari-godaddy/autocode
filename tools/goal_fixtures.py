@@ -2,21 +2,8 @@
 import copy
 
 
-def assert_operational_wait(test, state, pause_status):
-    from tools import autocode_resolver_human as human
-    test.assertEqual('WAITING_FOR_USER', state['status'])
-    test.assertEqual('WAITING_FOR_USER', state['phase'])
-    public = human.current(state)
-    test.assertIsNotNone(public)
-    test.assertEqual('operational_exhaustion', public['scope'])
-    proposal = state['resolver']['human_escalations'][public['request_id']]['identity']['proposal']
-    test.assertEqual(pause_status, proposal['origin']['pause_status'])
-    return public
-
-
-def body(*, questions=False, human=False, task_kind="build"):
+def body(*, questions=False, human=False):
     return {
-        "task_kind": task_kind,
         "intended_outcome": "Provide a deterministic greeting CLI",
         "intended_user": "A local developer",
         "end_to_end_flow": ["Run the CLI with a name", "Read the greeting or an invalid-input error"],
@@ -51,8 +38,6 @@ def envelope(state):
 def approve_fixture(state, goals):
     goals.migrate(state)
     goals.install_draft(state, body(), origin="fixture")
-    # The fixture simulates the writer boundary, never a presentation-side grant.
-    goals.human.evaluate(state)
     goals.present(state)
     goals.approve(state, goals.token(state["goal_contract"]))
     state.update(next_stage="terra", phase="EXECUTING")

@@ -440,90 +440,10 @@ autocode --workspace /path/to/project --run-dir /path/to/run --resume-paused
 
 Abandoning a stage preserves its logs, source snapshots and partial edits, clears that
 role's uncertain session and invalidates previous validation. It launches no agent.
-On explicit resume, if the saved guards permit another stage, an abandoned Builder
-or Validator returns to its owning stage with the retained-work recovery context.
-Abandoned planning and report-repair attempts return to their owning workflow
-stage, not an internal repair stage. An abandoned Completion Owner first routes
-through the workflow's review stage to obtain fresh evidence (the Validator in
-the standard workflow). Alternate workflow approvals and routing still apply.
-Neither the retained partial work nor the abandoned report counts as accepted
-implementation or validation; subsequent completion must pass the normal gates.
+On explicit resume, if the saved guards permit another stage, the Plan Reviewer
+inspects the retained work and chooses the next step, except
+in final-audit-only routing where the Planner/Builder receives the recovery context directly.
 It does not approve an unapproved brief or stop an already-running worker.
-
-### Resolver-owned operational recovery
-
-Runner-observed stalls are operational work for AutoResolver, not requests for a
-user to buy another retry or approve a larger planning allowance. Timeout,
-capacity, and permitted workspace-path recovery retain diagnostic receipts and
-the original evidence. Planning retries receive that diagnosis and a bounded
-source inventory excluding `.autocode` and `.git`, rather than repeating broad
-repository discovery without the failure context.
-
-For joint planning, proven nonterminal timeouts of ordinary reviewer calls can
-fund at most **two separately accounted recovery calls per planning cycle**.
-Every attempted call remains charged; these grants never erase the ordinary
-allowance or its usage. Explicit or unmarked saved review caps are protected.
-Grants are single-use, consumed durably at admission, pinned to the
-cycle/source/contract/settings/inputs/evidence, and cannot be replenished by
-restarting. Failed recovery calls do not create more grants. Global time,
-iteration, no-progress and recovery ceilings still apply.
-
-This narrow read-only recovery policy works before plan approval; it cannot
-approve a draft, start implementation, change requirements, grant permissions,
-switch billing routes, or change models/deadlines. Requirements and Planner
-timeouts remain in their own planning stage, never jump to execution review.
-
-### Budget ownership and human escalation
-
-Budget limits are not all provider quota. New runs record whether each configured
-bound is a runner default or an explicit CLI constraint, including abbreviated
-CLI options. Limits saved without provenance remain protected; they are not
-silently reinterpreted as permission to spend more.
-
-AutoResolver can extend an internal default once when accepted, current progress
-and known reported usage justify it. Extensions are separate durable ledger
-entries; elapsed time, failed attempts and token records never reset. Each eligible
-limit can at most double, with these policy ceilings:
-
-| Default limit | Maximum after one extension |
-| --- | --- |
-| Iteration ceiling | 30 |
-| Active-time allowance | 86,400 seconds |
-| Stage timeout | 7,200 seconds |
-| Milestone active time | 10,800 seconds |
-| Ordinary planning review allowance | 2 to 4 calls |
-
-These are delegated recovery-policy ceilings, not user account balances or
-mandatory spending targets. An explicit cap, missing progress, repeated unchanged
-failures, unknown usage, pending input or an exhausted financial guard prevents
-automatic growth. Disabled limits remain disabled, and unknown usage never becomes
-zero. Billing routes and provider quota cannot be changed by this mechanism.
-The planning extension requires a changed accepted plan and matching review/revision
-evidence; it is not granted for narrative churn or recycled failed calls.
-
-**AutoResolver is the only human-request publisher.** Other roles stage internal
-proposals. The serialized runner boundary first evaluates permitted recovery or
-the human-only decision, then issues a bound request before status, chat or the
-dashboard may present actionable controls. Draft questions remain in the sealed
-draft but are not actionable merely because a model wrote them. Read-only views
-verify receipts; they do not create authority. Project-free intake also uses the
-AutoResolver request-only adapter, without fabricating a run or approved contract.
-
-If recovery cannot proceed safely, AutoResolver asks for human help, retaining the
-original pause cause, attempts and evidence. This is not a fake requirements
-question or a completion claim. Material replies use the current `--resolver-token`;
-goal and artifact approval retain their existing exact approval/review tokens.
-Operational responses use `--resolver-request ID --resolver-token TOKEN
---resolver-response provide_information --resolver-message TEXT` or
-`--resolver-response leave_paused`. They are information, not implicit permission
-to retry, increase limits, change scope or approve work. The response returns to
-AutoResolver, and an unchanged stopped condition is not repeatedly reissued as a
-new question. Explicit administrative actions remain separately validated.
-
-Source/contract/evidence changes, stale tokens and queued interventions invalidate
-old requests. Real requirements questions, permission changes, plan approval and
-declared artifact acceptance remain human decisions. External service failures
-cannot be guaranteed resolvable; automatic recovery is bounded rather than infinite.
 
 The Plan Reviewer and Validator use the read-only sandbox with the Codex engine; the Builder uses workspace-write.
 OpenCode uses the native permissions and snapshot checks described in [Providers](providers.md).

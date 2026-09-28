@@ -12,44 +12,12 @@ import sys
 import tempfile
 import time
 from urllib.parse import urlencode
-from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-
-from agent_console import Console, Handler, ThreadingHTTPServer, resolver_human
-
+from agent_console import Console, Handler, LoopbackHTTPServer
 
 
 FIXTURE_NOW = '2026-09-22T12:41:00Z'
-FIXTURE_SOURCE = 'browser-fixture-source'
-
-
-def publish_human_request(state):
-    """Test writer boundary: seal current inputs and issue a real receipt."""
-    scope = 'goal_approval' if state['status'] == 'AWAITING_GOAL_APPROVAL' else 'clarification'
-    questions = copy.deepcopy(state.get('pending_questions', []))
-    contract = state['goal_contract']
-    contract['task_id'] = state['task_id']
-    contract['approval_status'] = 'draft'
-    contract.pop('approval_event', None)
-    contract['body']['open_blocking_questions'] = questions if scope == 'clarification' else []
-    contract['hash'] = resolver_human.support.digest({key: contract[key] for key in ('task_id', 'revision', 'body')})
-    state['displayed_goal'] = f"r{contract['revision']}:{contract['hash']}"
-    evidence = {}
-    if scope == 'goal_approval':
-        output = Path(state['run_dir']) / 'fixture-final-plan.json'
-        output.write_text(json.dumps({'goal_contract': contract['body']}), encoding='utf8')
-        state['planning'] = {'final_token': state['displayed_goal'],
-                             'reports': {'astra_finalize': {'output': str(output)}}}
-        state['stages'][-1].update(output=str(output), source_revision=FIXTURE_SOURCE)
-        evidence = {'hashes': {str(output): resolver_human.support.file_hash(output)}}
-    resolver_human.queue(state, scope, {'stage': 'astra_finalize' if scope == 'goal_approval' else 'glm_revise'},
-                         questions=questions, evidence=evidence, status=state['status'], phase=state['phase'])
-    assert resolver_human.evaluate(state) == 'escalate'
-    before = copy.deepcopy(state)
-    public = resolver_human.projection(state)
-    assert public['human_request_authorized'] and public['human_escalation']['scope'] == scope
-    assert state == before, 'Reading the browser fixture projection must never publish or mutate'
 
 
 def plan_contract(*, approval_status='approved', origin='astra_finalize'):
@@ -312,11 +280,8 @@ def fixture_base_directory():
 
 
 def main():
-    # The disposable workspace deliberately has no Git source or provider. Only
-    # source observation is supplied by this test; receipt validation is real.
-    with tempfile.TemporaryDirectory(prefix='autocode-unified-browser-', dir=fixture_base_directory()) as temporary, \
-            patch.object(resolver_human.support, 'snapshot', return_value={'revision': FIXTURE_SOURCE}):
-        root = Path(temporary).resolve()
+    with tempfile.TemporaryDirectory(prefix='autocode-unified-browser-', dir=fixture_base_directory()) as temporary:
+        root = Path(temporary)
         os.environ['AUTOCODE_HOME'] = str(root / 'home')
         workspace = root / 'Example project'
         (workspace / '.git').mkdir(parents=True)
@@ -325,9 +290,6 @@ def main():
         for name, state in states.items():
             run = runs_root / name
             run.mkdir(parents=True)
-            state.update(run_dir=str(run), task_id='browser-fixture-' + name)
-            if state['status'] in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL'):
-                publish_human_request(state)
             (run / 'state.json').write_text(json.dumps(state), encoding='utf8')
         (workspace / 'coverage.json').write_text(json.dumps({'groups': {'shell': {'done': 21, 'total': 21}}}), encoding='utf8')
         (workspace / '.autocode' / 'dashboard.json').write_text(json.dumps({'version': 1, 'metrics': [{
@@ -448,17 +410,12 @@ def main():
                     raise ValueError('Run does not belong to the disposable fixture workspace')
                 state = self._state(run)
                 if action == 'approve_goal':
-                    public = resolver_human.require_response(state, data.get('resolver_request'), data.get('resolver_token'))
-                    if public['scope'] != 'goal_approval':
-                        raise ValueError('Fixture plan approval requires a published goal request')
                     token = data.get('token')
                     if token != state.get('displayed_goal') or data.get('confirmation') != token:
                         raise ValueError('Displayed fixture plan revision changed before approval')
                     state['goal_contract']['approval_status'] = 'approved'
                     state['goal_contract']['approval_event'] = {'at': FIXTURE_NOW, 'actor': 'Fixture developer'}
                     state.setdefault('user_events', []).append({'kind': 'goal_approval', 'token': token, 'at': FIXTURE_NOW, 'actor': 'Fixture developer'})
-                    state['resolver']['human_escalations'][public['request_id']]['status'] = 'consumed'
-                    state.pop(resolver_human.PUBLIC)
                     state['status'] = 'PAUSED_INTERVENTION'
                     state.pop('active_stage', None)
                     state['_fixture_monitor']['next_stage'] = 'terra'
@@ -523,29 +480,12 @@ def main():
                     answer_index = extra.index('--answer') if '--answer' in extra else -1
                     if answer_index < 0 or answer_index + 1 >= len(extra):
                         raise ValueError('Fixture answer is missing its explicit question value')
-                    question_id, text = extra[answer_index + 1].split('=', 1)
+                    question_id = extra[answer_index + 1].split('=', 1)[0]
                     state = self._state(run)
-                    public = resolver_human.current(state)
-                    if public is None or '--resolver-token' not in extra:
-                        raise ValueError('Fixture answer requires a current published request')
-                    public = resolver_human.require_response(state, public['request_id'], extra[extra.index('--resolver-token') + 1])
-                    if public['scope'] != 'clarification':
-                        raise ValueError('Fixture answer cannot approve a plan or resolve an operational request')
                     pending = state.get('pending_questions', [])
                     if question_id not in {str(question.get('id')) for question in pending}:
                         raise ValueError('Fixture question is no longer pending')
-                    question = next(question for question in pending if str(question.get('id')) == question_id)
-                    answer = {'text': text, 'question': copy.deepcopy(question), 'actor': 'user_cli', 'at': FIXTURE_NOW,
-                              'resolver_request': public['request_id'], 'resolver_token': public['request_token']}
-                    state.setdefault('answers', {})[question_id] = answer
-                    state.setdefault('user_events', []).append(copy.deepcopy(answer))
-                    state['resolver']['human_escalations'][public['request_id']]['status'] = 'consumed'
-                    state.pop(resolver_human.PUBLIC)
                     state['pending_questions'] = [question for question in pending if str(question.get('id')) != question_id]
-                    if state['pending_questions']:
-                        publish_human_request(state)
-                    else:
-                        state['status'] = 'RUNNING'
                     self._save_state(run, state)
                     action = self._lifecycle_receipt(run, 'Send answer', None)
                     callback = kwargs.get('on_complete')

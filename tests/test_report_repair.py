@@ -144,7 +144,7 @@ class RepairTests(unittest.TestCase):
                 'blocking': True}]}, '$.concerns[0]: missing requested_change'),
             ('astra_discovery', {'contract': body(), 'summary': 'Draft', 'code_refs': [],
                 'alternatives': [], 'uncertainties': [], 'contract_changes': [],
-                'conflict_resolutions': [], 'requirement_trace': []}, '$: missing summary'),
+                'conflict_resolutions': [], 'requirement_trace': []}, '$: missing code_refs'),
         ]
         initial = copy.deepcopy(self.state)
         validate = support.validate_schema
@@ -158,9 +158,7 @@ class RepairTests(unittest.TestCase):
                 if stage == 'astra_challenge':
                     del report['concerns'][0]['requested_change']
                 else:
-                    # A missing provenance list (code_refs) is now defaulted without repair
-                    # (tests/test_bugfix_workflow.py); a missing summary still must be rejected.
-                    del report['summary']
+                    del report['code_refs']
                 text = json.dumps(report)
                 record = self.stage_record(report=None, role='astra', stage=stage, engine='opencode',
                                            event_rows=[event('text', text=text), terminal()])

@@ -264,7 +264,7 @@ class PlanningTests(unittest.TestCase):
         state = self.state()
         state.update(status="PAUSED_PLANNING_BUDGET", next_stage="astra_finalize")
         state["planning"]["astra_calls"] = 2
-        for limit in (None, True, -1, 1, 2.5, "3"):
+        for limit in (None, True, -1, 0, 1, 2.5, "3"):
             before = copy.deepcopy(state)
             with self.subTest(limit=limit), self.assertRaises(ValueError):
                 planning.set_review_call_limit(state, limit)
@@ -282,40 +282,10 @@ class PlanningTests(unittest.TestCase):
             with self.subTest(change=change), self.assertRaises(ValueError):
                 planning.set_review_call_limit(candidate, 4)
             self.assertEqual(before, candidate)
-        for invalid in (-1, True, "3"):
+        for invalid in (0, True, "3"):
             state["planning"]["review_call_limit"] = invalid
             with self.subTest(stored_limit=invalid), self.assertRaises(ValueError):
                 planning.charge(state, "astra_finalize")
-
-    def test_explicit_unlimited_review_preserves_usage_and_survives_new_cycle(self):
-        state = self.state()
-        state.update(status='PAUSED_PLANNING_BUDGET', next_stage='astra_finalize')
-        state['planning']['astra_calls'] = 7
-        contract = copy.deepcopy(state['goal_contract'])
-        planning.set_review_call_limit(state, 0)
-        self.assertEqual(7, state['planning']['astra_calls'])
-        for _ in range(10):
-            planning.charge(state, 'astra_finalize')
-        self.assertEqual(17, state['planning']['astra_calls'])
-        self.assertEqual(contract, state['goal_contract'])
-        self.assertIn('17 plan-review calls used; unlimited', goals.render(state))
-        goals.feedback(state, 'Start a genuinely new cycle')
-        goals.install_draft(state, body(), origin='glm_draft')
-        self.assertEqual(0, planning.review_call_limit(state))
-        self.assertEqual('user_explicit', state['planning']['review_call_limit_origin'])
-        self.assertEqual(17, state['planning_history'][-1]['astra_calls'])
-
-    def test_unlimited_can_be_saved_at_stopped_checkpoint_but_not_during_a_stage(self):
-        state = self.state()
-        state.update(status='PAUSED_STAGE_ABANDONED', next_stage='sol')
-        state['active_stage'] = {'pid': 123}
-        with self.assertRaises(ValueError):
-            planning.set_review_call_limit(state, 0)
-        state.pop('active_stage')
-        planning.set_review_call_limit(state, 0)
-        self.assertEqual(0, planning.review_call_limit(state))
-        self.assertEqual('PAUSED_STAGE_ABANDONED', state['status'])
-        self.assertEqual('sol', state['next_stage'])
 
     def test_planner_permissions_deny_shell_custom_tools_and_delegation(self):
         with patch.dict(os.environ, {"OPENCODE_CONFIG_CONTENT": json.dumps({

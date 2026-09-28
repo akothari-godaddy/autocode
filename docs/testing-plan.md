@@ -3,15 +3,6 @@
 Status: proposed execution plan, not an executed validation report.
 Prepared against the working checkout on 2026-09-26, including uncommitted work.
 
-Execution update: current evidence and remaining coverage are recorded in
-[`VALIDATION.md`](../VALIDATION.md). Several initial harness blockers below have
-since been repaired; they describe the initial audit, not today's code. Synthetic
-`BUGFIX-01` and `FEATURE-01` now implement the T02/T03 fixtures. Campaign profiles
-use advertised GLM low/high/max and MiMo low/medium/high variants; GLM medium is
-not advertised by the configured route. Live approval/question gates require a
-real decision and are not auto-served by the harness. Two T02 reasoning comparisons
-are preserved as planning-budget blockers, not delivery passes.
-
 ## 1. Objective
 
 Establish how reliably Autocode can deliver approved work, starting with a tiny

@@ -1,4 +1,5 @@
 import copy
+import copy
 import hashlib
 import json
 from pathlib import Path
@@ -6,13 +7,13 @@ import shutil
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
 import autocode_goals as goals
 import autocode_planning as planning
-import autocode_resolver_human as human
 import autocode_support as support
 from goal_fixtures import body
 
@@ -68,16 +69,12 @@ class V2FlowTests(unittest.TestCase):
                                                  "options": [], "proposed_default": ""}]
         pending_state = self.state()
         goals.apply_requirements(pending_state, pending, artifact_sha256="pending")
-        self.assertEqual("RESOLVER_PENDING", pending_state["status"])
-        self.assertEqual([], pending_state["pending_questions"])
-        self.assertEqual(pending["open_blocking_questions"], human.internal_questions(pending_state))
-        self.assertIsNone(human.current(pending_state))
+        self.assertEqual("WAITING_FOR_USER", pending_state["status"])
 
     def test_no_contract_answer_feedback_and_render_use_requirements_token(self):
         state = self.state(); value = requirements()
         value["open_blocking_questions"] = [{"id": "Q1", "question": "Which?", "why": "Scope", "options": [], "proposed_default": ""}]
         goals.apply_requirements(state, value, artifact_sha256="abc")
-        self.assertEqual("escalate", human.evaluate(state))
         self.assertIn("Q1", goals.render(state))
         goals.answer(state, "Q1", "CLI")
         self.assertEqual("requirements:abc", state["answers"]["Q1"]["contract_token"])
@@ -85,25 +82,12 @@ class V2FlowTests(unittest.TestCase):
         self.assertEqual("requirements:abc", state["brief_feedback"][-1]["contract_token"])
         goals.apply_intervention_feedback(state, {"id": "feedback", "text": "Clarify again",
                                                   "observed_goal_token": "stale-token"}, {"applied_at": "now"})
-        self.assertEqual("stale-token", state["brief_feedback"][-1]["contract_token"])
+        self.assertEqual("requirements:abc", state["brief_feedback"][-1]["contract_token"])
         self.assertNotIn("goal_contract", state)
 
     def test_non_v2_no_contract_render_remains_byte_identical(self):
-        self.assertEqual("No contract yet; resume to interview with the Requirements Gatherer.",
-                          goals.render({"settings": {}, "status": "RUNNING"}))
-
-    def test_v2_is_explicit_opt_in_and_default_stage_role_contract_is_unchanged(self):
-        default = {"settings": {"joint_planning": True, "roles": {
-            "requirements": {"model": "requirements-model"}, "glm": {"model": "technical-model"},
-            "plan_reviewer": {"model": "reviewer-model"}}}}
-        self.assertEqual("requirements_gather", planning.entry_stage(default))
-        self.assertTrue(planning.is_planning(default, "astra_discovery"))
-        self.assertFalse(planning.is_planning(default, "requirements"))
-        self.assertEqual("glm", planning.role_for(default, "astra_discovery"))
-        self.assertEqual("plan_reviewer", planning.route_for(default, "astra_challenge"))
-        self.assertEqual("requirements-model", default["settings"]["roles"]["requirements"]["model"])
-        self.assertEqual("technical-model", default["settings"]["roles"]["glm"]["model"])
-        self.assertEqual("reviewer-model", default["settings"]["roles"]["plan_reviewer"]["model"])
+        self.assertEqual("No contract yet; resume to interview with Astra.",
+                         goals.render({"settings": {}, "status": "RUNNING"}))
 
     def test_v2_resolver_and_review_coverage(self):
         state = self.state()
@@ -112,7 +96,7 @@ class V2FlowTests(unittest.TestCase):
         state["planning"] = {"astra_calls": 0, "reports": {"plan_review": {"report": {"concerns": [
             {"id": "C1", "concern": "issue", "evidence_refs": ["x"], "requested_change": "fix", "acceptance_test": "test", "blocking": True}]}}}}
         revised = body(); revised["initial_task"] = {"objective": "x", "affected_paths": ["x"], "kind": "implement", "milestone_id": "M1", "requirements": ["x"], "acceptance_criteria": ["C1"], "validation_plan": ["x"]}
-        revised["milestones"][0]["affected_paths"] = ["x.py"]
+        revised["milestones"][0]["boundaries"] = ["x.py"]
         planning.apply(state, "plan_revise", {"contract": revised, "summary": "fixed", "responses": [
             {"concern_id": "C1", "response": "fixed", "evidence_refs": ["x"], "change": "x", "acceptance_test": "x"}]}, {"output": "revision"})
         self.assertEqual("plan_finalize", state["next_stage"])
@@ -122,17 +106,24 @@ class V2FlowTests(unittest.TestCase):
         state["planning"] = {"astra_calls": 0, "reports": {}, "final_token": None}
         planning.charge(state, "plan_review")
         planning.charge(state, "plan_finalize")
-        with self.assertRaisesRegex(planning.s.Paused, "2/2 plan-review calls used"):
+        with self.assertRaisesRegex(planning.s.Paused, "Two plan-review calls used"):
             planning.charge(state, "plan_finalize")
 
     def test_v2_roles_routes_and_context_engine_are_consistent(self):
-        settings = {"engine": "opencode", "joint_planning": True, "planning_flow": "v2", "roles": {
-            "requirements": {"engine": "opencode", "model": "fixture/requirements-model"},
-            "glm": {"engine": "opencode", "model": "fixture/technical-model"},
-            "plan_reviewer": {"engine": "opencode", "model": "fixture/independent-reviewer"}}}
+        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None,
+                               glm_model="zai-coding-plan/glm-5.3-flash")
+        settings = {"engine": "opencode", "roles": {role: {} for role in ("astra", "terra", "sol")},
+                    "transport_identity": {"engine": "opencode"}}
+        runner.configure_joint(settings, args, fresh=True)
+        self.assertEqual("v2", settings["planning_flow"])
+        for role in ("requirements_planner", "technical_planner"):
+            self.assertEqual("zai-coding-plan/glm-5.3-flash", settings["roles"][role]["model"])
+            self.assertEqual("opencode", settings["roles"][role]["engine"])
+        self.assertEqual(planning.PINNED_REVIEWER_MODEL, settings["roles"]["plan_reviewer"]["model"])
+        self.assertTrue(settings["roles"]["plan_reviewer"]["model_pinned"])
         state = {"task": "Task", "workspace": str(Path.cwd()), "settings": settings}
-        expected = {"requirements": "requirements", "plan": "glm",
-                    "plan_revise": "glm", "plan_review": "plan_reviewer",
+        expected = {"requirements": "requirements_planner", "plan": "technical_planner",
+                    "plan_revise": "technical_planner", "plan_review": "plan_reviewer",
                     "plan_finalize": "plan_reviewer"}
         for stage, role in expected.items():
             with self.subTest(stage=stage):
@@ -144,18 +135,17 @@ class V2FlowTests(unittest.TestCase):
                 self.assertEqual(planning.engine_for(settings, planning.route_for(state, stage)),
                                  packet["execution_engine"])
 
-    def test_v2_preserves_independent_requirements_planner_and_reviewer_routes(self):
-        settings = {"joint_planning": True, "planning_flow": "v2", "roles": {
-            "requirements": {"engine": "opencode", "model": "requirements-model"},
-            "glm": {"engine": "opencode", "model": "technical-model"},
-            "plan_reviewer": {"engine": "opencode", "model": "reviewer-model"}}}
-        state = {"settings": settings}
-        self.assertEqual("requirements", planning.route_for(state, "requirements"))
-        self.assertEqual("glm", planning.route_for(state, "plan"))
-        self.assertEqual("plan_reviewer", planning.route_for(state, "plan_review"))
-        self.assertEqual("requirements-model", settings["roles"]["requirements"]["model"])
-        self.assertEqual("technical-model", settings["roles"]["glm"]["model"])
-        self.assertEqual("reviewer-model", settings["roles"]["plan_reviewer"]["model"])
+    def test_v2_resume_updates_both_planners_but_not_the_pinned_reviewer(self):
+        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
+        settings = {"engine": "opencode", "roles": {role: {} for role in ("astra", "terra", "sol")},
+                    "transport_identity": {"engine": "opencode"}}
+        runner.configure_joint(settings, args, fresh=True)
+        reviewer = copy.deepcopy(settings["roles"]["plan_reviewer"])
+        args.glm_model = "zai-coding-plan/glm-5.3-flash"
+        runner.configure_joint(settings, args, fresh=False)
+        self.assertEqual("zai-coding-plan/glm-5.3-flash", settings["roles"]["requirements_planner"]["model"])
+        self.assertEqual("zai-coding-plan/glm-5.3-flash", settings["roles"]["technical_planner"]["model"])
+        self.assertEqual(reviewer, settings["roles"]["plan_reviewer"])
 
     def test_v2_stages_use_fresh_read_only_routes_and_planning_metadata(self):
         evidence = Path.cwd() / ".autocode" / "evidence" / "planning-flow-v2-workspaces"
@@ -164,10 +154,10 @@ class V2FlowTests(unittest.TestCase):
         self.addCleanup(shutil.rmtree, root, True)
         run = root / "run"; run.mkdir()
         schema = run / "schema.json"; schema.write_text(json.dumps({"type": "object", "properties": {}}))
-        settings = {"engine": "opencode", "joint_planning": True, "planning_flow": "v2", "roles": {
-            "requirements": {"engine": "opencode", "model": "fixture/requirements-model"},
-            "glm": {"engine": "opencode", "model": "fixture/technical-model"},
-            "plan_reviewer": {"engine": "opencode", "model": "fixture/reviewer-model"}}}
+        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
+        settings = {"engine": "opencode", "roles": {role: {} for role in ("astra", "terra", "sol")},
+                    "transport_identity": {"engine": "opencode"}}
+        runner.configure_joint(settings, args, fresh=True)
         state = {"settings": settings, "iteration": 1, "stages": [],
                  "sessions": {role: "saved-" + role for role in settings["roles"]}, "planning_artifacts": {}}
         for previous in ("requirements", "plan", "plan_review", "plan_revise"):
@@ -191,35 +181,45 @@ class V2FlowTests(unittest.TestCase):
                 self.assertEqual(settings["roles"][role]["model"], record["command"][record["command"].index("--model") + 1])
 
     def test_v2_predecessor_failures_stop_before_the_provider_launch(self):
-        settings = {"engine": "opencode", "joint_planning": True, "planning_flow": "v2", "roles": {
-            "requirements": {"engine": "opencode", "model": "fixture/requirements-model"},
-            "glm": {"engine": "opencode", "model": "fixture/technical-model"},
-            "plan_reviewer": {"engine": "opencode", "model": "fixture/reviewer-model"}}}
+        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
+        settings = {"engine": "opencode", "roles": {role: {} for role in ("astra", "terra", "sol")},
+                    "transport_identity": {"engine": "opencode"}}
+        runner.configure_joint(settings, args, fresh=True)
         state = {"settings": settings, "next_stage": "plan", "iteration": 1, "sessions": {}, "stages": []}
         with patch.object(runner.opencode, "launch", side_effect=AssertionError("provider launch")):
             with self.assertRaises(support.Paused) as error:
-                planning.prepare(state, "plan", Path.cwd() / ".autocode" / "evidence" / "state.json",
-                                 Path.cwd() / "tools" / "autocode-schemas")
+                runner.run_role(role="technical_planner", prompt="fixture", sandbox="read-only", workspace=Path.cwd(),
+                    run_dir=Path.cwd() / ".autocode" / "evidence", state=state, schema=Path("unused.json"),
+                    model=settings["roles"]["technical_planner"]["model"], allow_write=False, dry_run=True)
         self.assertEqual("PAUSED_INVALID_PREDECESSOR", error.exception.status)
 
-    def test_v2_reviewer_route_requires_the_independently_configured_role(self):
-        settings = {"joint_planning": True, "planning_flow": "v2", "roles": {"requirements": {}, "glm": {}}}
-        for stage in ("plan_review", "plan_finalize"):
-            with self.assertRaises(support.Paused) as error:
-                planning.route_for({"settings": settings}, stage)
-            self.assertEqual("PAUSED_PLANNING_ROUTE", error.exception.status)
-        settings["roles"]["plan_reviewer"] = {"engine": "opencode", "model": "reviewer-model"}
-        self.assertEqual("plan_reviewer", planning.route_for({"settings": settings}, "plan_review"))
+    def test_v2_reviewer_route_fails_closed_without_the_pinned_cursor_role(self):
+        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
+        settings = {"engine": "opencode", "roles": {role: {} for role in ("astra", "terra", "sol")},
+                    "transport_identity": {"engine": "opencode"}}
+        runner.configure_joint(settings, args, fresh=True)
+        for update in ({"remove": True}, {"model": "openai/gpt-5.6-sol"}, {"model_pinned": False}):
+            with self.subTest(update=update):
+                state = {"settings": copy.deepcopy(settings)}
+                if update.get("remove"):
+                    state["settings"]["roles"].pop("plan_reviewer")
+                else:
+                    state["settings"]["roles"]["plan_reviewer"].update(update)
+                for stage in ("plan_review", "plan_finalize"):
+                    with self.assertRaises(support.Paused) as error:
+                        planning.route_for(state, stage)
+                    self.assertEqual("PAUSED_REVIEWER_ROUTE", error.exception.status)
 
     def test_v2_predecessor_gate_prevents_a_provider_attempt(self):
-        settings = {"engine": "opencode", "joint_planning": True, "planning_flow": "v2", "roles": {
-            "requirements": {"engine": "opencode", "model": "fixture/requirements-model"},
-            "glm": {"engine": "opencode", "model": "fixture/technical-model"},
-            "plan_reviewer": {"engine": "opencode", "model": "fixture/reviewer-model"}}}
+        args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
+        settings = {"engine": "opencode", "roles": {role: {} for role in ("astra", "terra", "sol")},
+                    "transport_identity": {"engine": "opencode"}}
+        runner.configure_joint(settings, args, fresh=True)
         state = {"settings": settings, "next_stage": "plan", "iteration": 1, "sessions": {}, "stages": []}
         with self.assertRaises(support.Paused) as error:
-            planning.prepare(state, "plan", Path.cwd() / ".autocode" / "evidence" / "state.json",
-                             Path.cwd() / "tools" / "autocode-schemas")
+            runner.run_role(role="technical_planner", prompt="fixture", sandbox="read-only", workspace=Path.cwd(),
+                            run_dir=Path.cwd() / ".autocode" / "evidence", state=state, schema=Path("unused.json"),
+                            model=settings["roles"]["technical_planner"]["model"], allow_write=False, dry_run=True)
         self.assertEqual("PAUSED_INVALID_PREDECESSOR", error.exception.status)
         self.assertEqual([], state["stages"])
 

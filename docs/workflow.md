@@ -226,50 +226,6 @@ including earlier OpenCode-only runs and joint-planning runs that used the Requi
 Start a new run to use the current GPT Sol default in that case; saved sessions cannot
 move between CLIs. No global OpenCode or Codex configuration is changed.
 
-## Bug fixes
-
-A bug report goes through the same conversation and every stage as any other
-task: requirements, planning, plan challenge, revision, final plan review, your
-approval, orchestrator, Builder, Validator and Completion Owner.
-
-- **Job type.** The Requirements Gatherer proposes `task_kind` (`bugfix` or
-  `build`), the Planner writes it into the contract, and the Plan Reviewer
-  confirms or challenges it. The brief you approve says "Job type: bug fix". It
-  is part of the hashed contract, so changing it needs approval again. Saved
-  runs without it are `build` and behave as before.
-- **A defect-shaped plan.** For a bug fix the planning stages keep the plan to
-  the reproduction, the root cause, the smallest correct fix and a regression
-  test in the project's own suite. The same stages run; they review less.
-- **Runner-owned proof, no model call.** Just before the Validator runs, the
-  runner executes `regression_proof` against the run's base commit (the commit
-  the run started from). The new or changed tests must fail on the original
-  code and pass on the current code, and every test that passed on base must
-  still pass (not fail, be skipped or disappear). The checks run in clean scratch
-  worktrees, never in the task workspace. The result is bound to the exact
-  source revision and appears as a runner-owned step with zero tokens in the
-  stage history.
-- **Reviewers use it instead of repeating it.** The Validator and the Completion
-  Owner receive `regression_proof`. With a passing proof the Validator runs the
-  regression command once as its own check instead of the whole suite. With a
-  failing proof the Validator reports FAIL and the Completion Owner returns
-  REWORK, which sends the proof's reasons back to the Builder.
-- **The completion gate requires it.** A bug fix cannot reach `TASK_COMPLETE`
-  unless the proof passed for the current source. A refusal names the reason.
-
-Test commands are detected (pytest, unittest, Go, Jest/Vitest/Mocha, RSpec,
-Cargo, `make test`); `--test-command` and `--regression-command` set them for a
-new run. With per-test results (pytest, unittest) a proof needs a named test
-that ran and failed on base and passed on the fix; a test that only fails to
-import on base is not a reproduction. Without per-test results exit codes decide.
-When nothing can be proven (for example no test command is found), the proof is
-`UNVERIFIED` and the bug fix cannot complete until a command is supplied.
-
-Planning reports that omit only a provenance list (such as `code_refs` or
-`source_refs`) now get an empty list instead of a report-repair model call; the
-raw report is kept and every semantic check still runs. Reports that omit a list
-carrying a decision (requirements, questions, concerns, responses) still go to
-report repair.
-
 ## Conversation and approval
 
 The first stage runs **read-only requirements gathering** and saves a structured JSON handoff

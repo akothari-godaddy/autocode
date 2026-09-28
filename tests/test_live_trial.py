@@ -246,6 +246,39 @@ class LiveTrialSmokeTest(unittest.TestCase):
         self.assertTrue(all(check["ok"] for check in payload["checks"]))
 
 
+class FixModeTest(unittest.TestCase):
+    """`--mode fix` drives `autocode fix` and is judged by the same independent oracle."""
+
+    def test_bugfix01_fixture_fix_mode_reaches_pass_with_cost(self):
+        with tempfile.TemporaryDirectory(prefix="live-trial-fix-") as temp, \
+                mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": str(Path(temp) / "evidence")}):
+            code = live_trial.main(["BUGFIX-01", "--mode", "fix", "--profile", "fixture",
+                                    "--workspace", str(Path(temp) / "trial"), "--timeout", "120"])
+            payload = json.loads(next(Path(temp, "evidence").glob("BUGFIX-01/*/live-trial.json")).read_text())
+        self.assertEqual(0, code)
+        self.assertEqual((scenarios.PASS, "READY", "fix"),
+                         (payload["verdict"], payload["runner_status"], payload["mode"]))
+        self.assertEqual(1, payload["cost"]["model_calls"])
+
+    def test_fix_status_classification(self):
+        self.assertEqual("complete", live_trial.classify_fix_status("READY"))
+        for status in ("NEEDS_REVIEW", "NEEDS_INPUT", "UNVERIFIED", "ENV_BROKEN"):
+            self.assertEqual("paused", live_trial.classify_fix_status(status))
+        for status in ("FAILED", "ERROR", ""):
+            self.assertEqual("stopped", live_trial.classify_fix_status(status))
+
+    def test_fix_command_maps_profile_roles(self):
+        command = live_trial.fix_command(Path("/p"), profiles.resolve("glm53-mimo"), "Fix it")
+        self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", command[command.index("--model") + 1])
+        self.assertEqual("zai-coding-plan/glm-5.3", command[command.index("--reviewer-model") + 1])
+        self.assertEqual("opencode", command[command.index("--provider") + 1])
+
+    def test_fixture_fix_mode_refuses_scenarios_without_reference(self):
+        with tempfile.TemporaryDirectory() as temp:
+            with self.assertRaisesRegex(live_trial.TrialError, "reference delivery"):
+                live_trial.install_fix_fixture(Path(temp), "LIVE-01")
+
+
 class DrivingBoundsTest(unittest.TestCase):
     def test_deadline_is_shared_across_cli_steps(self):
         with tempfile.TemporaryDirectory() as temp:

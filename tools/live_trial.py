@@ -2,10 +2,8 @@
 """Live-trial driver: run one scenario against one model profile and record evidence.
 
 Verdicts come from the scenario's independent oracle, never from the runner's
-own completion claim. Real human reviews stop for operator action; only the
-offline fixture simulates review approval. The harness never writes state.json.
-The timeout covers CLI driving, not workspace setup, process cleanup grace,
-independent oracle execution, or evidence/report I/O.
+own completion claim. Human gates are driven through the documented CLI flags
+(``--answer``, ``--approve-goal``); the harness never writes ``state.json``.
 
 Usage:
     python3 tools/live_trial.py LIVE-01 --profile fixture
@@ -36,21 +34,15 @@ sys.path.insert(0, str(HERE))
 
 import live_profiles as profiles  # noqa: E402
 import live_scenarios as scenarios  # noqa: E402
-import autocode_process as processes  # noqa: E402
-import autocode_support as support  # noqa: E402
 from autopilot_testkit import Bundle, source_revision  # noqa: E402
-from score_autocode_run import usage_summary  # noqa: E402
 
 AUTOCODE = HERE / "autocode.py"
 PROVIDER_BIN = HERE / "live_fixture_provider.py"
+FIX_AGENT_BIN = HERE / "fake_fix_agent.py"
 
 
 class TrialError(RuntimeError):
     """Harness-level failure: the trial could not be attempted."""
-
-
-class HumanReviewRequired(TrialError):
-    """An actual user decision cannot be supplied by this harness."""
 
 
 # --- workspace -----------------------------------------------------------
@@ -90,10 +82,6 @@ def install_fixture_provider(root: Path) -> dict:
 
 # --- runner driving ------------------------------------------------------
 
-TRIAL_LIMITS = {'max_iterations': 8, 'max_seconds': 1800, 'max_stage_seconds': 600,
-                'max_tool_seconds': 300, 'max_idle_seconds': 180, 'max_milestone_seconds': 1800}
-
-
 def autocode_command(project: Path, profile: dict, task: str | None,
                      run_dir: Path | None, extra: list[str]) -> list[str]:
     cmd = [sys.executable, str(AUTOCODE)]
@@ -102,13 +90,6 @@ def autocode_command(project: Path, profile: dict, task: str | None,
     cmd += ["--workspace", str(project), "--no-chat", "--in-place"]
     if run_dir is not None:
         cmd += ["--run-dir", str(run_dir)]
-    if task is not None:
-        cmd += ['--autoresolver-managed-limits']
-        for name, default in TRIAL_LIMITS.items():
-            value = (profile.get('limits') or {}).get(name, default)
-            if type(value) is not int or value <= 0:
-                raise TrialError(f'{name} must be a positive finite integer')
-            cmd += ['--' + name.replace('_', '-'), str(value)]
     if profile["provider"] == "fixture":
         # The scripted provider is installed as the `codex` binary on PATH.
         # Joint planning is required so planning stages use the rich schemas.
@@ -124,37 +105,38 @@ def autocode_command(project: Path, profile: dict, task: str | None,
                 "--plan-reviewer-model", "gpt-6-astra"]
     else:
         cmd += profiles.cli_overrides(profile)
-        cmd += ["--engine", "opencode", "--provider", profile["provider"]]
+        cmd += ["--provider", profile["provider"]]
         if profile.get("joint_planning", True):
             cmd += ["--joint-planning"]
     return cmd + extra
 
 
-def invoke(cmd: list[str], env: dict, cwd: Path, timeout: float) -> subprocess.CompletedProcess:
-    # Files avoid pipe backpressure and EOF waits on orphaned descendants.
-    with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
-        child = subprocess.Popen(cmd, env=env, cwd=cwd, stdout=stdout, stderr=stderr,
-                                 start_new_session=True)
-        owned = []
-        error = None
-        timed_out = False
+def invoke(cmd: list[str], env: dict, cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    with subprocess.Popen(cmd, env=env, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          text=True, start_new_session=True) as proc:
         try:
-            returncode, timed_out = processes.wait_for_stage(
-                child, timeout, lambda rows: owned.__setitem__(slice(None), rows))
-        except (processes.ProcessError, OSError, subprocess.TimeoutExpired) as failure:
-            error = failure
-            returncode = child.poll()
-        stdout.seek(0)
-        stderr.seek(0)
-        result = subprocess.CompletedProcess(cmd, returncode,
-            stdout.read().decode(errors="replace"), stderr.read().decode(errors="replace"))
-        if timed_out or error:
-            failure = subprocess.TimeoutExpired(cmd, timeout) if timed_out else error
-            failure.stdout, failure.stderr = result.stdout, result.stderr
-            failure.returncode = returncode
-            failure.processes = getattr(failure, "processes", owned)
-            raise failure
-        return result
+            out, err = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Providers can start their own process groups, so stopping only the
+            # CLI would leave model calls running after the trial deadline.
+            try:
+                descendants = psutil.Process(proc.pid).children(recursive=True)
+            except psutil.NoSuchProcess:
+                descendants = []
+            proc.kill()
+            for child in descendants:
+                try:
+                    child.kill()
+                except psutil.NoSuchProcess:
+                    pass
+            psutil.wait_procs(descendants, timeout=3)
+            try:
+                proc.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.stdout.close()
+                proc.stderr.close()
+            raise TrialError(f"runner-driving wall-clock budget exhausted; stopped CLI and its provider descendants") from None
+        return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def load_state(run_dir: Path) -> dict:
@@ -174,45 +156,27 @@ def drive(project: Path, root: Path, profile: dict, task: str,
         env.pop("AUTOCODE_PROVIDER", None)
 
     steps: list[dict] = []
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
     run_dir: Path | None = None
 
     # 0 = finished, 2 = paused for a human gate. Both are successful CLI exits.
     def step(kind: str, cmd: list[str], *, allow_codes=(0, 2)) -> subprocess.CompletedProcess:
-        remaining = deadline - time.monotonic()
-        record = {"kind": kind, "cmd": cmd, "remaining_seconds": max(0, remaining)}
-        try:
-            if remaining <= 0:
-                raise TrialError("CLI-driving deadline exhausted before launch")
-            if len(steps) >= budget_stages:
-                raise TrialError("CLI invocation budget exhausted before launch")
-            bundle.log("cli_step", **record)
-            proc = invoke(cmd, env, root, remaining)
-        except (TrialError, subprocess.TimeoutExpired, OSError, processes.ProcessError) as error:
-            def text(value):
-                return value.decode(errors="replace") if isinstance(value, bytes) else value or ""
-            record.update(error_type=type(error).__name__, error=str(error),
-                          timed_out=isinstance(error, subprocess.TimeoutExpired) or remaining <= 0,
-                          returncode=getattr(error, "returncode", None),
-                          stdout_tail=text(getattr(error, "stdout", ""))[-800:],
-                          stderr_tail=text(getattr(error, "stderr", ""))[-800:],
-                          processes=getattr(error, "processes", []))
-            steps.append(record)
-            bundle.log("cli_result", **record)
-            failure = TrialError(f"{kind}: {error}")
-            failure.steps = steps
-            raise failure from error
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            raise TrialError(f"wall-clock budget exceeded after {len(steps)} CLI steps")
+        if len(steps) >= budget_stages:
+            raise TrialError(f"stage budget exceeded after {len(steps)} CLI steps")
+        bundle.log("cli_step", kind=kind, cmd=cmd)
+        proc = invoke(cmd, env, root, remaining)
         record = {"kind": kind, "cmd": cmd, "returncode": proc.returncode,
                   "stdout_tail": proc.stdout[-800:], "stderr_tail": proc.stderr[-800:]}
         steps.append(record)
         bundle.log("cli_result", kind=kind, returncode=proc.returncode,
                    stdout_tail=record["stdout_tail"], stderr_tail=record["stderr_tail"])
         if proc.returncode not in allow_codes:
-            failure = TrialError(
+            raise TrialError(
                 f"{kind} exited {proc.returncode}: "
                 f"{(proc.stderr or proc.stdout)[-500:]}")
-            failure.steps = steps
-            raise failure
         return proc
 
     # 1. First launch creates the run under <workspace>/.autocode/runs/.
@@ -224,7 +188,6 @@ def drive(project: Path, root: Path, profile: dict, task: str,
 
     # 2. Serve human gates until the run reaches a terminal or blocked state.
     seen: set[str] = set()
-    blocker = None
     for _ in range(budget_stages):
         state = load_state(run_dir)
         status = state.get("status", "")
@@ -238,13 +201,8 @@ def drive(project: Path, root: Path, profile: dict, task: str,
         if status.startswith("PAUSED_") and not _resumable(state):
             break
 
-        try:
-            if _serve_gate(state, run_dir, project, profile, step):
-                continue
-        except HumanReviewRequired as error:
-            blocker = str(error)
-            bundle.log("human_review_blocked", reason=blocker, run_dir=str(run_dir))
-            break
+        if _serve_gate(state, run_dir, project, profile, step):
+            continue
 
         # No gate to serve: one ordinary invocation, then re-check.
         before_state = state
@@ -263,7 +221,7 @@ def drive(project: Path, root: Path, profile: dict, task: str,
     final = load_state(run_dir)
     bundle.state("final", final)
     bundle.log("drive_finished", status=final.get("status"), steps=len(steps))
-    return {"state": final, "steps": steps, "run_dir": run_dir, "blocker": blocker}
+    return {"state": final, "steps": steps, "run_dir": run_dir}
 
 
 def _progressed(before: dict, after: dict) -> bool:
@@ -283,42 +241,12 @@ def _discover_run_dir(project: Path) -> Path | None:
 
 def _resumable(state: dict) -> bool:
     status = state.get("status", "")
-    # Operational pauses need an explicit inspected recovery, not a trial loop
-    # that redispatches unchanged work or replenishes its budget.
-    return status in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER")
+    return status in ("AWAITING_GOAL_APPROVAL", "WAITING_FOR_USER", "PAUSED_PLANNING_BUDGET")
 
 
 def _serve_gate(state: dict, run_dir: Path, project: Path, profile: dict, step) -> bool:
     """Answer one human gate from saved state. Returns False when none applies."""
     status = state.get("status", "")
-
-    request = state.get("user_request") or {}
-    if profile['provider'] != 'fixture':
-        if status == 'AWAITING_GOAL_APPROVAL':
-            raise HumanReviewRequired(
-                f'Goal approval required in {run_dir}. Inspect --show-goal and approve the '
-                f'current displayed token {state.get("displayed_goal")!r}; the live harness cannot approve.')
-        if request.get('kind') != 'human_review' and (
-                state.get('pending_questions') or status == 'PAUSED_PLANNING_BUDGET'):
-            raise HumanReviewRequired(
-                f'An explicit user decision is required in {run_dir}. Inspect the saved questions '
-                'or planning-budget pause; the live harness cannot choose answers or expand the planning budget.')
-    if request.get("kind") == "human_review":
-        if profile["provider"] != "fixture":
-            raise HumanReviewRequired(
-                f"Human review required in {run_dir}. Inspect the current artifact and "
-                "review criteria, then use --approve-review CRITERION_ID --review-token "
-                "TOKEN with the current displayed_review token; the live harness cannot approve.")
-        token = state.get("displayed_review")
-        criteria = request.get("criteria") or []
-        if not token or not criteria:
-            raise HumanReviewRequired("Fixture review lacks displayed_review or criteria; cannot simulate approval")
-        # Submit one exact snapshot's criteria together; never reuse its token
-        # across subsequent CLI invocations that may change the artifact.
-        extra = [arg for cid in criteria for arg in ("--approve-review", cid)]
-        step("fixture-approve-review", autocode_command(
-            project, profile, None, run_dir, extra + ["--review-token", token]))
-        return True
 
     if status == "PAUSED_PLANNING_BUDGET":
         # Two plan-review calls used. The documented recovery is explicit
@@ -352,6 +280,18 @@ def _serve_gate(state: dict, run_dir: Path, project: Path, profile: dict, step) 
                 project, profile, None, run_dir, ["--answer", f"{qid}={default}"]),
                 allow_codes=(0, 2))
         return True
+
+    if status == "WAITING_FOR_USER" or state.get("user_request"):
+        request = state.get("user_request") or {}
+        if request.get("kind") == "human_review":
+            token = state.get("displayed_review")
+            if not token:
+                raise TrialError("human review requested without displayed_review token")
+            for cid in request.get("criteria", []):
+                step("accept-review", autocode_command(
+                    project, profile, None, run_dir, ["--approve-review", cid, "--review-token", token]),
+                    allow_codes=(0, 2))
+            return True
 
     return False
 
@@ -452,14 +392,90 @@ def classify_program_status(status: str) -> str:
     return "stopped"
 
 
+# --- fix mode ------------------------------------------------------------
+
+FIX_COMPLETE = ("READY",)
+FIX_PAUSES = ("NEEDS_REVIEW", "NEEDS_INPUT", "UNVERIFIED", "ENV_BROKEN")
+
+
+def fix_command(project: Path, profile: dict, task: str) -> list[str]:
+    """`autocode fix` with the profile's Builder and Validator routes as Builder and Reviewer."""
+    cmd = [sys.executable, str(AUTOCODE), "fix", task, "--workspace", str(project)]
+    if profile["provider"] == "fixture":
+        return cmd + ["--engine", "codex"]
+    cmd += ["--provider", profile["provider"]]
+    if not profile.get("passthrough"):
+        cmd += ["--model", profiles.model_for(profile, "builder"),
+                "--reviewer-model", profiles.model_for(profile, "validator")]
+        for flag, role in (("--reasoning-effort", "builder"), ("--reviewer-reasoning-effort", "validator")):
+            effort = profiles.effort_for(profile, role)
+            if effort and effort != "none":
+                cmd += [flag, effort]
+    return cmd
+
+
+def install_fix_fixture(root: Path, scenario_id: str) -> dict:
+    """Offline fix-mode fixture: one Builder call that writes the scenario's reference delivery."""
+    import scenario_references as references
+    reference = references.REFERENCES.get(scenario_id)
+    if not reference:
+        raise TrialError(f"--profile fixture in fix mode needs a reference delivery; {scenario_id} has none")
+    env = install_fixture_provider(root)
+    target = root / "bin" / "codex"
+    shutil.copy2(FIX_AGENT_BIN, target)
+    target.chmod(0o755)
+    report = {"status": "FIXED", "summary": "Reference delivery (offline fixture; not model output)",
+              "diagnosis": {"observed": "", "reproduction": "", "root_cause": "fixture", "affected_paths": [],
+                            "invariant": ""},
+              "regression_tests": [], "regression_command": "", "test_command": "", "question": ""}
+    script = root / "fix-fixture.json"
+    script.write_text(json.dumps({"calls": [
+        {"role": "builder", "write": reference, "report": report},
+        {"role": "reviewer", "report": {"verdict": "APPROVE", "summary": "fixture", "findings": []}},
+    ]}))
+    return {**env, "AUTOCODE_FAKE_FIX_SCRIPT": str(script)}
+
+
+def drive_fix(project: Path, root: Path, profile: dict, spec: dict, scenario_id: str,
+              timeout: int, bundle: Bundle) -> dict:
+    """One `autocode fix` invocation; the fix record is read, never written, by this driver."""
+    env = dict(os.environ, AUTOCODE_HOME=str(root / "registry"), PYTHONDONTWRITEBYTECODE="1")
+    if profile["provider"] == "fixture":
+        env.update(install_fix_fixture(root, scenario_id))
+    cmd = fix_command(project, profile, spec["task"])
+    bundle.log("cli_step", kind="fix", cmd=cmd)
+    proc = invoke(cmd, env, root, timeout)
+    step = {"kind": "fix", "cmd": cmd, "returncode": proc.returncode,
+            "stdout_tail": proc.stdout[-800:], "stderr_tail": proc.stderr[-800:]}
+    bundle.log("cli_result", kind="fix", returncode=proc.returncode,
+               stdout_tail=step["stdout_tail"], stderr_tail=step["stderr_tail"])
+    records = sorted((project / ".autocode" / "fix").glob("*/fix.json"))
+    if len(records) != 1:
+        raise TrialError(f"autocode fix left {len(records)} run records (exit {proc.returncode}): "
+                         f"{(proc.stderr or proc.stdout)[-500:]}")
+    record = json.loads(records[0].read_text())
+    bundle.state("fix", record)
+    bundle.log("drive_finished", status=record.get("status"), cost=record.get("cost"))
+    return {"state": {"status": record.get("status", ""), "fix": record}, "steps": [step],
+            "run_dir": records[0].parent, "product": Path(record.get("workspace") or project),
+            "cost": record.get("cost")}
+
+
+def classify_fix_status(status: str) -> str:
+    if status in FIX_COMPLETE:
+        return "complete"
+    if status in FIX_PAUSES:
+        return "paused"
+    return "stopped"
+
+
 # --- verdict -------------------------------------------------------------
 
 def judge(run: dict, spec: dict, project: Path, bundle: Bundle) -> scenarios.OracleResult:
-    if run.get("blocker"):
-        return scenarios.OracleResult(scenarios.HONEST_BLOCKER, run["blocker"], [])
     state = run["state"]
     status = state.get("status", "")
     kind = (classify_program_status(status) if "program" in state
+            else classify_fix_status(status) if "fix" in state
             else scenarios.classify_runner_status(status))
 
     # The oracle scores the delivered workspace regardless of how the run ended,
@@ -495,10 +511,6 @@ def write_report(bundle: Bundle, scenario_id: str, spec: dict,
                  profile_name: str, profile: dict, result: scenarios.OracleResult,
                  run: dict) -> Path:
     payload = {
-        "report_version": 2,
-        "attempt_id": hashlib.sha256(str(bundle.dir.resolve()).encode()).hexdigest(),
-        "run_identity": hashlib.sha256(str(Path(run['run_dir']).resolve()).encode()).hexdigest()
-            if run.get('run_dir') else None,
         "scenario": scenario_id, "title": spec["title"],
         "task_type": spec.get("task_type", "live"),
         "profile": profile_name, "profile_detail": profile,
@@ -508,24 +520,10 @@ def write_report(bundle: Bundle, scenario_id: str, spec: dict,
         "runner_phase": run["state"].get("phase"),
         "mode": run.get("mode", "run"),
         "product": str(run.get("product", "")),
+        "cost": run.get("cost"),
         "baseline": spec.get("baseline"),
         "source": source_revision(),
         "driver_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-        "steps": run.get("steps", []),
-        "error": run.get("error"),
-        "candidate_revision": run.get("candidate_revision"),
-        "oracle_sha256": run.get("oracle_sha256"),
-        "blocker": run.get("blocker"),
-        "measurement": {
-            "schema_version": 1,
-            "execution_kind": "fixture" if profile.get("provider") == "fixture" else "live",
-            "workload_kind": run.get("workload_kind"),
-            "baseline_revision": run.get("baseline_revision"),
-            "baseline_content_sha256": run.get("baseline_content_sha256"),
-            "task_sha256": hashlib.sha256(spec["task"].encode()).hexdigest(),
-            "elapsed_seconds": run.get("elapsed_seconds"),
-            "usage": usage_summary(run["state"]),
-        },
     }
     path = bundle.dir / "live-trial.json"
     path.write_text(json.dumps(payload, indent=2, default=str))
@@ -535,12 +533,6 @@ def write_report(bundle: Bundle, scenario_id: str, spec: dict,
 # --- entry point ---------------------------------------------------------
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    def positive(value):
-        value = int(value)
-        if value <= 0:
-            raise argparse.ArgumentTypeError('must be a positive finite integer')
-        return value
-
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("scenario", nargs="?", help="scenario id, e.g. LIVE-01 or BUGFIX-01 (see --list)")
@@ -551,21 +543,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                         help="parent directory for the disposable project (default: temp)")
     parser.add_argument("--source", type=Path,
                         help="existing project directory to use as the baseline")
-    parser.add_argument("--budget-stages", type=positive, default=40,
+    parser.add_argument("--budget-stages", type=int, default=40,
                         help="max CLI invocations before an honest budget stop")
-    parser.add_argument("--timeout", type=positive, default=1800,
-                          help="CLI-driving seconds only; excludes setup, cleanup grace, oracle and report I/O")
-    for name, default in TRIAL_LIMITS.items():
-        parser.add_argument('--' + name.replace('_', '-'), type=positive, default=default,
-                            help=f'Persisted runtime bound for a new trial (default: {default})')
+    parser.add_argument("--timeout", type=int, default=1800,
+                        help="wall-clock seconds for runner driving; oracle scoring and bounded cleanup are separate")
     parser.add_argument("--i-authorize-live-model-spend", action="store_true",
                         help="required for any non-fixture profile")
     parser.add_argument("--authorize-deployment", action="store_true",
                         help="explicitly authorize deployment workstreams in --mode program; "
                              "independent of live model spend authorization")
-    parser.add_argument("--mode", choices=["run", "program"], default="run",
+    parser.add_argument("--mode", choices=["run", "program", "fix"], default="run",
                         help="run: one autocode run (default); program: `autocode program run` with the "
-                             "scenario's program_manifest, gates served per child run")
+                             "scenario's program_manifest, gates served per child run; fix: one "
+                             "`autocode fix` of the scenario's report (bug-fix scenarios)")
     parser.add_argument("--score-only", type=Path, metavar="PROJECT",
                         help="do not drive anything: score an already delivered workspace with the oracle")
     return parser.parse_args(argv)
@@ -582,10 +572,6 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     spec = scenarios.scenario(args.scenario)
     profile = profiles.resolve(args.profile)
-    profile['limits'] = {name: getattr(args, name) for name in TRIAL_LIMITS}
-    if spec.get('synthetic_seed_only') and (args.source or spec.get('seed_from')):
-        print(f'{args.scenario} requires its frozen synthetic seed; --source is not allowed', file=sys.stderr)
-        return 2
 
     if args.score_only:
         project = args.score_only.resolve()
@@ -625,11 +611,6 @@ def main(argv: list[str] | None = None) -> int:
         temp = tempfile.TemporaryDirectory(prefix="autopilot-live-")
         root = Path(temp.name).resolve()
 
-    started = time.monotonic()
-    baseline_revision = None
-    baseline_content_sha256 = None
-    oracle_hash = None
-    workload_kind = "repository" if (args.source or spec.get("seed_from")) else "synthetic"
     try:
         project = make_workspace(root)
         # Optional pre-existing project: "feature in an existing project" trials.
@@ -661,33 +642,18 @@ def main(argv: list[str] | None = None) -> int:
                 check=True)
             bundle.log("seeded", files=sorted(seed))
         bundle.log("workspace_ready", project=str(project), mode=args.mode)
-        oracle_path = Path(scenarios.__file__).resolve()
-        oracle_hash = hashlib.sha256(oracle_path.read_bytes()).hexdigest()
-        baseline_snapshot = support.snapshot(project)
-        baseline_revision = baseline_snapshot['revision']
-        baseline_content_sha256 = support.digest(baseline_snapshot['files'])
-        bundle.log('oracle_fingerprint', path=str(oracle_path), sha256=oracle_hash,
-                   baseline_revision=baseline_revision, baseline_content_sha256=baseline_content_sha256)
         if args.mode == "program":
             run = drive_program(project, root, profile, spec["program_manifest"],
                                 args.budget_stages, args.timeout, bundle,
                                 authorize_deployment=args.authorize_deployment)
+        elif args.mode == "fix":
+            run = drive_fix(project, root, profile, spec, args.scenario, args.timeout, bundle)
         else:
             run = drive(project, root, profile, spec["task"],
                         args.budget_stages, args.timeout, bundle)
         run["mode"] = args.mode
-        if hashlib.sha256(oracle_path.read_bytes()).hexdigest() != oracle_hash:
-            raise TrialError('Oracle source changed during the trial; result cannot be trusted')
-        run['candidate_revision'] = support.snapshot(project)['revision']
-        run['oracle_sha256'] = oracle_hash
         # A program's product is the merged integration branch, never the untouched project root.
         result = judge(run, spec, run.get("product", project), bundle)
-        if (hashlib.sha256(oracle_path.read_bytes()).hexdigest() != oracle_hash
-                or support.snapshot(project)['revision'] != run['candidate_revision']):
-            raise TrialError('Oracle or candidate changed during scoring; result cannot be trusted')
-        run.update(baseline_revision=baseline_revision, baseline_content_sha256=baseline_content_sha256,
-                   workload_kind=workload_kind,
-                   elapsed_seconds=time.monotonic() - started)
         write_report(bundle, args.scenario, spec, args.profile, profile, result, run)
         summary = (f"{args.scenario} [{args.profile}] {result.status}: {result.summary}")
         try:
@@ -705,6 +671,12 @@ def main(argv: list[str] | None = None) -> int:
         run_dir = _discover_run_dir(project)
         state = load_state(run_dir) if run_dir else {}
         product = project
+        if args.mode == "fix":
+            records = sorted((project / ".autocode" / "fix").glob("*/fix.json"))
+            if len(records) == 1:
+                saved = json.loads(records[0].read_text())
+                state = {"status": saved.get("status"), "fix": saved}
+                product = Path(saved.get("workspace") or project)
         if args.mode == "program":
             paths = list((project / ".autocode/programs").glob("*/state.json"))
             if len(paths) == 1:
@@ -714,13 +686,8 @@ def main(argv: list[str] | None = None) -> int:
         oracle = spec["oracle"](product)
         result = scenarios.OracleResult(scenarios.ERROR, f"{error}; {oracle.summary}", oracle.checks)
         bundle.state("final", state)
-        run = {"state": state, "steps": getattr(error, "steps", []), "error": str(error),
-               "run_dir": run_dir, "product": product, "mode": args.mode,
-               "baseline_revision": baseline_revision,
-               "baseline_content_sha256": baseline_content_sha256,
-               "oracle_sha256": oracle_hash, "workload_kind": workload_kind,
-               "elapsed_seconds": time.monotonic() - started}
-        write_report(bundle, args.scenario, spec, args.profile, profile, result, run)
+        write_report(bundle, args.scenario, spec, args.profile, profile, result,
+                     {"state": state, "mode": args.mode, "product": product})
         bundle.finish(scenarios.ERROR, str(error))
         print(f"{args.scenario} ERROR: {error}", file=sys.stderr)
         print(f"evidence: {bundle.dir}", file=sys.stderr)
