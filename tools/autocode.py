@@ -226,6 +226,27 @@ def repair_limit(state):
     return limit
 
 
+def reset_report_repair_for_resume(state):
+    """Clear the bounded report-repair attempt count for an explicit resume.
+
+    Mirrors resolver_runtime.reset_for_resume: the count is a current-cycle
+    allowance an operator can renew after fixing the underlying cause, not a
+    lifetime cap, but clearing it is recorded rather than silent, and the
+    erased attempts fold into a lifetime total this function never resets.
+    """
+    pending = state.get('pending_report_repair')
+    if not isinstance(pending, dict):
+        return
+    prior = pending.get('attempts', 0)
+    pending['attempts'] = 0
+    if not prior:
+        return
+    state['report_repair_lifetime_attempts'] = state.get('report_repair_lifetime_attempts', 0) + prior
+    state.setdefault('user_events', []).append({
+        'kind': 'report_repair_resume_epoch', 'actor': 'user_cli', 'at': now(),
+        'cleared_attempts': prior, 'lifetime_attempts': state['report_repair_lifetime_attempts']})
+
+
 def recover_legacy_report_repair(state, run_dir, workspace):
     """Upgrade one pre-report-repair checkpoint at an explicit resume boundary.
 
@@ -870,8 +891,7 @@ def automatically_recover_capacity_stage(state, run_dir, workspace, error):
     state["human_reviews"] = {}
     state.pop("displayed_review", None)
 
-    next_stage = ("terra" if workflow.final_only(state) and record["role"] in ("terra", "sol")
-                  else "astra_review" if record["role"] != "astra" else record["stage"])
+    next_stage, phase = timeout_recovery_route(state, record)
     retry_number = len(recovered) + 1
     recovery = {"at": now(), "attempt_id": attempt_id(record), "role": record["role"],
                 "stage": record["stage"], "source_revision": after["revision"],
@@ -889,7 +909,7 @@ def automatically_recover_capacity_stage(state, run_dir, workspace, error):
         "at": recovery["at"], "attempt_id": recovery["attempt_id"], "retry_number": retry_number,
         "next_stage": next_stage, "changed_files": record["changed_files"]})
     state["recovery_context"] = recovery
-    state.update(status="RUNNING", phase="EXECUTING", next_stage=next_stage)
+    state.update(status="RUNNING", phase=phase, next_stage=next_stage)
     state.pop("stop_reason", None)
     write_json(run_dir / "state.json", state)
     for artifact in originals:
@@ -922,6 +942,28 @@ def timeout_recovery_guard(state):
 
 def count_automatic_recovery(state):
     state["automatic_recoveries_since_resume"] = recovery_count(state) + 1
+
+
+def timeout_recovery_route(state, record):
+    """Return the (next_stage, phase) that continues after an archived timeout.
+
+    Planning and discovery stages run read-only against an unapproved draft, so
+    a timed-out attempt returns to its own owner under the existing planning
+    caps (``autoplanner.charge`` still applies). Routing them to the execution
+    reviewer would fail the next admission with PAUSED_GOAL_UNAPPROVED.
+    """
+    stage, role = record["stage"], record["role"]
+    if planning.is_planning(state, stage):
+        return stage, "PLANNING"
+    if stage == "astra_discovery":
+        return stage, "DISCOVERING"
+    if stage == "astra_plan":
+        return stage, "READY_TO_EXECUTE"
+    # Final-audit-only runs keep the Builder in charge of implementation. Other routing
+    # modes retain the established Plan Reviewer recovery review before another writer.
+    if workflow.final_only(state) and role in ("terra", "sol"):
+        return "terra", "EXECUTING"
+    return ("astra_review" if role != "astra" else stage), "EXECUTING"
 
 
 def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
@@ -971,10 +1013,7 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     state["human_reviews"] = {}
     state.pop("displayed_review", None)
 
-    # Final-audit-only runs keep the Builder in charge of implementation. Other routing
-    # modes retain the established Plan Reviewer recovery review before another writer.
-    next_stage = ("terra" if workflow.final_only(state) and record["role"] in ("terra", "sol")
-                  else "astra_review" if record["role"] != "astra" else record["stage"])
+    next_stage, phase = timeout_recovery_route(state, record)
     recovery = {"at": now(), "attempt_id": attempt_id(record), "role": record["role"],
                 "stage": record["stage"], "source_revision": after["revision"],
                 "task_id": record.get("task_id", (state.get("current_task") or {}).get("id")),
@@ -997,7 +1036,7 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     state["recovery_context"] = recovery
     state["no_progress_batches"] = state.get("no_progress_batches", 0) + 1
     state["consecutive_timeout_recoveries"] = state.get("consecutive_timeout_recoveries", 0) + 1
-    state.update(status="RUNNING", phase="EXECUTING", next_stage=next_stage)
+    state.update(status="RUNNING", phase=phase, next_stage=next_stage)
     state.pop("stop_reason", None)
     write_json(run_dir / "state.json", state)
     for artifact in originals:
@@ -2050,7 +2089,10 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                     if reply.startswith("/"):
                         print("Use /default, /feedback TEXT or /pause, or type your answer.")
                         continue
-                    action(lambda candidate: goals.answer(candidate, question["id"], reply))
+                    if goals.is_operational_response(state.get("user_request")):
+                        action(lambda candidate: goals.resolve_permission(candidate, question["id"], reply))
+                    else:
+                        action(lambda candidate: goals.answer(candidate, question["id"], reply))
                     break
                 print("Please enter an answer, or /default when a suggested default is available.")
     if state["status"] == "AWAITING_GOAL_APPROVAL":
@@ -2221,6 +2263,10 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--resume-paused", action="store_true", help="Acknowledge a saved pause; uncertain stages still require reconciliation")
     parser.add_argument("--retry-failed-stage", action="store_true",
                         help="Authorize one fresh attempt for the recorded unchanged repeated failure after inspecting it; requires --resume-paused")
+    parser.add_argument("--diagnose-failed-stage", action="store_true",
+                        help="For a repeated Builder failure whose report-repair is exhausted, admit one bounded "
+                             "read-only model diagnosis instead of a blind retry; requires --resume-paused; "
+                             "cannot combine with --retry-failed-stage")
     parser.add_argument("--planning-review-call-limit", type=int, metavar="N",
                         help="At a planning-budget pause, save a finite total review-call allowance for this cycle only; no agent launched")
     parser.add_argument("--retry-report", metavar="ATTEMPT_ID",
@@ -2262,6 +2308,10 @@ def _main_body(unit=None) -> int:
         parser.error("--retry-report requires --run-dir and --resume-paused")
     if args.retry_failed_stage and (not args.run_dir or not args.resume_paused):
         parser.error("--retry-failed-stage requires --run-dir and --resume-paused")
+    if args.diagnose_failed_stage and (not args.run_dir or not args.resume_paused):
+        parser.error("--diagnose-failed-stage requires --run-dir and --resume-paused")
+    if args.diagnose_failed_stage and args.retry_failed_stage:
+        parser.error("--diagnose-failed-stage and --retry-failed-stage are alternative responses to the same pause; use one")
     if args.planning_review_call_limit is not None and args.planning_review_call_limit < 2:
         parser.error("--planning-review-call-limit must be at least 2; unlimited is not supported")
     if unit and args.unit != unit:
@@ -2497,10 +2547,13 @@ def _main_body(unit=None) -> int:
                             if isinstance(row, dict):
                                 row["seconds"] = 0
                                 row["seconds_by_role"] = {}
-                    # Reset resolver attempts
-                    resolver_state = state.get("resolver")
-                    if resolver_state and isinstance(resolver_state, dict):
-                        resolver_state["attempts"] = {}
+                    # Reset the report-repair and resolver current-cycle attempt
+                    # budgets on explicit resume. Both resets are recorded, not
+                    # silent, and accumulate into a lifetime total neither
+                    # function resets (see reset_report_repair_for_resume and
+                    # resolver_runtime.reset_for_resume).
+                    reset_report_repair_for_resume(state)
+                    resolver_runtime.reset_for_resume(state)
                     if args.retry_report:
                         try:
                             retry_format_failed_report(state, run_dir, workspace, args.retry_report)
@@ -2513,6 +2566,14 @@ def _main_body(unit=None) -> int:
                                 authorize_failure_retry(state, run_dir, workspace)
                                 print("Failure retry authorized for the recorded repeated failure; "
                                       "one fresh attempt proceeds under existing limits.", flush=True)
+                            except ValueError as error:
+                                print(f"Input rejected: {error}", file=sys.stderr)
+                                return 2
+                        elif args.diagnose_failed_stage:
+                            try:
+                                resolver_runtime.admit_operational_diagnosis(sys.modules[__name__], state, run_dir, workspace)
+                                print("Diagnosis admitted for the recorded repeated Builder failure; "
+                                      "a bounded read-only model diagnosis runs before any retry.", flush=True)
                             except ValueError as error:
                                 print(f"Input rejected: {error}", file=sys.stderr)
                                 return 2
@@ -2584,10 +2645,7 @@ def _main_body(unit=None) -> int:
                         if not sep:
                             raise ValueError("--answer uses QUESTION_ID=TEXT")
                         request = candidate.get("user_request", {})
-                        if request.get("kind") == "permission" or (request.get("kind") == "blocker" and
-                                str(request.get("proposed_delta", "")).startswith((
-                                    "No goal, scope, criterion, or behavior change.",
-                                    "No contract, product, acceptance-criterion, implementation-scope, filesystem, provider or spending change."))):
+                        if goals.is_operational_response(request):
                             goals.resolve_permission(candidate, question, response)
                         elif (request.get("kind") == "blocker" and response == (request.get("options") or [None])[0]
                               and response.startswith("Reconcile ")):
@@ -2737,6 +2795,12 @@ def _main_body(unit=None) -> int:
                     return orchestrator.SKIP
 
             def dispatch_code_stage(current, stage):
+                # Admission parity with autopilot.dispatch_unit: a paused Builder
+                # retry lane blocks the serial writer launch here as well.
+                if stage == "terra":
+                    autopilot.builder_policy.guard(current)
+                if stage == "astra_diagnose":
+                    resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], current, run_dir, workspace)
                 milestones.dispatch_guard(current, stage)
                 workflow.dispatch_guard(current,stage,workspace)
                 if stage == "orchestrator":

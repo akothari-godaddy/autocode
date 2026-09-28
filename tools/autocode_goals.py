@@ -1068,17 +1068,32 @@ def reject_assumption(state, assumption_id, selected):
     return obligation
 
 
+def is_operational_response(request):
+    """True when a pending decision can be answered without revising the
+    approved goal: a scoped permission ask, or a blocker whose own
+    proposed_delta explicitly states no goal/scope/criterion/product change
+    (for example, more execution time or tool/spending budget to finish
+    already-approved verification). Both the CLI and interactive chat must
+    use this single check so an operational-only answer never takes a
+    different route depending on which surface it was given through."""
+    request = request or {}
+    if request.get("kind") == "permission":
+        return True
+    if request.get("kind") != "blocker":
+        return False
+    proposed_delta = str(request.get("proposed_delta", ""))
+    return proposed_delta.startswith((
+        "No goal, scope, criterion, or behavior change.",
+        "No contract, product, acceptance-criterion, implementation-scope, filesystem, provider or spending change."))
+
+
 def resolve_permission(state, question_id, text):
     """Record a scoped permission response without revising an approved goal."""
     request = state.get("user_request", {})
     # A blocked execution checkpoint can ask for a scoped retry while keeping
     # the approved goal intact. Only the explicit no-scope-change form uses
     # this path; substantive blocker answers still require a refreshed draft.
-    proposed_delta = str(request.get("proposed_delta", ""))
-    scoped_blocker = (request.get("kind") == "blocker" and proposed_delta.startswith((
-        "No goal, scope, criterion, or behavior change.",
-        "No contract, product, acceptance-criterion, implementation-scope, filesystem, provider or spending change.")))
-    if (request.get("kind") != "permission" and not scoped_blocker) or not approved(state):
+    if not is_operational_response(request) or not approved(state):
         raise ValueError("A permission response requires the current approved goal contract")
     matches = [q for q in state.get("pending_questions", []) if q["id"] == question_id]
     if len(matches) != 1 or question_id in state.get("answers", {}) or not text.strip():

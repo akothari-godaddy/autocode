@@ -122,7 +122,7 @@ def route_for(state, stage, role=None):
     its own model, reasoning level, and session so plan review and completion
     ownership can be tuned independently.
     """
-    if stage == "astra_resolve":
+    if stage in ("astra_resolve", "astra_diagnose"):
         return "resolver"
     if stage == "requirements_gather":
         return "requirements"

@@ -10,6 +10,8 @@ from typing import Any, Callable, Mapping
 
 
 ACTIONS = frozenset({"continue", "retry", "replan", "escalate"})
+RECEIPT_VERSION = 1
+SUPPORTED_RECEIPT_VERSIONS = frozenset({1})
 ALLOWED_FIELDS = frozenset({"end_to_end_flow", "technical_approach", "milestones"})
 HUMAN_ONLY_KINDS = frozenset({"permission", "external_permission", "destructive", "security", "access", "protected_data"})
 SAFE_KINDS = frozenset({"implementation", "validation", "milestone", "tooling", "plan_detail", "model_output"})
@@ -85,6 +87,10 @@ class Receipt:
     prior_lineage: Mapping[str, Any] | None
     new_lineage: Mapping[str, Any] | None
     decided_at: Any
+    # Optional and defaulted so a receipt saved before this field existed still
+    # loads: absence means version 1. A future required-authority field must
+    # not be added this way; give it its own supported-version bump instead.
+    version: int = RECEIPT_VERSION
 
 
 @dataclass
