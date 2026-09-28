@@ -1027,9 +1027,9 @@ def recovery_count(state):
 def timeout_recovery_guard(state):
     limit = state.get("settings", {}).get("limits", {}).get("no_progress_batches", 3)
     exhausted = recovery_count(state) >= MAX_AUTOMATIC_RECOVERIES
-    # A configured limit of 0 means zero tolerance, not "no limit" — `limit and ...`
-    # would treat 0 as falsy and silently skip the check.
-    consecutive = limit is not None and state.get("consecutive_timeout_recoveries", 0) >= limit
+    # Match the CLI's no-progress policy: 0 disables this threshold. The
+    # independent aggregate recovery guard above still bounds automatic replay.
+    consecutive = bool(limit) and state.get("consecutive_timeout_recoveries", 0) >= limit
     if exhausted or consecutive:
         ctx = state.get("recovery_context") or {}
         cause = ctx.get("timeout_reason") or ctx.get("instruction", "Inspect saved provider logs")

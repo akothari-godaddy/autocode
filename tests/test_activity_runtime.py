@@ -331,16 +331,31 @@ class ActivityRuntimeTests(unittest.TestCase):
     def test_zero_no_progress_budget_does_not_disable_aggregate_recovery_ceiling(self):
         self.state['settings']['limits']['no_progress_batches'] = 0
         self.state['consecutive_timeout_recoveries'] = 0
-        self.state['automatic_recoveries_since_resume'] = 3
+        self.state['automatic_recoveries_since_resume'] = runner.MAX_AUTOMATIC_RECOVERIES
+        with self.assertRaises(support.Paused):
+            runner.timeout_recovery_guard(self.state)
+
+    def test_disabled_no_progress_threshold_allows_launch_below_recovery_ceiling(self):
+        self.state['settings']['limits']['no_progress_batches'] = 0
+        for used in range(runner.MAX_AUTOMATIC_RECOVERIES):
+            with self.subTest(recoveries=used):
+                self.state['consecutive_timeout_recoveries'] = used
+                self.state['automatic_recoveries_since_resume'] = used
+                runner.timeout_recovery_guard(self.state)
+
+    def test_positive_no_progress_threshold_still_stops_consecutive_recoveries(self):
+        self.state['settings']['limits']['no_progress_batches'] = 2
+        self.state['automatic_recoveries_since_resume'] = 1
+        self.state['consecutive_timeout_recoveries'] = 2
         with self.assertRaises(support.Paused):
             runner.timeout_recovery_guard(self.state)
 
     def test_legacy_recent_failures_seed_the_aggregate_recovery_ceiling(self):
         self.state['settings']['limits']['no_progress_batches'] = 0
-        self.state.update(consecutive_timeout_recoveries=1, no_progress_batches=3,
+        self.state.update(consecutive_timeout_recoveries=1, no_progress_batches=runner.MAX_AUTOMATIC_RECOVERIES,
                           automatic_timeout_recoveries=[{}, {}],
                           automatic_permission_recoveries=[{}])
-        self.assertEqual(3, runner.recovery_count(self.state))
+        self.assertEqual(runner.MAX_AUTOMATIC_RECOVERIES, runner.recovery_count(self.state))
         with self.assertRaises(support.Paused):
             runner.timeout_recovery_guard(self.state)
 
