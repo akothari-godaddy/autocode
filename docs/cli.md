@@ -94,6 +94,23 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--figma-review human` | Require a human visual approval during implementation. |
 | `--max-plan-reworks`, `--max-reworks` | Review-loop limits (`none`, `0`, or a number). |
 
+## Unattended callers (agents)
+
+`autocode-unattended` (or `scripts/autocode-unattended` from a checkout) runs AutoCode
+for another agent without letting that agent make the operator's decisions. It takes
+AutoCode's own arguments but refuses every decision or recovery flag (`--answer`,
+`--delegate*`, `--approve-*`, `--resume-paused`, `--retry-*`, `--feedback`,
+`--accept-completion`, …, including abbreviations) and the `intervention`, `tasks`,
+`ui`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
+with no stdin, and when AutoCode stops it prints `--status` and tells the caller to
+report and stop. Exit codes are AutoCode's.
+
+To lock a Claude Code agent to it, launch the agent from a copy of
+[`examples/agent-operator`](../examples/agent-operator): its `.claude/settings.json`
+allows only `autocode-unattended` and read-only tools, denies edits and other
+AutoCode or provider commands, and uses `dontAsk` so anything else is refused
+without a prompt. Keep that directory outside the target workspace.
+
 ## Exit codes
 
 - **0** — an action was saved, or the task completed.
