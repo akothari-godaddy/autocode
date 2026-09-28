@@ -410,6 +410,7 @@ tools/autocode_*.py     contracts, findings, evidence, execution, and recovery
 tools/autocode_program.py  program workstreams: manifest, derive, waves, integration branch
 tools/autocode_verify.py   model-free fail-to-pass / pass-to-pass test runs in scratch worktrees
 tools/autocode_regression.py  runner-owned regression proof and completion requirement for bug fixes
+tools/autocode_issue.py    GitHub issue → task run → pull request, over the task-run interface
 tools/task_scenarios.py    task-type scenarios and their independent oracles
 tools/live_trial.py     scenario driver: seed, run, serve gates, score
 tools/providers/        runtime adapters and bundled command-tool configs
@@ -431,7 +432,7 @@ VALIDATION.md           recorded results and limitations
 | Build, recovery, and completion | [Execution](docs/execution.md) · [Interventions](docs/interventions.md) · [Task-run interface](docs/task-run.md) |
 | Conversation and monitoring | [Dashboard](docs/dashboard.md) · [Registry API](docs/registry-api.md) · [macOS app](docs/macos-app.md) |
 | Visual work and multi-task runs | [Figma](docs/figma.md) · [Task lanes](docs/task-lanes.md) · [Programs](docs/program.md) |
-| Bug reports and issues | [Fix](docs/fix.md) |
+| Bug reports and issues | [Bug fixes](docs/workflow.md#bug-fixes) · [GitHub issues to pull requests](docs/issues.md) |
 | Verification and project priorities | [Scenarios](scenarios/README.md) · [Task-type scenarios](docs/scenarios.md) · [Testing](docs/testing.md) · [Validation](VALIDATION.md) · [Reliability](RELIABILITY.md) |
 
 ## Keep this README honest
