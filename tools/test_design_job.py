@@ -49,9 +49,19 @@ class PrepareTests(unittest.TestCase):
             state = state_for(workspace)
             request = autoreview.prepare(state, design_job.STAGE, "/run/state.json", None)
         self.assertEqual(("astra", "architect", True), (request.role, request.route_role, request.allow_write))
-        self.assertEqual(state["settings"]["roles"]["plan_reviewer"], state["settings"]["roles"]["architect"])
+        roles = state["settings"]["roles"]
+        self.assertEqual((roles["plan_reviewer"]["model"], roles["plan_reviewer"]["engine"]),
+                         (roles["architect"]["model"], roles["architect"]["engine"]))
         self.assertEqual(design_job.SCHEMA, request.schema)
         self.assertIn("kafka-events.md", request.prompt)
+
+    def test_architect_effort_is_capped_at_medium_but_never_raised(self):
+        for given, expected in (("max", "medium"), ("xhigh", "medium"), ("high", "medium"),
+                                ("medium", "medium"), ("low", "low"), (None, "medium"), ("weird", "medium")):
+            roles = {"plan_reviewer": {"model": "p", "reasoning_effort": given}, "astra": {"model": "a"}}
+            with self.subTest(given=given):
+                self.assertEqual(expected, autoreview.architect_route(roles)["reasoning_effort"])
+                self.assertEqual(given, roles["plan_reviewer"]["reasoning_effort"], "the Plan Reviewer is untouched")
 
 
 class ApplyTests(unittest.TestCase):

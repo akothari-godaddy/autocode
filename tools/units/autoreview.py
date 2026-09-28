@@ -14,6 +14,19 @@ from .common import ModelRequest, execution_request
 
 STAGE = review_job.STAGE
 JOBS = {review_job.STAGE: review_job, design_job.STAGE: design_job}
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# The Architect copies the Plan Reviewer's model but not its effort beyond this: at
+# "high", MiMo twice spent its whole reasoning budget on a dense design and returned
+# no report at all (2026-09-27, design-review-sound live runs).
+ARCHITECT_MAX_EFFORT = "medium"
+
+
+def architect_route(roles):
+    route = copy.deepcopy(roles.get("plan_reviewer") or roles["astra"])
+    effort = route.get("reasoning_effort")
+    if effort not in EFFORTS or EFFORTS.index(effort) > EFFORTS.index(ARCHITECT_MAX_EFFORT):
+        route["reasoning_effort"] = ARCHITECT_MAX_EFFORT
+    return route
 
 
 def prepare(state, stage, state_path, schema_dir):
@@ -25,11 +38,12 @@ def prepare(state, stage, state_path, schema_dir):
         return job_request(state, review_job, "sol", autoplanner.route_for(state, stage, "sol"))
     if stage == design_job.STAGE:
         # The Architect inherits the Plan Reviewer's model (the planner's own when
-        # there is none) on a route of its own, so its session never leaks into
-        # later planning. Same scratch-copy rule as the Reviewer.
+        # there is none), with effort capped at ARCHITECT_MAX_EFFORT, on a route of
+        # its own so its session never leaks into later planning. Same
+        # scratch-copy rule as the Reviewer.
         state["phase"] = "REVIEWING"
         roles = state["settings"]["roles"]
-        roles.setdefault("architect", copy.deepcopy(roles.get("plan_reviewer") or roles["astra"]))
+        roles.setdefault("architect", architect_route(roles))
         return job_request(state, design_job, "astra", "architect")
     if stage not in ("sol", "astra_review", "astra_checkpoint"):
         raise ValueError(f"Autoreview cannot run {stage}")
