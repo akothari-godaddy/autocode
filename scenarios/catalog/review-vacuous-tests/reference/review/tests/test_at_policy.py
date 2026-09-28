@@ -8,7 +8,7 @@ from regclient.transport import RegistryError, ScriptedTransport
 
 
 class AtPolicyThroughTheClient(unittest.TestCase):
-    def test_policy_for_resolves_at(self):
+    def test_f1_policy_for_resolves_at(self):
         self.assertEqual(2, policy_for("at").max_attempts)
         self.assertEqual(2, policy_for("AT").max_attempts)
 

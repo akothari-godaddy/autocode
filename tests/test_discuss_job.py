@@ -117,3 +117,47 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProbeTests(unittest.TestCase):
+    """A claim may be shown by running code: the runner runs its probe in a scratch copy, no model."""
+
+    def apply(self, evidence):
+        import subprocess
+        root = Path(tempfile.mkdtemp(prefix="discuss-probe-"))
+        (root / "app").mkdir()
+        (root / "app" / "metadata.py").write_text("TTL = 3600\nLIMIT_PER_HOUR = 60\n")
+        for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.test",
+                                                      "commit", "-qm", "seed"]):
+            subprocess.run(["git", *args], cwd=root, check=True)
+        state = state_for(root)
+        autoresolver.apply_job(discuss_job.STAGE, state, report(evidence=evidence, note_path="", note_content=""),
+                               {"changed_files": [], "output": str(root / "o.json")}, root)
+        return state, root
+
+    def claim(self, probe, example="Given app/metadata.py; when LIMIT_PER_HOUR is read; then it is 60"):
+        return {"claim": "upstream allows 60 requests/hour", "source": "app/metadata.py", "example": example,
+                "probe": probe}
+
+    def test_a_claim_whose_probe_exits_0_is_recorded_as_shown(self):
+        probe = "python3 -c 'from app.metadata import LIMIT_PER_HOUR; assert LIMIT_PER_HOUR == 60'"
+        state, _ = self.apply([self.claim(probe), {"claim": "cache lives in-process", "source": "app/metadata.py",
+                                                   "example": "", "probe": ""}])
+        self.assertEqual([("upstream allows 60 requests/hour", 0)],
+                         [(row["claim"], row["exit_code"]) for row in state["answer"]["probes"]])
+        self.assertIn("shown by running: " + probe, discuss_job.render(state))
+
+    def test_a_claim_whose_probe_fails_rejects_the_answer(self):
+        probe = "python3 -c 'from app.metadata import LIMIT_PER_HOUR; assert LIMIT_PER_HOUR == 600'"
+        with self.assertRaisesRegex(ValueError, "probes did not exit 0.*60 requests/hour"):
+            self.apply([self.claim(probe)])
+
+    def test_a_probe_needs_its_example_in_plain_english(self):
+        with self.assertRaisesRegex(ValueError, "needs its example"):
+            self.apply([self.claim("true", example=" ")])
+
+    def test_a_probe_runs_in_a_scratch_copy_and_cannot_touch_the_workspace(self):
+        state, root = self.apply([self.claim("echo changed > app/metadata.py && touch made-by-probe")])
+        self.assertEqual("TTL = 3600\nLIMIT_PER_HOUR = 60\n", (root / "app" / "metadata.py").read_text())
+        self.assertFalse((root / "made-by-probe").exists())
+        self.assertEqual(1, len(state["answer"]["probes"]))

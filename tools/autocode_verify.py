@@ -546,6 +546,43 @@ def run_suite(framework, command, tree, evidence_dir, label, *, timeout):
     return receipt
 
 
+def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeout=DEFAULT_TIMEOUT) -> dict:
+    """Run tests or one command in a scratch copy of the workspace as it is now, never in the workspace.
+
+    The copy is HEAD plus every uncommitted change (so files a stage just delivered are there),
+    with ``patch`` (a path in the repository) applied on top when given: a review's change under
+    review. ``tests`` runs those test files with the project's framework and returns per-test
+    results; ``command`` runs a shell command (a discussion's probe). Returns the receipt with
+    ``results`` (or None) and ``error`` (why nothing could be run, else "").
+    """
+    workspace, run_dir = Path(workspace), Path(run_dir)
+    head = _git(workspace, "rev-parse", "HEAD").strip()
+    tree = make_tree(workspace, head, run_dir / "scratch" / "tree", workspace, changed_files(workspace, head),
+                     dependencies_from=workspace)
+    try:
+        if patch:
+            applied = subprocess.run(["git", "-C", str(tree), "apply", str(patch)], capture_output=True, text=True)
+            if applied.returncode:
+                return {"error": f"git apply {patch} failed: {(applied.stderr or applied.stdout).strip()[-300:]}",
+                        "results": None}
+        if command is None:
+            python = python_for(workspace)
+            framework = detect_framework(tree, python=python)
+            if framework is None and all(str(test).endswith(".py") for test in tests):
+                # A project with no suite of its own: standard unittest files still run.
+                framework = Framework("unittest", f"{shlex.quote(python)} -m unittest discover -v", python=python)
+            command = framework.targeted(list(tests)) if framework else None
+            if not command:
+                return {"error": "no test command runs these files: " + ", ".join(tests), "results": None}
+            receipt = run_suite(framework, command, tree, run_dir, "scratch-tests", timeout=timeout)
+        else:
+            receipt = run_command(command, tree, run_dir / "scratch-command.log", timeout=timeout)
+            receipt["results"] = None
+        return {**receipt, "error": ""}
+    finally:
+        remove_tree(workspace, tree)
+
+
 def baseline(workspace, base, run_dir, *, framework, suite_command, timeout=DEFAULT_TIMEOUT,
              dependencies_from=None) -> dict:
     """Run the suite once on the pristine base revision (cached by the caller)."""

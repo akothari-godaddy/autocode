@@ -4,7 +4,7 @@ from regclient.policies import POLICIES
 
 
 class AtPolicyTests(unittest.TestCase):
-    def test_at_entry_exists(self):
+    def test_f1_at_entry_exists(self):
         entry = POLICIES.get("AT") or POLICIES.get("at")
         self.assertEqual(2, entry.max_attempts)
 

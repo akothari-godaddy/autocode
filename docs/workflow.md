@@ -401,6 +401,47 @@ raw report is kept and every semantic check still runs. Reports that omit a list
 carrying a decision (requirements, questions, concerns, responses) still go to
 report repair.
 
+## Reviews and discussions: findings and claims shown by running code
+
+The review and discuss workflows produce findings and answers, not code. The
+same idea applies: a finding or a claim is stated as a plain-English example,
+and the runner, not a model, runs something that shows it.
+
+### Review: every blocking finding has a failing test
+
+- **Example.** Every blocking finding carries `example`, the defect as one
+  concrete case: "Given …, when …, then … (expected …)". A blocking finding
+  without one is rejected.
+- **Test.** The Reviewer delivers a test under `review/tests/`, named after the
+  finding (`F1` → `test_f1_…`). The report names the change's patch file in
+  `change_patch` (`""` when the change is already in the workspace).
+- **The runner's check.** It applies the patch in a scratch copy of the
+  repository, never in the workspace, and runs the delivered tests there. Each
+  blocking finding's test must fail on the changed code. A finding whose test
+  passes, or has no test named after it, rejects the report: a finding that
+  cannot be shown is not reported. The failing tests are recorded per finding
+  (`proven_by` in `review/findings.json`, `finding_tests` in the run state).
+- **Untestable findings.** A blocking finding no test can show (a documented
+  compatibility rule, a missing document) says why in `untestable` and needs no
+  test. Advisory findings need none either.
+- **Bad patches.** A patch that does not apply rejects the report with git's
+  message.
+
+### Discuss: a claim may be shown by a probe
+
+- A claim about what the code does may carry `example` (the concrete case in
+  plain English) and `probe`: a shell command, run from the repository root,
+  that exits 0 exactly when the claim holds.
+- The runner runs every probe in a scratch copy of the code as it is now, with
+  a two-minute limit each. A probe that fails rejects the answer. A probe
+  cannot change the workspace.
+- Claims without a probe stay grounded by their source file only, as before.
+- Probed claims are recorded in the run state (`answer.probes`) and shown in
+  the answer's evidence list.
+
+The scratch runs are `autocode_verify.scratch_run`. A Python test delivered
+into a project with no test suite of its own still runs under unittest.
+
 ## Conversation and approval
 
 The first stage runs **read-only requirements gathering** and saves a structured JSON handoff

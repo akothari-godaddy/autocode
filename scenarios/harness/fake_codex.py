@@ -171,10 +171,23 @@ def review() -> dict:
         shutil.copytree(tests, Path.cwd() / "review" / "tests", dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         delivered = sorted(f"review/tests/{p.name}" for p in tests.glob("test_*.py"))
+    # A blocking finding is proven by the runner when the solution delivers a test named after it
+    # (F1 -> test_f1_...); otherwise the scripted review says why it is not tested.
+    names = " ".join(re.findall(r"def (test_\w+)", " ".join(
+        (Path(CONFIG["reference"]) / path).read_text() for path in delivered))).lower()
+    patches = sorted(p.name for p in Path.cwd().glob("*.patch"))
+
+    def finding(f):
+        row = {key: f.get(key, [] if key == "lines" else "") for key in
+               ("id", "severity", "file", "lines", "summary", "evidence")}
+        tested = f"test_{str(f.get('id', '')).lower()}_" in names
+        row["example"] = f.get("example") or "Scripted example: " + str(f.get("summary", ""))
+        row["untestable"] = "" if tested else (f.get("untestable") or "Scripted review: the scenario solution "
+                                               "delivers no test named after this finding")
+        return row
     return {"verdict": saved.get("verdict", "approve"), "summary": "Scripted review from the scenario solution",
-            "change_under_review": "the change named in the request",
-            "findings": [{key: f.get(key, [] if key == "lines" else "") for key in
-                          ("id", "severity", "file", "lines", "summary", "evidence")} for f in saved.get("findings", [])],
+            "change_under_review": "the change named in the request", "change_patch": patches[0] if patches else "",
+            "findings": [finding(f) for f in saved.get("findings", [])],
             "tests_run": [str(t) for t in saved.get("tests_run", [])], "delivered_tests": delivered}
 
 
