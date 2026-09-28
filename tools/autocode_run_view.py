@@ -77,6 +77,7 @@ def needs(state: dict) -> dict | None:
         if isinstance(published, dict) and isinstance(entry, dict) and entry.get("status") == "pending":
             answer["resolver_request_id"] = published.get("request_id")
             answer["resolver_token"] = published.get("request_token")
+            answer["resolver_scope"] = published.get("scope")
         return answer
     if status == "AWAITING_GOAL_APPROVAL":
         # The approval token is saved when the CLI displays the plan; until then, relaunch to display it.
