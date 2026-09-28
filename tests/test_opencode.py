@@ -61,6 +61,28 @@ class OpenCodeTests(unittest.TestCase):
                      [terminal(), {**event("text"), "sessionID": "ses_other"}]):
             self.assertFalse(any(row["type"] == "turn.completed" for row in oc.normalized_events(rows)))
 
+    def test_cut_short_tool_calls_turn_fails_with_known_usage(self):
+        # A stream ending on a tool-calls finish (the process exited between the
+        # model's tool calls and their results, e.g. every call auto-rejected as
+        # an external directory) consumed real tokens without completing a turn.
+        # Usage must survive or the runner cannot enforce a reported-token cap.
+        denied = event("tool_use", tool="read", state={"status": "error",
+                     "input": {"filePath": "/outside/workspace/typo.txt"}})
+        cut = event("step_finish", reason="tool-calls", tokens={"input": 40, "output": 6, "reasoning": 4,
+                    "cache": {"read": 10, "write": 0}})
+        events = oc.normalized_events([event("step_start"), denied, cut])
+        self.assertFalse(any(row["type"] == "turn.completed" for row in events))
+        failure = events[-1]
+        self.assertEqual("turn.failed", failure["type"])
+        self.assertEqual("turn_cut_short", failure["error"]["code"])
+        self.assertEqual({"input_tokens": 50, "cached_input_tokens": 10,
+                          "output_tokens": 10, "reasoning_output_tokens": 4}, failure["usage"])
+
+    def test_mid_stream_tool_calls_finish_is_not_terminal(self):
+        cut = event("step_finish", reason="tool-calls", tokens={"input": 40, "output": 6})
+        events = oc.normalized_events([event("step_start"), cut, event("step_start"), terminal()])
+        self.assertTrue(any(row["type"] == "turn.completed" for row in events))
+
     def test_unknown_usage_remains_unknown(self):
         end = terminal(); del end["part"]["tokens"]["cache"]
         usage = oc.normalized_events([end])[-1]["usage"]
