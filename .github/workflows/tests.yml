@@ -38,3 +38,27 @@ jobs:
         run: python3 tools/run_suite.py --verbosity 2
         env:
           PYTHONDONTWRITEBYTECODE: "1"
+
+      - name: Run the dashboard suite
+        # tools/dashboard/tests is outside tests/, so run_suite.py never
+        # discovers it; run it here so it can't drift unnoticed again (#94).
+        run: python3 -m unittest discover -s tools/dashboard/tests -p 'test_*.py' -v
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Run the dashboard Node tests
+        # The two browser tests drive the agent-browser CLI, which this job
+        # doesn't install; the log names each one it leaves out.
+        run: |
+          for test_file in tools/dashboard/tests/test_*.js; do
+            if grep -q "agent-browser" "$test_file"; then
+              echo "Not run here (needs agent-browser): $test_file"
+              continue
+            fi
+            echo "node $test_file"
+            node "$test_file" || exit 1
+          done

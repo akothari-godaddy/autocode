@@ -123,6 +123,9 @@ def _capture(command, env, cwd, prompt, timeout=PROVIDER_TIMEOUT, output_limit=M
                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                    start_new_session=True)
     except FileNotFoundError as error:
+        # Popen also raises this for a missing cwd; don't report that as a missing OpenCode.
+        if cwd is not None and not os.path.isdir(cwd):
+            raise ConversationProviderError('The conversation scratch directory is missing. Retry to recreate it.') from error
         raise ConversationProviderError('OpenCode is unavailable. Install it or restore it on PATH, then retry.') from error
     except OSError as error:
         raise ConversationProviderError('OpenCode could not start. Check its local installation, then retry.') from error

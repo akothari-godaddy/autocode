@@ -202,9 +202,14 @@ class Tests(unittest.TestCase):
   finally:s.shutdown();s.server_close()
  def test_unavailable_watch_root_reports_error_row_only_for_that_root(self):
   base=Path(self.tmp.name).resolve();ok=self.make_ws(base/'ok');missing=base/'missing';bad=base/'bad';bad.mkdir();bad.chmod(0)
-  c=Console([],self.fake,lambda:'ZAI',watch_roots=[missing,ok,bad])
+  c=Console([],self.fake,lambda:'ZAI',watch_roots=[missing,ok,bad]);scandir=os.scandir
+  # Root ignores mode 0, so deny the unreadable root the way the OS denies every other user.
+  def denied(path='.'):
+   if Path(path)==bad:raise PermissionError(13,'Permission denied',str(bad))
+   return scandir(path)
   try:
-   rows=c.discover();errs={r['workspace']:r['error'] for r in rows if 'error' in r and not r.get('run')}
+   with patch.object(os,'scandir',denied):rows=c.discover()
+   errs={r['workspace']:r['error'] for r in rows if 'error' in r and not r.get('run')}
    self.assertEqual({str(missing),str(bad)},set(errs))
    for e in errs.values():self.assertIn('watch root unavailable',e)
    self.assertEqual([str(ok)],[r['workspace'] for r in rows if r.get('run')])

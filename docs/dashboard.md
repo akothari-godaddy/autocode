@@ -105,6 +105,10 @@ for test_file in tools/dashboard/tests/test_*.js; do node "$test_file" || exit 1
 python3 tools/dashboard/tests/unified_browser_fixture.py
 ```
 
+CI runs the Python suite and the Node tests on macOS and Linux, except
+`test_m3_lifecycle_browser_ui.js` and `test_shell_a11y_ui.js`, which drive the
+`agent-browser` CLI and need it installed.
+
 The browser fixture uses disposable workspaces and cannot launch agents. The
 packaged-import regression tests the installed entry-point layout, not just the
 source-directory import path. Updating files does not reload a running dashboard:
