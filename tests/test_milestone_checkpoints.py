@@ -58,10 +58,12 @@ class MilestoneCheckpointTests(unittest.TestCase):
         passed = all(statuses.get(cid) == 'PASS' for cid in criterion_ids)
         n = sum(r.get('role') == 'sol' for r in self.state['stages'])
         events = self.run / f'sol-{n}.jsonl'
+        # A real command with the fixture's outcome: the runner re-runs PASS checks (autocode_check_replay).
+        check = 'true' if passed else 'false'
         events.write_text(json.dumps({'type': 'item.completed', 'item': {'id': 'check', 'type': 'command_execution',
-            'command': 'execute-milestone', 'exit_code': 0 if passed else 1, 'aggregated_output': str(statuses)}}))
+            'command': check, 'exit_code': 0 if passed else 1, 'aggregated_output': str(statuses)}}))
         value = {**envelope(self.state), 'verdict': verdict or ('PASS' if passed else 'FAIL'),
-            'checks_run': ['execute-milestone'], 'checks': [{'command': 'execute-milestone', 'exit_code': 0 if passed else 1, 'evidence_ref': 'event:check'}],
+            'checks_run': [check], 'checks': [{'command': check, 'exit_code': 0 if passed else 1, 'evidence_ref': 'event:check'}],
             'findings': [], 'unverified_criteria': [cid for cid, status in statuses.items() if status == 'NOT_VERIFIED'],
             'criterion_results': [{'id': cid, 'status': status, 'evidence_refs': ['event:check']} for cid, status in statuses.items()],
             'end_to_end_result': {'status': flow_status or ('PASS' if passed else 'FAIL'), 'summary': 'Executed current outcome; later work may remain', 'evidence_refs': ['event:check']}}

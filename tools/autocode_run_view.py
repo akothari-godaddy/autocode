@@ -50,6 +50,8 @@ def evidence(state: dict) -> dict:
     regression_proof  for bug fixes, the runner's own fail-before/pass-after proof, else None;
                       case_tests maps each English test case to the tests that prove it
     test_cases        a reproduced bug's regression tests in plain English (id, given, when, then), else []
+    check_replay      the current validation's checks as the runner itself re-ran them in a clean copy
+                      (autocode_check_replay): verdict, source_revision and one row per command, else None
     """
     contract = (state.get("goal_contract") or {}).get("body") or {}
     criteria = contract.get("acceptance_criteria") or state.get("acceptance_criteria") or []
@@ -65,6 +67,7 @@ def evidence(state: dict) -> dict:
                            "status": outcome.get("status"), "evidence": outcome.get("evidence"),
                            "human_reviewed": item.get("id") in reviewed})
     proof = state.get("regression_proof")
+    replay = (state.get("validation") or {}).get("check_replay") if isinstance(state.get("validation"), dict) else None
     investigation = state.get("investigation") if isinstance(state.get("investigation"), dict) else {}
     return {
         "outcome": contract.get("intended_outcome"),
@@ -79,6 +82,10 @@ def evidence(state: dict) -> dict:
         "test_cases": [{key: case.get(key) for key in ("id", "given", "when", "then")}
                        for case in investigation.get("test_cases") or [] if isinstance(case, dict)]
                       if investigation.get("outcome") == "reproduced" else [],
+        "check_replay": {"verdict": replay.get("verdict"), "source_revision": replay.get("source_revision"),
+                         "checks": [{key: row.get(key) for key in ("command", "exit_code", "timed_out", "output")}
+                                    for row in replay.get("checks") or [] if isinstance(row, dict)]}
+                        if isinstance(replay, dict) else None,
     }
 
 

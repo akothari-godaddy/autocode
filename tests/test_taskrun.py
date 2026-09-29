@@ -28,7 +28,8 @@ class RunViewTests(unittest.TestCase):
 
     def test_evidence_is_empty_before_planning(self):
         self.assertEqual({"outcome": None, "base_commit": None, "acceptance": [], "findings": [],
-                          "regression_proof": None, "test_cases": []}, run_view.evidence({"status": "RUNNING"}))
+                          "regression_proof": None, "test_cases": [], "check_replay": None},
+                         run_view.evidence({"status": "RUNNING"}))
 
     def test_evidence_carries_the_english_test_cases_and_what_proves_them(self):
         case = {"id": "T1", "given": "a timeout", "when": "renew()", "then": "one mutation"}

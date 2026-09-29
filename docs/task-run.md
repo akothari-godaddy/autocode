@@ -100,7 +100,11 @@ regression proof (`verdict`, `fail_to_pass`, `failures`, `unverified`,
 `commands`, `source_revision`, and `case_tests`: each English test case's
 proving tests; `null` otherwise). `test_cases` lists a reproduced bug's
 regression tests in plain English (`id`, `given`, `when`, `then`; empty
-otherwise; see [Bug fixes](workflow.md#bug-fixes)).
+otherwise; see [Bug fixes](workflow.md#bug-fixes)). `check_replay` is the
+current validation's checks as the runner itself re-ran them in a clean copy:
+`verdict`, `source_revision` and one row per command (`command`, `exit_code`,
+`timed_out`, `output`); `null` before a PASS validation and for validations
+that predate it (see [Execution](execution.md#the-runner-re-runs-the-validators-checks)).
 
 `workflow` is the kind of job AutoCode recognized from the request, decided by
 the first stage of every new run (`recognize_workflow`): one of `build`,

@@ -577,6 +577,9 @@ def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeo
                 return {"error": "no test command runs these files: " + ", ".join(tests), "results": None}
             receipt = run_suite(framework, command, tree, run_dir, "scratch-tests", timeout=timeout)
         else:
+            # A command naming the workspace's absolute path runs against the copy, never the workspace.
+            for root in dict.fromkeys((str(workspace.resolve()), str(workspace))):
+                command = command.replace(root, str(tree))
             receipt = run_command(command, tree, run_dir / "scratch-command.log", timeout=timeout)
             receipt["results"] = None
         return {**receipt, "error": ""}

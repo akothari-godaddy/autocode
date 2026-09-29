@@ -263,6 +263,36 @@ and its pinned evidence on the current source revision. Completion prints each c
 with its evidence and any agreed limitations. Unknown, skipped and untested results cannot pass. Green tests
 cannot substitute for missing criterion results.
 
+### The runner re-runs the Validator's checks
+
+A Validator's checks are first matched against its own session: the provider's
+event log or a capture receipt must show each command ran with the reported exit
+code. That shows the command ran, not that it passes on the code as it is. So
+before a PASS is accepted, the runner re-runs every check itself
+(`tools/autocode_check_replay.py`):
+
+- **Where.** From the repository root, in a scratch copy of the current source:
+  the committed code plus every uncommitted change, without ignored files or
+  `.autocode/`. A command that names the workspace's absolute path runs against
+  the copy. A replay never writes to the workspace.
+- **How.** With the credential-free environment agents get, and a 900-second limit
+  per check. A command cited more than once runs once.
+- **What must hold.** Every check exits 0. There are no exceptions a model can
+  claim: a check that needs a server or other setup starts and stops it itself,
+  for example with a script in the repository.
+- **When one does not reproduce.** The Validator's report is rejected with the
+  command, the runner's exit code and the end of its output. That is the ordinary
+  rejected-report path: a bounded report repair may drop the check or cite
+  another command that ran (each is replayed again), then the run pauses and
+  `--resume-paused` asks for a fresh validation.
+- **Record.** The result is saved with the validation, bound to its source
+  revision, under `<run>/check-replay/`, and shown in the status view as
+  `evidence.check_replay`.
+
+This replaces trust in the Validator's own session with a run the runner owns.
+It does not judge whether the checks test the right thing: that is still the
+Validator's and the Completion Owner's job.
+
 For a human-review criterion, inspect the displayed validation and the actual artifact,
 then record your decision in chat or using the displayed artifact-specific token:
 

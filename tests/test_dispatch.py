@@ -61,9 +61,9 @@ class DispatchTests(unittest.TestCase):
     def validate(self, *, missing_member=False, flow_status="PASS"):
         evidence = self.run / "checks.jsonl"
         evidence.write_text(json.dumps({"type": "item.completed", "item": {"id": "check", "type": "command_execution",
-            "command": "read-both-outputs", "exit_code": 0, "aggregated_output": "M1 M2"}}))
+            "command": "cat a.txt b.txt", "exit_code": 0, "aggregated_output": "M1 M2"}}))
         value = {**envelope(self.state), "verdict": "PASS", "findings": [], "unverified_criteria": ["C3"],
-                 "checks_run": ["read-both-outputs"], "checks": [{"command": "read-both-outputs", "exit_code": 0, "evidence_ref": "event:check"}],
+                 "checks_run": ["cat a.txt b.txt"], "checks": [{"command": "cat a.txt b.txt", "exit_code": 0, "evidence_ref": "event:check"}],
                  "criterion_results": [{"id": cid, "status": "PASS", "evidence_refs": ["event:check"]} for cid in ("C1", "C2")],
                  "end_to_end_result": {"status": flow_status, "summary": "Dependent combined output remains to be built" if flow_status == "NOT_VERIFIED" else "Both outputs work", "evidence_refs": ["event:check"]},
                  "milestone_results": [{"milestone_id": mid, "status": "PASS", "summary": "Executed output", "evidence_refs": ["event:check"]}
