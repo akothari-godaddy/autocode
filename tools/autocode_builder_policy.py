@@ -20,16 +20,28 @@ SERIAL = 'SERIAL_ESCALATION'
 # Efforts a replacement checker keeps; a climbed xhigh/max rung belongs to the GPT ladder.
 CHECKER_EFFORTS = ('low', 'medium', 'high')
 EXHAUSTED = 'Implementation remains blocked after configured retry/escalation; human decision or replanning required'
+NO_STRONG_MODEL = ("Implementation remains blocked after the ordinary retries; this run's provider offers no stronger "
+                   'Builder model (set --builder-strong-model when creating a run); human decision or replanning required')
 
 
 def _bare(model):
     return model.split('/', 1)[1] if isinstance(model, str) and model.startswith('openai/') else model
 
 
-def configured(strong_model=None):
-    """A new run's retry policy. Its checkers move to checker_model, so the strong model cannot be it."""
+def configured(strong_model=None, provider=None):
+    """A new run's retry policy. Its checkers move to checker_model, so the strong model cannot be it.
+
+    A provider config that lists its models without the strong one gets none: a live Claude-provider
+    run escalated its Builder to the OpenAI default, which that provider cannot serve, so the launch
+    failed and the run waited on a person (2026-09-29).
+    """
     config = {**DEFAULTS, 'strong_model': strong_model or DEFAULTS['strong_model']}
-    if _bare(config['strong_model']) == _bare(config['checker_model']):
+    offered = getattr(provider, 'LISTED_MODELS', None)
+    if offered is not None and config['strong_model'] not in offered:
+        if strong_model:
+            raise ValueError(f'--builder-strong-model {strong_model} is not a {provider.NAME} model: {", ".join(offered)}')
+        config['strong_model'] = None
+    if config['strong_model'] and _bare(config['strong_model']) == _bare(config['checker_model']):
         raise ValueError(f"--builder-strong-model {config['strong_model']} is the model the checkers move to "
                          "when the Builder escalates, so the escalated work would be checked by its own model; "
                          "choose another model")
@@ -147,6 +159,8 @@ def swap_checkers(state, current, config, model):
 def _escalate(state, current, config, route):
     """Move the Builder to the strong model, or say why this run cannot: (action, checkers, stop reason)."""
     model = config['strong_model']
+    if not model:
+        return 'pause', {}, NO_STRONG_MODEL
     if route.get('engine', state['settings'].get('engine')) == 'opencode' and '/' not in model:
         model = 'openai/' + model
     # Never undo explicit pins or silently change provider/transport.

@@ -47,6 +47,8 @@ class CommandProvider:
         self.PROMPT_MODE = config.get("prompt", "stdin")
         self.DEFAULT_MODELS = {role: spec["model"] for role, spec in config["roles"].items()}
         self.DEFAULT_REASONING_EFFORTS = {role: spec["effort"] for role, spec in config["roles"].items()}
+        # The models the config lists, or None when it lists them with models_command or not at all.
+        self.LISTED_MODELS = config.get("models")
 
     def local_settings(self, workspace=None):
         command = self._config["command"]

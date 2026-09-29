@@ -89,6 +89,21 @@ SCHEMA = {
     },
 }
 
+# Repeated in a report-only repair of this stage (autocode_jobs.repair_rules): without them, both
+# repairs of a live run's rejected probe guessed where the cited files would be (2026-09-29).
+EVIDENCE_RULES = """- evidence_refs: files or saved outputs you relied on. Every one must exist: a repository path, or a
+  saved output's path from recent_stages or failure_history. A retry needs at least one.
+- example: for a retry, the diagnosed cause as one concrete case in plain English: "Given <the attempt's
+  exact output>, when <the runner checked it>, then <it rejected it because ...>".
+- probe: for a retry, a shell command that exits 0 exactly when the files you cite show that cause. The
+  runner copies ONLY the run files you cite into a scratch tree, each at run/<its file name> (repository
+  files keep their own paths), and runs the probe there; it rejects your report if the probe does not
+  exit 0 or needs a file you did not cite. For example: python3 -c "import json; r = json.load(open(
+  'run/astra_discovery-03.json')); assert ' ' in r['code_refs'][0]". When no command can show the cause
+  (a judgement about two positions), leave probe "" and say why in untestable; otherwise untestable is "".
+"""
+REPAIR_RULES = "The Investigator's evidence fields, as its prompt states them:\n" + EVIDENCE_RULES
+
 PROMPT = """You are the Investigator. A stage of an AI engineering run has stopped making progress and the runner
 is about to pause the run for a person. Before it does, find out WHY the stage is stuck and whether one more
 attempt, with the right guidance, would succeed. You do not do the stage's work and you do not edit the
@@ -117,17 +132,7 @@ Return:
 - recommendation: retry only when your guidance would plausibly make the next attempt succeed; pause for
   environment, needs_user, or when you cannot tell. Never guess.
 - user_question: when pausing, the one question or action the user must take; otherwise "".
-- evidence_refs: files or saved outputs you relied on. Every one must exist: a repository path, or a
-  saved output's path from recent_stages or failure_history. A retry needs at least one.
-- example: for a retry, the diagnosed cause as one concrete case in plain English: "Given <the attempt's
-  exact output>, when <the runner checked it>, then <it rejected it because ...>".
-- probe: for a retry, a shell command that exits 0 exactly when the files you cite show that cause. The
-  runner copies ONLY the run files you cite into a scratch tree, each at run/<its file name> (repository
-  files keep their own paths), and runs the probe there; it rejects your report if the probe does not
-  exit 0 or needs a file you did not cite. For example: python3 -c "import json; r = json.load(open(
-  'run/astra_discovery-03.json')); assert ' ' in r['code_refs'][0]". When no command can show the cause
-  (a judgement about two positions), leave probe "" and say why in untestable; otherwise untestable is "".
-
+""" + EVIDENCE_RULES + """
 You cannot approve work, change requirements or acceptance criteria, weaken tests, grant permissions or extend
 budgets; the runner grants at most one more attempt. Return JSON only, matching the schema the runner gives you.
 """
@@ -305,7 +310,7 @@ def check(value: dict, changed_files) -> None:
 
 
 def cited_files(value: dict, workspace, run_dir) -> dict[str, Path]:
-    """Resolve evidence_refs; return the run-directory ones as {tree path under run/: source file}.
+    """Resolve evidence_refs; return the run-directory ones as {run/<file name>: source file}.
 
     A ref is a repository path, a path under this run's directory (relative or absolute), optionally
     with a ``:line`` suffix. Raises ValueError naming refs that do not exist or lie elsewhere.
@@ -325,7 +330,10 @@ def cited_files(value: dict, workspace, run_dir) -> dict[str, Path]:
             continue
         found = found.resolve()
         if run_dir and found.is_relative_to(run_dir):
-            copies["run/" + found.relative_to(run_dir).as_posix()] = found
+            # At run/<file name>, as the prompt says, wherever the file sits: a rejected output
+            # is moved into an archived-* directory before the Investigator runs.
+            if copies.setdefault("run/" + found.name, found) != found:
+                raise ValueError(f"evidence_refs cite two run files named {found.name}; cite one of them")
         elif not found.is_relative_to(workspace):
             missing.append(text)
     if missing:

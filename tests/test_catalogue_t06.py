@@ -456,7 +456,8 @@ class CompletionEvidenceCase(SolControllerCase):
             "exit_code": 0, "aggregated_output": "3 tests passed"}}) + "\n")
         before = copy.deepcopy(self.state)
         with self.forbid_real_launches(runner):
-            self.expect_raises("empty_checks_rejected", support.Paused,
+            # A ValueError, so the runner asks for a report repair instead of pausing (2026-09-29).
+            self.expect_raises("empty_checks_rejected", ValueError,
                                runner.apply_result, self.state, "sol", report,
                                {"events": str(events), "output": str(events),
                                 "source_revision": support.snapshot(self.root)["revision"]},

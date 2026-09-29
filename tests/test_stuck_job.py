@@ -436,6 +436,27 @@ class ProbeTests(unittest.TestCase):
         self.assertEqual("astra_discovery", state["next_stage"])
         self.assertTrue((run_dir / "secret-uncited.json").is_file())  # the real run directory is untouched
 
+    def test_an_archived_output_is_probed_at_its_file_name_as_the_prompt_says(self):
+        # Live run 2026-09-29: the rejected output had been moved to archived-sol-01-*/ and a probe
+        # that opened run/sol-01.json, as the prompt told it to, found nothing.
+        state, workspace, run_dir = self.setup()
+        archived = run_dir / "archived-astra_discovery-03-1a2b3c"
+        archived.mkdir()
+        (run_dir / "astra_discovery-03.json").rename(archived / "astra_discovery-03.json")
+        probe = "python3 -c \"import json; r = json.load(open('run/astra_discovery-03.json')); assert ' ' in r['code_refs'][0]\""
+        self.apply(state, run_dir, workspace, probe=probe, example="x",
+                   evidence_refs=[str(archived / "astra_discovery-03.json")])
+        self.assertEqual("retried", state["stuck_investigations"][0]["outcome"])
+
+    def test_two_cited_run_files_with_one_name_are_refused(self):
+        state, workspace, run_dir = self.setup()
+        (run_dir / "archived").mkdir()
+        (run_dir / "archived" / "astra_discovery-03.json").write_text("{}")
+        with self.assertRaisesRegex(ValueError, "two run files named astra_discovery-03.json"):
+            stuck.cited_files(report(evidence_refs=[str(run_dir / "astra_discovery-03.json"),
+                                                    str(run_dir / "archived" / "astra_discovery-03.json")]),
+                              workspace, run_dir)
+
     def test_a_probe_that_does_not_show_the_cause_rejects_the_report(self):
         state, workspace, run_dir = self.setup()
         with self.assertRaisesRegex(ValueError, "diagnosed causes' probes did not exit 0"):
