@@ -85,7 +85,12 @@ class CommandProvider:
             if available is not None and model not in available:
                 missing.append(model)
         if missing:
-            raise RuntimeError(f"Models unavailable in {self._config['name']}: " + ", ".join(sorted(set(missing))))
+            raise RuntimeError(f"Models unavailable in {self._config['name']}: " + ", ".join(sorted(set(missing)))
+                               + f"; `autocode models --provider {self._config['name']}` lists what it offers")
+
+    def available_models(self, workspace=None):
+        """Models from models/models_command; None when the config lists neither."""
+        return self._available_models(workspace)
 
     def list_models(self, workspace=None):
         """Models from models/models_command, or the configured role models when neither is set."""

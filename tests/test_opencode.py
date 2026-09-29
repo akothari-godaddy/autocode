@@ -322,6 +322,40 @@ class OpenCodeFlow(unittest.TestCase):
         for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL", "OPENCODE_CONFIG_CONTENT"):
             self.env.pop(key, None)
 
+    def test_a_model_the_plans_do_not_offer_stops_a_new_run_before_any_model_call(self):
+        result = self.launch(["Greeting tool", "--no-chat", "--sol-model", "openai/gpt-7-nope"], 2)
+        self.assertIn("Cannot use with OpenCode: openai/gpt-7-nope (Validator).", result.stderr)
+        self.assertIn("Z.AI Coding Plan · subscription", result.stderr)
+        self.assertIn("--sol-model openai/gpt-6-sol", result.stderr)
+        runs = self.project / ".autocode/runs"
+        states = [json.loads(path.read_text()) for path in runs.glob("*/state.json")] if runs.exists() else []
+        self.assertEqual([], [state for state in states if state.get("stages") or state.get("settings")])
+
+    def test_in_chat_an_accepted_replacement_becomes_the_runs_route(self):
+        result = self.launch(["Greeting tool", "--chat", "--sol-model", "openai/gpt-7-nope"], 0,
+                             answers="y\nCLI\nyes\nyes\n")
+        self.assertIn("Use the suggested replacements for this run?", result.stdout)
+        _, state = self.saved()
+        self.assertEqual("openai/gpt-6-sol", state["settings"]["roles"]["sol"]["model"])
+        self.assertEqual("COMPLETE", state["phase"])
+
+    def test_models_lists_the_plans_by_tier_and_checks_the_default_routes(self):
+        def models(auth):
+            env = {**self.env, "AUTOCODE_FIXTURE_OPENAI_AUTH": auth}
+            return subprocess.run([*self.entry, "models"], cwd=self.root, env=env, capture_output=True, text=True,
+                                  timeout=60)
+        result = models("oauth")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("ChatGPT login · subscription", result.stdout)
+        self.assertRegex(result.stdout, r"openai/gpt-6-sol +strong judge +default for Plan Reviewer, Validator, "
+                                        r"Completion Owner")
+        self.assertIn("1 free, flash or MiMo route is not offered.", result.stdout)
+        self.assertIn("Every default route can be used:", result.stdout)
+        result = models("api")
+        self.assertEqual(1, result.returncode, result.stderr)
+        self.assertIn("OpenAI via api · not used: AutoCode bills OpenAI only through the ChatGPT login", result.stdout)
+        self.assertIn("Validator (--sol-model): openai/gpt-6-sol → choose one from the list", result.stdout)
+
     def test_standalone_cli_full_interview_approval_review_and_completion(self):
         self.launch(["Greeting tool", "--chat"], 0, answers="CLI\nyes\nyes\n")
         _, state = self.saved()
