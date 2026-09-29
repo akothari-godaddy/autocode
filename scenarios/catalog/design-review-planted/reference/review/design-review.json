@@ -1,6 +1,6 @@
 {
   "satisfied": [
-    "Throughput: 24 partitions at ~400 events/s each covers the 5,000/s peak with headroom.",
+    "Throughput: the partitioner spreads each kind over its six partitions, so all 24 carry traffic; ~400 events/s each covers the 5,000/s peak, and no kind (at most 1,500/s) exceeds its six partitions' 2,400/s.",
     "Replay: 7-day retention on the topic lets a consumer re-read after a fix.",
     "Independent consumers: one consumer group per service isolates their pace."
   ],

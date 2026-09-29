@@ -1,5 +1,6 @@
-"""The review must raise the three planted gaps, raise nothing else as blocking,
-put the ordering decision to the user, and leave the repository untouched."""
+"""The review must raise the three planted gaps, raise nothing else as blocking
+except a real consequence of them, put the ordering decision to the user, and
+leave the repository untouched."""
 from harness.oracle import Check, load_json, mentions, only_changed_under, run_checks
 
 PLANTED = {
@@ -7,6 +8,15 @@ PLANTED = {
     "idempotency": (("idempot", "duplicate", "dedup", "twice", "at-least-once", "at least once", "double"),),
     "migration": (("rollback", "roll back", "revert", "reconcil", "dual-write", "dual write", "cut over", "cutover"),),
 }
+# Not planted, but real, so not invented: a dead-lettered event leaves a gap in its
+# domain's sequence, and the processor then rejects every later event for that domain.
+# All three live reviews on 2026-09-29 raised it as blocking.
+ALSO_REAL = {
+    "dead_letter_ordering": (PLANTED["ordering"][0], ("dlq", "dead-letter", "dead letter")),
+}
+# processor.py already requires per-domain order, so the decision left to the user is
+# how to key for it; a question about the partition key asks it.
+ORDERING_QUESTION = ("order", "sequence", "partition")
 
 
 def area_of(concern):
@@ -28,11 +38,13 @@ def check(project, scenario, run=None):
         found = {area_of(c) for c in blocking}
         for area in PLANTED:
             checks.append(Check(f"raises_{area}_as_blocking", area in found))
-        false = [c.get("id") or c.get("summary") for c in blocking if area_of(c) is None]
+        false = [c.get("id") or c.get("summary") for c in blocking if area_of(c) is None
+                 and not any(mentions({k: c.get(k, "") for k in ("area", "summary", "evidence")}, *groups)
+                             for groups in ALSO_REAL.values())]
         checks.append(Check("no_invented_blockers", not false, f"blocking but already answered by the design: {false}"))
         questions = [q for q in report.get("questions") or [] if isinstance(q, dict)]
         checks.append(Check("asks_about_ordering_requirement",
-                            any(mentions(q.get("question", ""), ("order", "sequence")) for q in questions)))
+                            any(mentions(q.get("question", ""), ORDERING_QUESTION) for q in questions)))
     checks.append(only_changed_under(project, "review/"))
     checks += run_checks(run, workflow="design", no_build=True)
     return checks

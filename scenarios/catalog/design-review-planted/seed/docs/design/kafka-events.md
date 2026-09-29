@@ -14,9 +14,11 @@ Status: proposed. Author: platform team.
 
 **Producer.** The registry gateway publishes one message per registry event to
 the topic `registry-events` (24 partitions). Messages are keyed by **event
-kind** (`create`, `renew`, `transfer`, `delete`) so that each kind lands on its
-own set of partitions and consumers that only care about one kind (billing
-only needs renews) can subscribe cheaply.
+kind** (`create`, `renew`, `transfer`, `delete`). A custom partitioner gives
+each kind its own six partitions (create 0-5, renew 6-11, transfer 12-17,
+delete 18-23) and spreads that kind's messages round-robin across them, so all
+24 partitions carry traffic. A consumer that only cares about one kind (billing
+only needs renews) assigns itself that kind's six partitions.
 
 **Consumers.** Each service is its own consumer group: `billing`,
 `notifications`, `audit`. Delivery is at-least-once: a consumer commits offsets
@@ -26,7 +28,9 @@ then moves it to `registry-events.dlq`.
 **Retention.** 7 days on `registry-events`, 30 days on the DLQ.
 
 **Sizing.** 24 partitions × ~400 events/s per partition consumer gives
-headroom above the 5,000/s target; brokers are the managed 3-node cluster.
+headroom above the 5,000/s target. At peak no kind exceeds 1,500 events/s, and
+each kind's six partitions handle 2,400/s. Brokers are the managed 3-node
+cluster.
 
 ## Migration
 

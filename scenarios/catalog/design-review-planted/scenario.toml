@@ -5,7 +5,16 @@ category = "design"
 # idempotency boundary double-charges renews; (3) the dual-write migration has
 # no rollback or reconciliation story. Throughput, replay and independent
 # consumers are covered with numbers, so a blocking concern about them is
-# invented. Ordering is a decision for the user, so a question about it is due.
+# invented. Per-domain ordering is required (processor.py), so how to key for it
+# is a decision for the user, and a question about ordering or the partition key
+# is due. A dead-lettered event breaking its domain's sequence is a real
+# consequence of (1), so a blocker about it is not invented.
+#
+# Live Claude-model reviews on 2026-09-29 found two faults in an earlier version.
+# Keying by four kinds put traffic on at most 4 of the 24 partitions, so the
+# throughput numbers did not hold; the design now names a partitioner that uses
+# all 24. And the question check wanted the word "order", so it missed "which
+# partition key should the topic use?".
 
 [fake]
 check = "python3 -c \"import json; json.load(open('review/design-review.json')); print('ok')\""
