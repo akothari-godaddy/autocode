@@ -97,7 +97,9 @@ What to do:
 4. Report findings, each with a severity:
    - blocking: must be fixed before merge. A behavior that regresses, an invariant that breaks, a
      compatibility change, a defect the change's tests do not catch.
-   - advisory: everything else. Style, naming, simplification, a suggestion.
+   - advisory: everything else. Style, naming, simplification, a suggestion, a gap in documentation.
+     Blocking means the change breaks something; a README or docstring that could say more breaks
+     nothing, so it is advisory.
    Point at the file and the line span in the file AS IT WOULD BE AFTER THE CHANGE, and give evidence:
    the rule that is broken, the command you ran and what it printed, the scenario that fails.
    Give every blocking finding an example: the defect as one concrete case in plain English, "Given
@@ -110,7 +112,7 @@ What to do:
    in a scratch copy of its own and runs your delivered tests: each blocking finding's test must FAIL on
    the changed code, or your report is rejected. Name the patch file in change_patch (for example
    pr-184.patch), or "" when the change is already in the workspace. When a test really cannot show a
-   blocking finding (a documented compatibility rule, a missing document), say why in untestable;
+   blocking finding (a documented compatibility rule the change breaks), say why in untestable;
    otherwise untestable is "". Advisory findings need no test.
 6. Verdict: request_changes when there is at least one blocking finding, otherwise approve. Do not
    invent problems to look thorough: a correct change gets approve and, at most, advisory notes.
@@ -189,7 +191,8 @@ def prove(value: dict, delivered: list[str], run_tests) -> dict:
                          f"changed code: {unproven} (failing tests: {failing or 'none'}). "
                          "Name the actual test function or method after the finding ID, not just the file or class "
                          "(F1 -> test_f1_behavior). Keep finding IDs stable and update the delivered test methods; "
-                         "delivered_tests must still list file paths, not dotted test IDs.")
+                         "delivered_tests must still list file paths, not dotted test IDs. If no failing test can show a "
+                         "finding, do not keep retrying: make it advisory, drop it, or say why in untestable.")
     return {"finding_tests": matched, "command": run.get("command", ""), "tail": run.get("tail", "")[-1500:]}
 
 
