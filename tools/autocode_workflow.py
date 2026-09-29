@@ -5,10 +5,10 @@ import copy
 from pathlib import Path
 
 try:
-    from . import autocode_support as support, autocode_goals as goals
+    from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals
     from . import autocode_goal_lifecycle as lifecycle
 except ImportError:
-    import autocode_support as support
+    import autocode_support as support, autocode_completion as completion_gate
     import autocode_goals as goals
     import autocode_goal_lifecycle as lifecycle
 
@@ -145,7 +145,7 @@ def apply_implementation(runner,state,value,record,workspace,run_dir):
         decision={'status':'COMPLETE','contract_hash':value['contract_hash'],'contract_revision':value['contract_revision'],
             'task_id':value['task_id'],'user_request':value['user_request'],
             'acceptance_criteria':[{**a,'status':'verified','evidence':'Builder self-check; not independent'} for a in state['acceptance_criteria']]}
-        if not support.completion_ready(probe,decision,support.snapshot(workspace),require_human_reviews=False,require_independent=False):
+        if not completion_gate.completion_ready(probe,decision,support.snapshot(workspace),require_human_reviews=False,require_independent=False):
             raise ValueError('Final audit requires current executed self-check evidence for every approved criterion')
         state['final_audit_request']={**probe['validation'],'requested_at':support.now(),'independent':False}
         state['next_stage']='astra_checkpoint'

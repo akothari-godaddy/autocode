@@ -4,6 +4,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 import autocode_support as support
+import autocode_stage_context as stage_context
 import autocode_planning as planning
 import autocode_goals as goals
 
@@ -22,7 +23,7 @@ class MilestonePolicyTests(unittest.TestCase):
                 state = self.state()
                 before = copy.deepcopy(state)
                 with patch.object(support, 'snapshot', return_value={'revision': 'r1', 'head': 'h1'}):
-                    prompt, _ = support.context_packet(state, stage, Path('/fixture/state.json'))
+                    prompt, _ = stage_context.context_packet(state, stage, Path('/fixture/state.json'))
                 self.assertEqual(1, prompt.count('MILESTONE HANDOFF POLICY v1'))
                 self.assertIn('never a minimum duration', prompt)
                 self.assertIn('independently audits', prompt)

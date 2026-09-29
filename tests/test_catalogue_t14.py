@@ -45,7 +45,7 @@ MUTATIONS = [
      'correction_open = bool(state.get("resolution_request")) and state.get("next_stage") == "astra_resolve"',
      'correction_open = False',
      ["tests.test_catalogue_t04"]),
-    ("M04", "tools/autocode_support.py",
+    ("M04", "tools/autocode_completion.py",
      'if sol.get("source_revision") != current["revision"] or not sol.get("checks"):',
      'if not sol.get("checks"):',
      ["tests.test_catalogue_t06"]),

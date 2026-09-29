@@ -15,6 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_dispatch as dispatch
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
@@ -243,7 +244,7 @@ class DagScenarios(DagCase):
         complete["acceptance_criteria"] = [{**c, "status": "verified", "evidence": "event:check"}
                                            for c in self.state["acceptance_criteria"]]
         self.check_false("partial_progress_is_not_completion",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         self.check("project_still_running", False, self.state["status"] == "TASK_COMPLETE")
         self.check("downstream_progress_allowed", {"MB", "MC"}, self.oracle.ready({"MA"}))
         self.finish(summary="READY_BUILD: accepted A unlocks B/C; overall completion still blocked")

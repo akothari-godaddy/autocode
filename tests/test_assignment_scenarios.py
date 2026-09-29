@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from . import test_goals
 import autocode as runner
+import autocode_stage_context as stage_context
 import autocode_dispatch as d
 import autocode_goals as g
 import autocode_goal_lifecycle as lifecycle
@@ -326,7 +327,7 @@ class AssignmentScenarios(unittest.TestCase):
         self.install_builder("escape_tests")
         schema = self.run / "schema.json"
         s.atomic_json(schema, s.model_output_schema(g.role_schema(s.read(runner.SCHEMA_DIR / "v2/terra-report.schema.json"), "terra")))
-        prompt, metrics = s.context_packet(self.state, "terra", self.run / "state.json")
+        prompt, metrics = stage_context.context_packet(self.state, "terra", self.run / "state.json")
         self.state["pending_context_metrics"] = metrics
         value, record = runner.run_role(role="terra", prompt=prompt, sandbox="workspace-write", workspace=self.root,
             run_dir=self.run, state=self.state, schema=schema, model="terra", allow_write=True, dry_run=False)
@@ -349,7 +350,7 @@ class AssignmentScenarios(unittest.TestCase):
         self.install_builder("correct")
         schema = self.run / "schema.json"
         s.atomic_json(schema, s.model_output_schema(g.role_schema(s.read(runner.SCHEMA_DIR / "v2/terra-report.schema.json"), "terra")))
-        prompt, metrics = s.context_packet(self.state, "terra", self.run / "state.json")
+        prompt, metrics = stage_context.context_packet(self.state, "terra", self.run / "state.json")
         self.state["pending_context_metrics"] = metrics
         value, record = runner.run_role(role="terra", prompt=prompt, sandbox="workspace-write", workspace=self.root,
             run_dir=self.run, state=self.state, schema=schema, model="terra", allow_write=True, dry_run=False)

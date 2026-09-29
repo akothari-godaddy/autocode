@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_stage_context as stage_context
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_planning as planning
@@ -142,7 +143,7 @@ class V2FlowTests(unittest.TestCase):
                 self.assertEqual(role, planning.role_for(state, stage))
                 self.assertEqual(role, planning.route_for(state, stage))
                 with patch.object(support, "snapshot", return_value={"revision": "fixture", "head": "fixture"}):
-                    packet = json.loads(support.context_packet(state, stage, Path("state.json"))[0].split("CURRENT HANDOFF DATA\n", 1)[1])
+                    packet = json.loads(stage_context.context_packet(state, stage, Path("state.json"))[0].split("CURRENT HANDOFF DATA\n", 1)[1])
                 self.assertEqual(planning.engine_for(settings, planning.route_for(state, stage)),
                                  packet["execution_engine"])
 

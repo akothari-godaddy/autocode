@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from . import test_goals
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as milestones
@@ -241,7 +242,7 @@ class ActivityRuntimeTests(unittest.TestCase):
         decision['next_task']['kind'] = 'validate'
         runner.apply_result(self.state, 'astra_review', decision, {'output': 'review.json'}, self.root, self.run)
         self.assertEqual('sol', self.state['next_stage'], 'Retained work still needs independent verification')
-        self.assertFalse(support.completion_ready(self.state, self.decision('TASK_COMPLETE'),
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision('TASK_COMPLETE'),
                                                  support.snapshot(self.root)))
 
     def test_timeout_racing_a_completed_report_reconciles_to_sol_without_replay(self):

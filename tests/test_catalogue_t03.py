@@ -16,6 +16,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
+import autocode_stage_context as stage_context
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
@@ -112,12 +113,12 @@ class SessionScenarios(SessionCase):
         self.check("distinct_sessions_per_role", True,
                    self.state["sessions"].get("terra") != self.state["sessions"].get("sol")
                    and None not in (self.state["sessions"].get("terra"), self.state["sessions"].get("sol")))
-        prompt, _ = support.context_packet(self.state, "sol", self.run / "state.json")
+        prompt, _ = stage_context.context_packet(self.state, "sol", self.run / "state.json")
         self.check_true("reviewer_prompt_has_requirements", "acceptance" in prompt or "criterion" in prompt.lower())
         self.check_true("reviewer_prompt_has_candidate", "greet.py" in prompt or "changed" in prompt)
         self.check("no_implementation_session_reuse_as_reviewer", True,
-                   support.context_packet(self.state, "sol", self.run / "state.json")[0]
-                   != support.context_packet(self.state, "terra", self.run / "state.json")[0])
+                   stage_context.context_packet(self.state, "sol", self.run / "state.json")[0]
+                   != stage_context.context_packet(self.state, "terra", self.run / "state.json")[0])
         self.finish(summary="READY_REVIEW: validation runs in its own session with contract and candidate")
 
     def test_ses02_resume_creator_with_finding_set(self):

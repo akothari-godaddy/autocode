@@ -7,6 +7,8 @@ from unittest.mock import patch
 
 from . import test_goals
 import autocode as runner
+import autocode_stage_context as stage_context
+import autocode_completion as completion_gate
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_support as s
@@ -155,10 +157,10 @@ class MilestoneCheckpointTests(unittest.TestCase):
         complete = self.decision(status='COMPLETE')
         complete['acceptance_criteria'] = [{**c, 'status': 'verified', 'evidence': 'event:check'}
                                            for c in self.state['acceptance_criteria']]
-        self.assertFalse(s.completion_ready(self.state, complete, s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, complete, s.snapshot(self.root)))
         no_findings = copy.deepcopy(self.state)
         no_findings['findings_ledger'] = []
-        self.assertTrue(s.completion_ready(no_findings, complete, s.snapshot(self.root)))
+        self.assertTrue(completion_gate.completion_ready(no_findings, complete, s.snapshot(self.root)))
 
     def test_current_milestone_finding_blocks_with_specific_diagnostics(self):
         self.start()
@@ -216,22 +218,22 @@ class MilestoneCheckpointTests(unittest.TestCase):
                                            for c in self.state['acceptance_criteria']]
         current = s.snapshot(self.root)
         self.assertTrue(m.evidence_ready(self.state, current))
-        self.assertFalse(s.completion_ready(self.state, decision, current))
+        self.assertFalse(completion_gate.completion_ready(self.state, decision, current))
         self.state['validation']['end_to_end_result']['status'] = 'PASS'
-        self.assertTrue(s.completion_ready(self.state, decision, current))
+        self.assertTrue(completion_gate.completion_ready(self.state, decision, current))
 
     def test_review_handoff_evaluates_current_gate_without_erasing_history(self):
         self.start()
         self.validate(flow_status='NOT_VERIFIED')
         self.state['milestone_blocker'] = 'Previous evidence gate rejection'
         before = copy.deepcopy(self.state)
-        prompt, _ = s.context_packet(self.state, 'astra_review', self.run / 'state.json')
+        prompt, _ = stage_context.context_packet(self.state, 'astra_review', self.run / 'state.json')
         packet = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
         self.assertTrue(packet['milestone_checkpoint']['current_evidence_ready'])
         self.assertEqual('Previous evidence gate rejection', packet['milestone_checkpoint']['blocker'])
         self.assertEqual(before, self.state)
         self.state['validation']['end_to_end_result']['status'] = 'FAIL'
-        prompt, _ = s.context_packet(self.state, 'astra_review', self.run / 'state.json')
+        prompt, _ = stage_context.context_packet(self.state, 'astra_review', self.run / 'state.json')
         packet = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
         self.assertFalse(packet['milestone_checkpoint']['current_evidence_ready'])
 

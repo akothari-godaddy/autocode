@@ -21,6 +21,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autopilot_testkit as kit
 import autocode as runner
+import autocode_stage_context as stage_context
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
@@ -261,7 +262,7 @@ class CompatScenarios(CompatCase):
             self.approve_now()
             decision = self.decision()
             lifecycle.assign_task(self.state, decision, support.snapshot(self.root))
-            packet, _ = support.context_packet(self.state, "terra", self.run / "state.json")
+            packet, _ = stage_context.context_packet(self.state, "terra", self.run / "state.json")
             flowed = "Greet" in packet or bool(self.state.get("current_task"))
         finally:
             socket.socket = real_socket

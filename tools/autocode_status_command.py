@@ -11,7 +11,7 @@ def render(runner, state, args, workspace, run_dir):
                  and worker_state and worker_state.get("checked")
                  and not worker_state.get("alive") and not active_finished)
     current = runner.support.snapshot(workspace) if state["status"] == "TASK_COMPLETE" else None
-    completion_current = (runner.support.completion_ready(state, state.get("final_decision", {}), current)
+    completion_current = (runner.completion_gate.completion_ready(state, state.get("final_decision", {}), current)
                           if state["status"] == "TASK_COMPLETE" else None)
     if stale:
         print(f"STALE CHECKPOINT: saved status is RUNNING but the recorded "

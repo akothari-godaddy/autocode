@@ -13,6 +13,7 @@ from pathlib import Path
 
 from . import test_goals
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_dispatch as dispatch
 import autocode_findings as findings
 import autocode_goals as goals
@@ -152,7 +153,7 @@ class TortureBase(unittest.TestCase):
         validation = self.state.get("validation") or {}
         current = support.snapshot(self.root)
         if status == "TASK_COMPLETE":
-            self.assertTrue(support.completion_ready(self.state, self.state.get("final_decision") or {}, current))
+            self.assertTrue(completion_gate.completion_ready(self.state, self.state.get("final_decision") or {}, current))
             self.assertFalse(findings.blocking_entries(self.state))
             self.assertEqual(current["revision"], validation.get("source_revision"))
             self.assertEqual(self.state["goal_contract"]["hash"], validation.get("contract_hash"))
@@ -162,7 +163,7 @@ class TortureBase(unittest.TestCase):
             self.assertTrue(all(check.get("exit_code") == 0 for check in validation["checks"]))
             self.assertTrue(all(row.get("status") == "PASS" for row in validation.get("criterion_results", [])))
         else:
-            self.assertFalse(support.completion_ready(
+            self.assertFalse(completion_gate.completion_ready(
                 self.state, {"status": "COMPLETE", "acceptance_criteria": self.state.get("acceptance_criteria", []),
                              "findings": [], **envelope(self.state)}, current) and False)
         for row in validation.get("criterion_results", []):
@@ -170,7 +171,7 @@ class TortureBase(unittest.TestCase):
                 self.assertNotEqual("TASK_COMPLETE", status)
         if validation.get("source_revision") and validation["source_revision"] != current["revision"]:
             self.assertNotEqual("TASK_COMPLETE", status)
-            self.assertFalse(support.completion_ready(self.state, self.state.get("final_decision") or {"status": "COMPLETE"}, current))
+            self.assertFalse(completion_gate.completion_ready(self.state, self.state.get("final_decision") or {"status": "COMPLETE"}, current))
         if before_rows is not None:
             after = {row["id"]: row for row in self.state.get("findings_ledger", [])}
             for row in before_rows:
@@ -403,7 +404,7 @@ class FindingsEvidenceAndUnverifiedTests(TortureBase):
         pinned = self.state["validation"]["evidence_hashes"]
         target = next(iter(pinned))
         Path(target).write_text(Path(target).read_text() + "tampered\n")
-        self.assertFalse(support.completion_ready(self.state, self.astra("COMPLETE")[0], support.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.astra("COMPLETE")[0], support.snapshot(self.root)))
         previous = self.fresh("old-shot")
         previous.write_text("old candidate\n")
         stale = self.sol("PASS", evidence_ref=str(previous))
@@ -416,7 +417,7 @@ class FindingsEvidenceAndUnverifiedTests(TortureBase):
         stale[1]["source_revision"] = before
         self.attempt(lambda: self.apply("sol", stale[0], stale[1]))
         self.assertNotEqual("TASK_COMPLETE", self.state["status"])
-        self.assertFalse(support.completion_ready(self.state, self.astra("COMPLETE")[0], support.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.astra("COMPLETE")[0], support.snapshot(self.root)))
         if self.state.get("validation"):
             self.assertNotEqual(support.snapshot(self.root)["revision"], self.state["validation"]["source_revision"])
 
@@ -554,7 +555,7 @@ class CorrectionCrashAndCompletionTests(TortureBase):
         (self.root / "greet.py").write_text("print('after complete')\n")
         runner.recheck_completion(self.state, self.root)
         self.assertNotEqual("TASK_COMPLETE", self.state["status"])
-        self.assertFalse(support.completion_ready(self.state, {"status": "COMPLETE"}, support.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, {"status": "COMPLETE"}, support.snapshot(self.root)))
 
     def test_pass_after_complete_cannot_invent_a_new_completion(self):
         self.apply("sol", *self.sol("PASS"))
@@ -568,7 +569,7 @@ class CorrectionCrashAndCompletionTests(TortureBase):
         else:
             self.assertTrue(self.state["status"] != "TASK_COMPLETE" or self.state.get("next_stage") in (None, "astra_review"))
             if self.state["status"] == "TASK_COMPLETE":
-                self.assertTrue(support.completion_ready(self.state, self.state["final_decision"], support.snapshot(self.root)))
+                self.assertTrue(completion_gate.completion_ready(self.state, self.state["final_decision"], support.snapshot(self.root)))
             self.assertEqual(before["goal_contract"], self.state["goal_contract"])
 
 

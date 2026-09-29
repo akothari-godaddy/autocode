@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import autocode as runner, autopilot, autocode_goals as goals
+import autocode_completion as completion_gate
 import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as milestones, autocode_resolver_human as human
 import autocode_support as support, autocode_util as util, autocode_workflow as workflow
@@ -270,7 +271,7 @@ class ResolverProducerTests(unittest.TestCase):
         self.state['validation'] = {'verdict': 'PASS', 'source_revision': 'source-one', 'evidence_hashes': {
             str(evidence): support.file_hash(evidence)}}
         token = goals.review_token(self.state)
-        with patch.object(support, 'completion_ready', return_value=True):
+        with patch.object(completion_gate, 'completion_ready', return_value=True):
             value = self.decision('COMPLETE')
             value['user_request'] = envelope(self.state)['user_request']
             self.apply('astra_review', value)

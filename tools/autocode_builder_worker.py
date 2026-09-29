@@ -4,13 +4,13 @@ import sys
 import uuid
 
 try:
-    from . import autocode as runner
+    from . import autocode as runner, autocode_stage_context as stage_context
     from . import autocode_test_examples as test_examples, autocode_test_cases as test_cases
     from . import autocode_assignment as assignment
 except ImportError:
     import autocode_assignment as assignment
     import autocode_test_cases as test_cases
-    import autocode as runner
+    import autocode as runner, autocode_stage_context as stage_context
     import autocode_test_examples as test_examples
 
 
@@ -56,7 +56,7 @@ def execute(state, directory, workspace, mode):
         if mode == "recover" or mode == "start" and (state.get("stages") or (directory / "result.json").exists()):
             raise runner.support.Paused("PAUSED_ORCHESTRATOR_WORKER", "No completed Builder result; explicitly retry this member after inspection")
         state.update(status="RUNNING", next_stage="terra")
-        prompt, metrics = runner.support.context_packet(state, "terra", directory / "state.json")
+        prompt, metrics = stage_context.context_packet(state, "terra", directory / "state.json")
         prompt = test_examples.add_to_prompt(prompt, workspace, state.get("current_task"))
         prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", test_cases.builder_note(state) + assignment.BUILD_OUTPUT_NOTE
                                 + "\nCURRENT HANDOFF DATA\n", 1)
