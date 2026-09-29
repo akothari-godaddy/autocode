@@ -320,6 +320,24 @@ class VerifyCase(unittest.TestCase):
             self.assertEqual(("jest", "npm test --silent"), (framework.name, framework.suite))
             self.assertIn("jest src/a.test.js", framework.targeted(["src/a.test.js"]))
 
+    def test_a_new_projects_untracked_files_are_detected_and_ignored_ones_are_not(self):
+        # AutoCode never commits: in a new project the Builder's code and tests are all untracked.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            git(root, "init", "-q")
+            (root / "README.md").write_text("seed\n")
+            git(root, "add", "-A")
+            git(root, "-c", "user.name=t", "-c", "user.email=t@example.test", "commit", "-q", "-m", "seed")
+            (root / ".autocode").mkdir()
+            (root / ".autocode" / ".gitignore").write_text("*\n")
+            (root / ".autocode" / "test_runner_owned.py").write_text("import unittest\n")
+            self.assertIsNone(verify.detect_framework(root, python=sys.executable))
+            (root / "greet.py").write_text("print('hi')\n")
+            (root / "test_greet.py").write_text("import unittest\n")
+            framework = verify.detect_framework(root, python=sys.executable)
+            self.assertEqual("unittest", framework.name)
+            self.assertIn("-m unittest discover", framework.suite)
+
     def test_unittest_results_are_parsed_per_test(self):
         with tempfile.TemporaryDirectory() as temp:
             log = Path(temp) / "out.log"
