@@ -8,8 +8,12 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_configure
 import autocode_goals as goals
+import autocode_milestones as milestones
 import autocode_opencode as oc
+import autocode_planning as planning
+import autopilot
 from . import test_planning as test_planning
 from goal_fixtures import approve_fixture
 
@@ -38,7 +42,7 @@ class JointUpgradeTests(unittest.TestCase):
 
     def test_explicit_upgrade_keeps_roles_sessions_and_approved_work(self):
         before = copy.deepcopy(self.state)
-        settings = runner.configure(self.args, self.state)
+        settings = autocode_configure.configure(self.args, self.state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
         self.assertEqual(before, self.state)
         self.assertTrue(settings["joint_planning"])
         self.assertEqual("zai-coding-plan/glm-5.3", settings["roles"]["glm"]["model"])
@@ -50,7 +54,7 @@ class JointUpgradeTests(unittest.TestCase):
         self.assertTrue(goals.approved({**self.state, "settings": settings}))
 
     def test_resume_without_explicit_upgrade_keeps_existing_workflow(self):
-        settings = runner.configure(test_planning.PlanningTests.configure_args(self), self.state)
+        settings = autocode_configure.configure(test_planning.PlanningTests.configure_args(self), self.state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
         self.assertNotIn("glm", settings["roles"])
         self.assertFalse(settings.get("joint_planning"))
 
@@ -61,18 +65,18 @@ class JointUpgradeTests(unittest.TestCase):
             state = {**copy.deepcopy(self.state), **change}
             before = copy.deepcopy(state)
             with self.subTest(change=change), self.assertRaises(ValueError):
-                runner.configure(self.args, state)
+                autocode_configure.configure(self.args, state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
             self.assertEqual(before, state)
 
     def test_codex_session_is_never_reassigned_to_glm_or_opencode(self):
         self.state["settings"]["roles"]["astra"]["engine"] = "codex"
         with self.assertRaisesRegex(ValueError, "different session engines"):
-            runner.configure(self.args, self.state)
+            autocode_configure.configure(self.args, self.state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
 
     def test_provider_preflight_failure_preserves_checkpoint(self):
         before = copy.deepcopy(self.state)
         with patch.object(oc, "check_models", side_effect=RuntimeError("model unavailable")), self.assertRaises(RuntimeError):
-            runner.configure(self.args, self.state)
+            autocode_configure.configure(self.args, self.state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
         self.assertEqual(before, self.state)
 
 

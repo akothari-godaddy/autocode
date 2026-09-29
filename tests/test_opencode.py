@@ -13,7 +13,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_configure
+import autocode_milestones as milestones
 import autocode_opencode as oc
+import autocode_planning as planning
+import autopilot
 import autocode_support as support
 from . import test_subprocess as subprocess_tests
 
@@ -165,7 +169,7 @@ class OpenCodeTests(unittest.TestCase):
 
     def test_engine_cannot_reuse_other_engines_sessions(self):
         with self.assertRaisesRegex(ValueError, "not interchangeable"):
-            runner.configure(SimpleNamespace(engine="opencode"), {"settings": {"roles": {}}, "sessions": {"astra": "old"}})
+            autocode_configure.configure(SimpleNamespace(engine="opencode"), {"settings": {"roles": {}}, "sessions": {"astra": "old"}}, planning=planning, milestones=milestones, autopilot=autopilot)
 
     def test_inline_role_denies_and_patterns_survive_launch(self):
         for policy in ("deny", {"bash":"deny", "webfetch":"deny"},

@@ -9,8 +9,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_configure
+import autocode_milestones as milestones
 import autocode_opencode as oc
 import autocode_planning as planning
+import autopilot
 import autocode_support as support
 from . import test_planning as test_planning
 
@@ -34,11 +37,11 @@ class AllRoleModelTests(unittest.TestCase):
 
     def test_saved_run_pins_selected_roles_at_a_model_change(self):
         with patch.object(oc, 'local_settings', return_value={'engine': 'opencode'}):
-            original = runner.configure(self.configure_args(), {'workspace': '/fixture', 'iteration': 0})
+            original = autocode_configure.configure(self.configure_args(), {'workspace': '/fixture', 'iteration': 0}, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
             state = {'workspace': '/fixture', 'settings': original, 'sessions': {'astra': 'saved'}}
-            selected = runner.configure(self.configure_args(
+            selected = autocode_configure.configure(self.configure_args(
                 astra_model='openai/gpt-5.6-sol', astra_reasoning_effort='high',
-                pin_model_role=['astra', 'sol', 'completion']), state)
+                pin_model_role=['astra', 'sol', 'completion']), state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
         self.assertEqual('openai/gpt-5.6-sol', selected['roles']['astra']['model'])
         self.assertEqual('high', selected['roles']['astra']['reasoning_effort'])
         self.assertTrue(all(selected['roles'][role]['model_pinned']
@@ -50,8 +53,8 @@ class AllRoleModelTests(unittest.TestCase):
                   'terra':'local/custom:32b','sol':'openai/gpt-6-astra'}
         with patch.object(oc, 'local_settings', return_value={'engine':'opencode'}), \
              patch.object(support, 'local_settings', side_effect=AssertionError('No Codex role selected')):
-            settings = runner.configure(self.configure_args(**{role+'_model':model for role,model in models.items()}),
-                                        {'workspace':'/fixture','iteration':0})
+            settings = autocode_configure.configure(self.configure_args(**{role+'_model':model for role,model in models.items()}),
+                                        {'workspace':'/fixture','iteration':0}, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
             self.assertEqual({'opencode'}, set(settings['transport_identities']))
             for role, model in models.items():
                 self.assertEqual('opencode', settings['roles'][role]['engine'])
@@ -60,7 +63,7 @@ class AllRoleModelTests(unittest.TestCase):
             state = {'settings':settings,'sessions':{role:'saved-'+role for role in models},
                      'next_stage':'sol','goal_contract':{'revision':9,'approval_status':'approved'}}
             before = copy.deepcopy(state)
-            self.assertEqual(settings, runner.configure(self.configure_args(), state))
+            self.assertEqual(settings, autocode_configure.configure(self.configure_args(), state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode))
             self.assertEqual(before, state)
             with patch.object(oc, 'check_subscription_routes') as guard:
                 runner.check_joint_transports(state, Path('/fixture'))
@@ -70,7 +73,7 @@ class AllRoleModelTests(unittest.TestCase):
         with patch.object(oc, 'local_settings', return_value={'engine':'opencode'}), \
              patch.object(support, 'local_settings', return_value={'auth_mode':'ChatGPT'}):
             args = self.configure_args(sol_model='openai/gpt-6-luna')
-            settings = runner.configure(args, {'workspace':'/fixture','iteration':0})
+            settings = autocode_configure.configure(args, {'workspace':'/fixture','iteration':0}, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
         self.assertEqual('opencode', settings['roles']['astra']['engine'])
         self.assertEqual('openai/gpt-6-astra', settings['roles']['astra']['model'])
         self.assertEqual('opencode', settings['roles']['sol']['engine'])
@@ -82,7 +85,7 @@ class AllRoleModelTests(unittest.TestCase):
         before = copy.deepcopy(state)
         for override in ({'astra_model':'gpt-6-astra'}, {'sol_model':'gpt-5.6-sol'}):
             with self.assertRaises(ValueError):
-                runner.configure(self.configure_args(**override), state)
+                autocode_configure.configure(self.configure_args(**override), state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
             self.assertEqual(before, state)
 
 

@@ -10,7 +10,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_configure
+import autocode_milestones as milestones
 import autocode_opencode as oc
+import autocode_planning as planning
+import autopilot
 import autocode_support as support
 from . import test_planning as test_planning
 
@@ -67,7 +71,7 @@ class OpenCodeRoutingTests(unittest.TestCase):
         ):
             args = test_planning.PlanningTests.configure_args(self, **overrides)
             with patch.object(support, "local_settings", side_effect=AssertionError("Codex must not be used")):
-                settings = runner.configure(args, {"workspace": str(self.run), "iteration": 0})
+                settings = autocode_configure.configure(args, {"workspace": str(self.run), "iteration": 0}, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
             self.assertEqual({"opencode"}, {c["engine"] for c in settings["roles"].values()})
             self.assertEqual("openai/gpt-6-astra", settings["roles"]["astra"]["model"])
             self.assertEqual(expected_sol, settings["roles"]["sol"]["model"])
@@ -75,7 +79,7 @@ class OpenCodeRoutingTests(unittest.TestCase):
 
     def test_migration_preserves_approved_work_and_archives_only_codex_sessions(self):
         before = copy.deepcopy(self.state)
-        self.assertTrue(runner.migrate_opencode_roles(self.state, self.run, self.run))
+        self.assertTrue(autocode_configure.migrate_opencode_roles(self.state, self.run, self.run, planning=planning, opencode=runner.opencode, write_json=runner.write_json, now=runner.now))
         for key in ("status", "next_stage", "iteration", "goal_contract", "implementation", "planning", "milestone_progress", "stages"):
             self.assertEqual(before[key], self.state[key], key)
         self.assertEqual(before["settings"]["limits"], self.state["settings"]["limits"])
@@ -87,7 +91,7 @@ class OpenCodeRoutingTests(unittest.TestCase):
         self.assertEqual(before, json.loads(backup.read_text()))
         self.assertEqual(self.state, json.loads((self.run / "state.json").read_text()))
         saved = (self.run / "state.json").read_bytes()
-        self.assertFalse(runner.migrate_opencode_roles(self.state, self.run, self.run))
+        self.assertFalse(autocode_configure.migrate_opencode_roles(self.state, self.run, self.run, planning=planning, opencode=runner.opencode, write_json=runner.write_json, now=runner.now))
         self.assertEqual(saved, (self.run / "state.json").read_bytes())
 
     def test_unresolved_stages_cannot_change_routes_or_sessions(self):
@@ -96,7 +100,7 @@ class OpenCodeRoutingTests(unittest.TestCase):
             state[key] = {"saved": True}
             before = copy.deepcopy(state)
             with self.subTest(key=key), self.assertRaises(support.Paused):
-                runner.migrate_opencode_roles(state, self.run, self.run)
+                autocode_configure.migrate_opencode_roles(state, self.run, self.run, planning=planning, opencode=runner.opencode, write_json=runner.write_json, now=runner.now)
             self.assertEqual(before, state)
         self.assertEqual([], list(self.run.glob("state.pre-opencode-*")))
 
@@ -105,7 +109,7 @@ class OpenCodeRoutingTests(unittest.TestCase):
         original = (self.run / "state.json").read_bytes()
         for name in ("check_models", "check_subscription_routes"):
             with patch.object(oc, name, side_effect=RuntimeError("unavailable")), self.assertRaises(RuntimeError):
-                runner.migrate_opencode_roles(self.state, self.run, self.run)
+                autocode_configure.migrate_opencode_roles(self.state, self.run, self.run, planning=planning, opencode=runner.opencode, write_json=runner.write_json, now=runner.now)
             self.assertEqual(before, self.state)
             self.assertEqual(original, (self.run / "state.json").read_bytes())
         self.assertEqual([], list(self.run.glob("state.pre-opencode-*")))
@@ -113,11 +117,11 @@ class OpenCodeRoutingTests(unittest.TestCase):
     def test_custom_provider_is_not_guessed_and_configuration_drift_is_preserved(self):
         self.state["settings"]["roles"]["astra"]["provider"] = "custom"
         with self.assertRaises(support.Paused):
-            runner.migrate_opencode_roles(self.state, self.run, self.run)
+            autocode_configure.migrate_opencode_roles(self.state, self.run, self.run, planning=planning, opencode=runner.opencode, write_json=runner.write_json, now=runner.now)
         self.state["settings"]["roles"]["astra"]["provider"] = "openai"
         before = copy.deepcopy(self.state)
         with patch.object(oc, "local_settings", return_value={**self.identity, "version": "changed"}), self.assertRaises(support.Paused):
-            runner.migrate_opencode_roles(self.state, self.run, self.run)
+            autocode_configure.migrate_opencode_roles(self.state, self.run, self.run, planning=planning, opencode=runner.opencode, write_json=runner.write_json, now=runner.now)
         self.assertEqual(before, self.state)
 
     def test_explicit_transport_acceptance_uses_validated_current_identity_only_at_clean_pause(self):
@@ -127,12 +131,12 @@ class OpenCodeRoutingTests(unittest.TestCase):
         args = test_planning.PlanningTests.configure_args(
             self, resume_paused=True, accept_transport_change=True)
         with patch.object(oc, "local_settings", return_value=current):
-            settings = runner.configure(args, self.state)
+            settings = autocode_configure.configure(args, self.state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
         self.assertEqual(current, settings["transport_identity"])
         self.assertEqual(current, settings["transport_identities"]["opencode"])
         self.state["status"] = "RUNNING"
         with self.assertRaisesRegex(ValueError, "paused for a transport change"):
-            runner.configure(args, self.state)
+            autocode_configure.configure(args, self.state, planning=planning, milestones=milestones, autopilot=autopilot, opencode=runner.opencode)
 
 
 class OpenCodeMigrationFlow(unittest.TestCase):

@@ -6,6 +6,8 @@ import unittest
 from unittest.mock import patch
 
 from . import test_operational_recovery as fixtures, test_subprocess
+import autocode_configure
+import autocode_planning as planning
 
 runner, s, resolver = fixtures.runner, fixtures.s, fixtures.resolver
 human = runner.resolver_human
@@ -159,7 +161,7 @@ class ReconsiderationCLITests(unittest.TestCase):
         # The job recognizer runs first; take the Planner's discovery stage by name.
         discovery = next(row for row in self.state['stages'] if row['stage'] == 'astra_discovery')
         discovery.update(stage='astra_discovery_report_repair', original_stage='astra_discovery', report_only=True)
-        runner.configure_codex_joint(self.state['settings'], SimpleNamespace())
+        autocode_configure.configure_codex_joint(self.state['settings'], SimpleNamespace(), planning=planning)
         self.state['planning'] = {'astra_calls': 2, 'reports': {'astra_discovery': {
             'output': discovery['output'], 'report': {'summary': 'accepted repaired discovery'}}}}
         if explicit:

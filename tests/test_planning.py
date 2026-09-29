@@ -12,8 +12,10 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
+import autocode_configure
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
+import autocode_milestones as milestones
 import autocode_opencode as oc
 import autocode_planning as planning
 import autopilot
@@ -74,7 +76,7 @@ class PlanningTests(unittest.TestCase):
         args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
         settings = {"engine": "opencode", "roles": {r: {} for r in ("astra", "terra", "sol")},
                     "transport_identity": {"engine": "opencode"}}
-        runner.configure_joint(settings, args, fresh=True)
+        autocode_configure.configure_joint(settings, args, fresh=True, planning=planning)
         state = {"settings": settings}
         self.assertEqual("openai/gpt-6-sol", settings["roles"]["plan_reviewer"]["model"])
         self.assertEqual("opencode", settings["roles"]["plan_reviewer"]["engine"])
@@ -103,7 +105,7 @@ class PlanningTests(unittest.TestCase):
                                plan_reviewer_reasoning_effort='high')
         settings = {"engine": "opencode", "roles": {r: {} for r in ("astra", "terra", "sol")},
                     "transport_identity": {"engine": "opencode"}}
-        runner.configure_joint(settings, args, fresh=True)
+        autocode_configure.configure_joint(settings, args, fresh=True, planning=planning)
         self.assertEqual(('openai/gpt-6-luna', 'high'),
                          (settings['roles']['requirements']['model'],
                           settings['roles']['requirements']['reasoning_effort']))
@@ -341,11 +343,11 @@ class PlanningTests(unittest.TestCase):
 
     def test_subscription_guard_refuses_api_routes(self):
         good = {"auth_mode": "ChatGPT", "model_provider": None}
-        runner.check_subscription(good)
+        autocode_configure.check_subscription(good)
         for bad in ({"auth_mode": "unknown"}, {"model_provider": "external"}, {"environment_auth_present": True},
                     {"environment_base_url_present": True}, {"openai_base_url": "https://other.test"}):
             with self.subTest(bad=bad), self.assertRaises(support.Paused) as error:
-                runner.check_subscription({**good, **bad})
+                autocode_configure.check_subscription({**good, **bad})
             self.assertEqual("PAUSED_BILLING_ROUTE", error.exception.status)
 
     def test_sol_defaults_to_opencode_and_saved_model_choices_are_preserved(self):
@@ -353,16 +355,16 @@ class PlanningTests(unittest.TestCase):
         settings = {"engine": "opencode", "roles": {r: {} for r in ("astra", "terra", "sol")},
                     "transport_identity": {"engine": "opencode"}}
         with patch.object(support, "local_settings", side_effect=AssertionError("No Codex login required")):
-            runner.configure_joint(settings, args, fresh=True)
+            autocode_configure.configure_joint(settings, args, fresh=True, planning=planning)
         self.assertEqual({"engine": "opencode", "provider": None, "model": "openai/gpt-6-sol",
                           "reasoning_effort": "high"}, settings["roles"]["sol"])
         settings["roles"]["sol"] = {"engine": "opencode", "provider": None, "model": "zai-coding-plan/glm-5.3"}
         saved = copy.deepcopy(settings)
-        runner.configure_joint(settings, args, fresh=False)
+        autocode_configure.configure_joint(settings, args, fresh=False, planning=planning)
         self.assertEqual(saved, settings)
         settings["roles"]["sol"]["model"] = "gpt-5.6-sol"
         with self.assertRaisesRegex(ValueError, "session engines cannot be switched"):
-            runner.configure_joint(settings, args, fresh=False)
+            autocode_configure.configure_joint(settings, args, fresh=False, planning=planning)
 
     def configure_args(self, **overrides):
         args = SimpleNamespace(engine=None, joint_planning=False, glm_model=None, astra_model=None,
@@ -379,11 +381,12 @@ class PlanningTests(unittest.TestCase):
 
     def test_new_run_uses_joint_planning_without_the_flag(self):
         # Removing implicit joint for a flagless OpenCode new run must fail this test.
-        # main() can rebind runner.opencode; patch the actual consumer, not the compatibility wrapper.
+        # main() rebinds the runner's opencode facade; autocode_configure reads the
+        # same module object, so patching it here patches the actual consumer.
         state = {"workspace": "/tmp/fixture", "iteration": 0}
         with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}), \
              patch.object(runner.opencode, "local_settings", return_value={"engine": "opencode"}):
-            settings = runner.configure(self.configure_args(), state)
+            settings = autocode_configure.configure(self.configure_args(), state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertTrue(settings["joint_planning"])
         self.assertEqual("opencode", settings["engine"])
         self.assertEqual("glm", planning.role_for({"settings": settings}, "astra_discovery"))
@@ -406,37 +409,37 @@ class PlanningTests(unittest.TestCase):
         codex_args = {"astra_model": "gpt-5.6-sol", "terra_model": "gpt-5.6-terra", "sol_model": "gpt-5.6-sol",
                        "completion_model": "gpt-5.6-sol"}
         with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT", "model": "local"}):
-            settings = runner.configure(self.configure_args(engine="codex", **codex_args), state)
+            settings = autocode_configure.configure(self.configure_args(engine="codex", **codex_args), state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertFalse(settings.get("joint_planning"))
         self.assertEqual("codex", settings["engine"])
         self.assertNotIn("glm", settings["roles"])
         self.assertEqual("astra", planning.role_for({"settings": settings}, "astra_discovery"))
         with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}):
-            joint = runner.configure(self.configure_args(engine="codex", joint_planning=True, **codex_args), state)
+            joint = autocode_configure.configure(self.configure_args(engine="codex", joint_planning=True, **codex_args), state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertTrue(joint['joint_planning'])
         self.assertEqual({'codex'}, {planning.engine_for(joint, role) for role in joint['roles']})
         self.assertEqual('requirements', planning.role_for({'settings': joint}, 'requirements_gather'))
         saved = {"settings": {"engine": "opencode", "joint_planning": False, "roles": {
             "astra": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro"}, "terra": {"model": "xiaomi-token-plan-sgp/mimo-v2.6-pro"},
             "sol": {"model": "zai-coding-plan/glm-5.3"}}}, "sessions": {"astra": "saved"}}
-        kept = runner.configure(self.configure_args(), saved)
+        kept = autocode_configure.configure(self.configure_args(), saved, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertFalse(kept.get("joint_planning"))
         self.assertEqual("xiaomi-token-plan-sgp/mimo-v2.6-pro", kept["roles"]["terra"]["model"])
         with self.assertRaisesRegex(ValueError, "Start a new run"):
-            runner.configure(self.configure_args(joint_planning=True), saved)
+            autocode_configure.configure(self.configure_args(joint_planning=True), saved, planning=planning, milestones=milestones, autopilot=autopilot)
 
     def test_native_joint_routes_preserve_saved_models_and_check_only_codex_transport(self):
         with patch.object(support, 'local_settings', return_value={'auth_mode': 'ChatGPT'}):
-            settings = runner.configure(self.configure_args(engine='codex', joint_planning=True,
+            settings = autocode_configure.configure(self.configure_args(engine='codex', joint_planning=True,
                 astra_model='gpt-5.6-sol', terra_model='gpt-5.6-terra', sol_model='gpt-5.6-sol',
                 completion_model='gpt-5.6-sol',
                 requirements_model='gpt-5.6-sol', glm_model='gpt-5.6-sol',
                 plan_reviewer_model='gpt-6-astra', plan_reviewer_reasoning_effort='high'),
-                {'workspace': '/tmp/fixture', 'iteration': 0})
+                {'workspace': '/tmp/fixture', 'iteration': 0}, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual('gpt-6-astra', settings['roles']['plan_reviewer']['model'])
         self.assertTrue(settings['roles']['plan_reviewer']['model_pinned'])
         saved = copy.deepcopy(settings)
-        runner.configure_joint(settings, self.configure_args(), fresh=False)
+        autocode_configure.configure_joint(settings, self.configure_args(), fresh=False, planning=planning)
         self.assertEqual(saved, settings)
         with patch.object(support, 'local_settings', return_value={'auth_mode': 'ChatGPT'}), \
              patch.object(runner.opencode, 'local_settings', side_effect=AssertionError('No OpenCode transport')), \
@@ -444,31 +447,31 @@ class PlanningTests(unittest.TestCase):
             runner.check_joint_transports({'settings': settings}, Path('/tmp/fixture'))
         for override in ({'plan_reviewer_model': 'xiaomi-token-plan-sgp/mimo-v2.6-pro'}, {'requirements_model': 'external-model'}):
             with self.assertRaisesRegex(ValueError, 'bare GPT'):
-                runner.configure_joint(copy.deepcopy(settings), self.configure_args(**override), fresh=False)
+                autocode_configure.configure_joint(copy.deepcopy(settings), self.configure_args(**override), fresh=False, planning=planning)
 
     def test_enable_native_joint_requires_a_clean_boundary_and_preserves_limits(self):
         with patch.object(support, 'local_settings', return_value={'auth_mode': 'ChatGPT'}):
-            settings = runner.configure(self.configure_args(engine='codex', unlimited_iterations=True,
+            settings = autocode_configure.configure(self.configure_args(engine='codex', unlimited_iterations=True,
                 max_seconds=0, max_reported_tokens=0,
                 astra_model='gpt-5.6-sol', terra_model='gpt-5.6-terra', sol_model='gpt-5.6-sol',
-                completion_model='gpt-5.6-sol'), {'workspace': '/tmp/fixture', 'iteration': 1})
+                completion_model='gpt-5.6-sol'), {'workspace': '/tmp/fixture', 'iteration': 1}, planning=planning, milestones=milestones, autopilot=autopilot)
         state = {'version': 3, 'workspace': '/tmp/fixture', 'settings': settings,
                  'status': 'PAUSED_INTERVENTION', 'next_stage': 'astra_discovery', 'sessions': {'terra': 'retained'}}
         before = copy.deepcopy(state)
-        selected = runner.configure(self.configure_args(joint_planning=True), state)
+        selected = autocode_configure.configure(self.configure_args(joint_planning=True), state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual(before, state)
         self.assertTrue(selected['joint_planning'])
         self.assertEqual(settings['limits'], selected['limits'])
         for field in ('active_stage', 'pending_report_repair', 'uncertain_artifacts'):
             with self.assertRaisesRegex(ValueError, 'Resolve the saved provider attempt'):
-                runner.configure(self.configure_args(joint_planning=True), {**state, field: {'pending': True}})
+                autocode_configure.configure(self.configure_args(joint_planning=True), {**state, field: {'pending': True}}, planning=planning, milestones=milestones, autopilot=autopilot)
 
     def test_new_openai_terra_keeps_opencode_and_existing_discovery_routes(self):
         for effort in (None, "high"):
             with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}), \
                  patch.object(runner.opencode, "local_settings", return_value={"engine": "opencode"}):
-                settings = runner.configure(self.configure_args(terra_model="xiaomi-token-plan-sgp/mimo-v2.6-pro",
-                    terra_reasoning_effort=effort), {"workspace": "/tmp/fixture", "iteration": 0})
+                settings = autocode_configure.configure(self.configure_args(terra_model="xiaomi-token-plan-sgp/mimo-v2.6-pro",
+                    terra_reasoning_effort=effort), {"workspace": "/tmp/fixture", "iteration": 0}, planning=planning, milestones=milestones, autopilot=autopilot)
             self.assertEqual({"engine": "opencode", "provider": None, "model": "xiaomi-token-plan-sgp/mimo-v2.6-pro",
                               "reasoning_effort": effort or 'medium'}, settings["roles"]["terra"])
             self.assertEqual("glm", planning.role_for({"settings": settings}, "astra_discovery"))
@@ -476,22 +479,22 @@ class PlanningTests(unittest.TestCase):
             self.assertEqual("zai-coding-plan/glm-5.3", settings["roles"]["glm"]["model"])
             state = {"settings": settings, "sessions": {"terra": "opencode-terra-session"}}
             before = copy.deepcopy(state)
-            resumed = runner.configure(self.configure_args(), state)
+            resumed = autocode_configure.configure(self.configure_args(), state, planning=planning, milestones=milestones, autopilot=autopilot)
             self.assertEqual(settings, resumed)
             self.assertEqual(before, state)
             with self.assertRaisesRegex(ValueError, "OpenCode provider/model"):
-                runner.configure(self.configure_args(terra_model="gpt-5.6-terra"), state)
+                autocode_configure.configure(self.configure_args(terra_model="gpt-5.6-terra"), state, planning=planning, milestones=milestones, autopilot=autopilot)
             self.assertEqual(before, state)
 
     def test_existing_glm_terra_cannot_be_silently_rerouted(self):
         with patch.object(support, "local_settings", return_value={"auth_mode": "ChatGPT"}), \
              patch.object(runner.opencode, "local_settings", return_value={"engine": "opencode"}):
-            settings = runner.configure(self.configure_args(), {"workspace": "/tmp/fixture", "iteration": 28})
+            settings = autocode_configure.configure(self.configure_args(), {"workspace": "/tmp/fixture", "iteration": 28}, planning=planning, milestones=milestones, autopilot=autopilot)
         state = {"settings": settings, "sessions": {"terra": "opencode-existing-session"}}
         before = copy.deepcopy(state)
-        self.assertEqual(settings, runner.configure(self.configure_args(), state))
+        self.assertEqual(settings, autocode_configure.configure(self.configure_args(), state, planning=planning, milestones=milestones, autopilot=autopilot))
         with self.assertRaisesRegex(ValueError, "OpenCode provider/model"):
-            runner.configure(self.configure_args(terra_model="gpt-5.6-terra"), state)
+            autocode_configure.configure(self.configure_args(terra_model="gpt-5.6-terra"), state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual(before, state)
 
 

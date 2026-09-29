@@ -8,7 +8,9 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-import autocode, autocode_providers
+import autocode, autocode_configure, autocode_providers
+import autocode_milestones as milestones, autocode_planning as planning
+import autopilot
 from providers import command
 
 
@@ -76,7 +78,7 @@ class ProviderRegistryTests(unittest.TestCase):
                                   for field in ("model", "provider", "reasoning_effort")})
         with mock.patch.dict(os.environ, {"AUTOCODE_PROVIDER": "kilocode"}), \
              mock.patch.object(autocode.support, "local_settings", return_value={}):
-            settings = autocode.configure(args, {"workspace": "/fixture"})
+            settings = autocode_configure.configure(args, {"workspace": "/fixture"}, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual(("codex", "opencode"), (settings["engine"], settings["provider"]))
 
     def test_config_provider_models_keep_their_own_names(self):
@@ -88,7 +90,7 @@ class ProviderRegistryTests(unittest.TestCase):
                         "roles": {role: {} for role in ("astra", "terra", "sol")}}
             args = SimpleNamespace(astra_model="kilo/~openai/gpt-astra-latest", terra_model=None,
                                    sol_model="gpt-5.6-sol", glm_model=None)
-            autocode.configure_joint(settings, args, fresh=True)
+            autocode_configure.configure_joint(settings, args, fresh=True, planning=planning, opencode=autocode.opencode)
         finally:
             autocode.opencode = previous
         self.assertEqual("kilo/~openai/gpt-astra-latest", settings["roles"]["astra"]["model"])
@@ -107,7 +109,7 @@ class ProviderRegistryTests(unittest.TestCase):
                 "roles": {role: {} for role in ("astra", "terra", "sol")},
             }
             args = SimpleNamespace(astra_model=None, terra_model=None, sol_model=None, glm_model=None)
-            autocode.configure_joint(settings, args, fresh=True)
+            autocode_configure.configure_joint(settings, args, fresh=True, planning=planning, opencode=autocode.opencode)
         finally:
             autocode.opencode = previous
         self.assertEqual({

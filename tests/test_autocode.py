@@ -20,6 +20,10 @@ import autocode_completion as completion_gate
 import autocode_support as s
 import autocode_goals as goals
 import autocode_builder_policy as builder_policy
+import autocode_configure
+import autocode_milestones as milestones
+import autocode_planning as planning
+import autopilot
 from goal_fixtures import approve_fixture, assert_operational_wait, envelope
 from . import LOGIN_SHELL
 
@@ -178,7 +182,7 @@ class RetrofitTest(unittest.TestCase):
         args=SimpleNamespace(astra_model="gpt-6-astra", terra_model="gpt-5.6-terra",
             sol_model="gpt-5.6-sol", reasoning_effort="high", headroom="off",
             context_soft_tokens=7000, rotate_after_input_tokens=0)
-        result=runner.configure(args,self.state)
+        result=autocode_configure.configure(args,self.state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual("gpt-5.6-terra",result["roles"]["terra"]["model"])
         self.assertEqual({"high"},{r["reasoning_effort"] for r in result["roles"].values()})
         self.assertEqual(0,result["rotation_after_input_tokens"])
@@ -190,7 +194,7 @@ class RetrofitTest(unittest.TestCase):
             reasoning_effort="medium",astra_reasoning_effort="xhigh",
             terra_reasoning_effort=None,sol_reasoning_effort="high",headroom=None,
             context_soft_tokens=None,rotate_after_input_tokens=None)
-        result=runner.configure(args,self.state)
+        result=autocode_configure.configure(args,self.state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual("xhigh",result["roles"]["astra"]["reasoning_effort"])
         self.assertEqual("medium",result["roles"]["terra"]["reasoning_effort"])
         self.assertEqual("high",result["roles"]["sol"]["reasoning_effort"])
@@ -198,12 +202,12 @@ class RetrofitTest(unittest.TestCase):
     def test_provider_saved_per_role_and_kept_on_resume(self):
         args=SimpleNamespace(astra_model=None,terra_model=None,sol_model=None,terra_provider="ZAI",
             reasoning_effort=None,headroom=None,context_soft_tokens=None,rotate_after_input_tokens=None)
-        result=runner.configure(args,self.state)
+        result=autocode_configure.configure(args,self.state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual("ZAI",result["roles"]["terra"]["provider"])
         self.assertNotIn("provider",result["roles"]["astra"])
         resumed={**self.state,"settings":result}
-        kept=runner.configure(SimpleNamespace(astra_model=None,terra_model=None,sol_model=None,
-            reasoning_effort=None,headroom=None,context_soft_tokens=None,rotate_after_input_tokens=None),resumed)
+        kept=autocode_configure.configure(SimpleNamespace(astra_model=None,terra_model=None,sol_model=None,
+            reasoning_effort=None,headroom=None,context_soft_tokens=None,rotate_after_input_tokens=None),resumed, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual("ZAI",kept["roles"]["terra"]["provider"])
         self.assertEqual({**{r:f"model-{r}" for r in ("astra","terra","sol")},
                           "completion": "gpt-5.6-sol"},
@@ -219,7 +223,7 @@ class RetrofitTest(unittest.TestCase):
             reasoning_effort=None,headroom=None,context_soft_tokens=None,rotate_after_input_tokens=None,
             legacy_iteration_ceiling=None,max_iterations=15,max_seconds=None,max_reported_tokens=None,no_progress_limit=3)
         with patch.object(s,"local_settings",return_value=local):
-            result=runner.configure(args,state)
+            result=autocode_configure.configure(args,state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual("gpt-5.6-sol",result["roles"]["astra"]["model"])  # role default, not local-model
         self.assertEqual("custom-terra",result["roles"]["terra"]["model"])  # explicit flag
         self.assertEqual("glm-5.3",result["roles"]["sol"]["model"])         # saved legacy launch
