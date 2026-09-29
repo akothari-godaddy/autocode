@@ -21,11 +21,9 @@ You → Autopilot: recognize the kind of job (build, bugfix, review, design, dis
    review → Reviewer only: findings written to review/findings.json, repository untouched, run complete
    bugfix → Investigator first: diagnosis written to docs/bugs/<name>.json, repository untouched;
             not reproduced → run complete;
-            reproduced, small (and you did not ask to approve the plan) → one Builder task built from the diagnosis (invariant = the acceptance
-              criterion, a regression test that fails before the fix), approved under a recorded policy
-              instead of by you (approval actor "workflow_policy"), then Validator and Completion Owner;
-            reproduced, large or you asked to approve the plan → the build pipeline below from the Planner on, planned from the
+            reproduced → the build pipeline below from the Planner on, planned from the
               diagnosis: no requirements gathering, but plan review and your approval
+              (small or large; the short path for small fixes is off until the full path is dependable)
    design → Architect first: a design review is written to review/design-review.json (goals met,
             blocking/advisory concerns, questions for you), repository untouched, run complete;
             a request for a NEW design → the build pipeline below
@@ -247,9 +245,12 @@ approach, milestones, and **first bounded implementation task**, all covered by 
 revision/hash. Approval dispatches that task directly, without a third Plan Reviewer
 call. The separate Completion Owner's later decisions use the normal execution budget.
 
-Planning defaults to **two Plan Reviewer request attempts per cycle**, including failed or
-abandoned attempts. Bounded recovery does not refund attempts or automatically extend
-the allowance. Unresolved final decisions return to you as blocking questions. If the
+Planning defaults to **two Plan Reviewer reviews per cycle**. A review counts once it
+returns a report, whether or not the runner then accepts that report. An attempt that
+times out or whose provider fails returns no review, so it is given back before the next
+attempt; the repeated-failure limit, not this allowance, stops a review that keeps failing.
+Bounded recovery does not otherwise extend the allowance. Unresolved final decisions return
+to you as blocking questions. If the
 budget is exhausted, the run pauses at `PAUSED_PLANNING_BUDGET`. After inspecting a
 reconciled checkpoint, an operator can permit one more attempt without discarding the
 accepted challenge and revision (for example, increase a total allowance of 2 to 3):
@@ -260,7 +261,7 @@ autocode --workspace /path/to/project --run-dir /path/to/run --resume-paused --u
 ```
 
 The first command only saves an audited, finite **total** allowance for this cycle;
-repeating it does not add another attempt. Failed attempts remain counted, unresolved
+repeating it does not add another attempt. Reviews that returned a report remain counted, unresolved
 provider work must be reconciled first, and final review and exact user approval remain
 mandatory. Unlimited allowances and decreases are rejected. A new cycle returns to the
 default of two attempts; its predecessor's allowance and exchange remain in history.
