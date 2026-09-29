@@ -83,6 +83,18 @@ class ScratchReplayTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "exited 1"):
             self.replay("test -f local-only.txt")
 
+    def test_a_check_reading_run_files_is_rejected_with_what_to_cite_instead(self):
+        # Fix run B, 2026-09-29: a Validator re-read the regression proof from .autocode/ as its check.
+        proof = self.workspace / ".autocode" / "runs" / "r" / "regression" / "proof-02" / "verification.json"
+        proof.parent.mkdir(parents=True)
+        proof.write_text('{"verdict": "PASS"}\n')
+        with self.assertRaises(ValueError) as rejected:
+            self.replay(f"cat {proof.relative_to(self.workspace)}")
+        self.assertIn(check_replay.RUN_FILES_HINT, str(rejected.exception))
+        with self.assertRaises(ValueError) as unrelated:
+            self.replay("test -f local-only.txt")
+        self.assertNotIn(check_replay.RUN_FILES_HINT, str(unrelated.exception))
+
     def test_a_command_naming_the_workspace_runs_against_the_copy(self):
         self.replay(f"cat {self.workspace}/new.txt && touch {self.workspace}/written-by-check.txt")
         self.assertFalse((self.workspace / "written-by-check.txt").exists(), "a replay never writes the workspace")
@@ -135,6 +147,7 @@ class ValidatorNoteTests(unittest.TestCase):
         validator = common.execution_request(state, "sol", state_path, schemas)
         self.assertIn(check_replay.VALIDATOR_NOTE, validator.prompt.split("\nCURRENT HANDOFF DATA\n")[0])
         self.assertIn("sh -c '! python3", check_replay.VALIDATOR_NOTE)
+        self.assertIn("no .autocode/", check_replay.VALIDATOR_NOTE)
         self.assertEqual((len(validator.prompt.encode()) + 3) // 4, validator.metrics["estimated_prompt_tokens"])
         builder = common.execution_request(state, "terra", state_path, schemas)
         self.assertNotIn(check_replay.VALIDATOR_NOTE, builder.prompt)

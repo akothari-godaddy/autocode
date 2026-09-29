@@ -34,7 +34,14 @@ CHECKS IN A PASS: every check in a PASS report must exit 0; the runner re-runs e
 refuses the report otherwise. To show that something fails as it should (a negative control), write a check
 that exits 0 exactly when the failure happens, for example sh -c '! python3 -m unittest tests/test_x.py' or a
 test that asserts the error. Never cite a check that exits non-zero in a PASS.
+The clean copy is the repository's source only: no ignored files and no .autocode/. A check that reads run files
+(state.json, regression/proof-*/verification.json) cannot pass there. regression_proof in your handoff is the
+runner's own executed evidence: cite its verdict and source_revision directly, never a command that reads it.
 """
+# A Validator closed a proof-linked finding with a check that read the proof from .autocode/, twice
+# (fix run B, 2026-09-29); each replay failed and the run paused. The rejection says why.
+RUN_FILES_HINT = (" The clean copy has no .autocode/, so a check that reads run files cannot pass there: drop it, "
+                  "and cite regression_proof from your handoff as the runner's evidence instead.")
 TIMEOUT_SECONDS = 900
 TAIL_CHARS = 600
 
@@ -72,6 +79,7 @@ def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_S
             f"from the repository root in a clean copy of the current source it {what}"
             + (f"; its output ended: {row['tail'].strip()[-300:]}" if row["tail"].strip() else "")
             + f". Receipt: {out / 'replay.json'}. Cite only checks that pass from the repository root in a clean "
-            "checkout of this source; a check that needs a server or other setup must start and stop it itself.")
+            "checkout of this source; a check that needs a server or other setup must start and stop it itself."
+            + (RUN_FILES_HINT if ".autocode" in row["command"] else ""))
     return result
 
