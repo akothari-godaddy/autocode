@@ -1,0 +1,21 @@
+{
+  "tests.test_build_blackbox": "106 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_planning": "78 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_scenario_oracles": "67 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_build_recovery_blackbox": "55 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_multicomponent": "45 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_subprocess": "45 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_builder_policy": "37 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_catalogue_t14": "26 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_command_flow": "25 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_human_publication": "25 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_process": "23 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_dispatch": "21 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_reference_http": "21 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_campaign_oracles": "19 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_units": "19 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_bugfix_workflow": "17 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_verify": "14 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_assignment_scenarios": "13 s in CI (Ubuntu, one module at a time), 2026-09-29",
+  "tests.test_dashboard_consumer": "13 s in CI (Ubuntu, one module at a time), 2026-09-29"
+}
