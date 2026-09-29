@@ -29,6 +29,26 @@ def _files(ref):
         return None
 
 
+def _same_attempt(row, attempt):
+    """One provider attempt can appear in several saved rows (a checkpoint copy, its
+    archived row, a repaired report's original); they share the launch time."""
+    return row is attempt or (bool(attempt.get("started_at")) and all(
+        row.get(key) == attempt.get(key) for key in ("started_at", "stage", "iteration")))
+
+
+def _snapshot(stages, attempt, key):
+    """``attempt``'s saved snapshot, from whichever copy of its row still points at it.
+
+    Archiving a rejected attempt moves its files and rewrites only the row it archives.
+    """
+    for row in (attempt, *stages):
+        if _same_attempt(row, attempt):
+            files = _files(row.get(key))
+            if files is not None:
+                return files
+    return None
+
+
 def starting_attempt(stages, record):
     """The task's earliest serial Builder attempt; ``record`` itself when it is the first."""
     task = record.get("task_id")
@@ -44,10 +64,10 @@ def retained_changes(stages, record):
     it cannot be read: that is missing evidence, never an empty delta.
     """
     first = starting_attempt(stages, record)
-    before, after = _files(first.get("before_ref")), _files(record.get("after_ref"))
+    before, after = _snapshot(stages, first, "before_ref"), _snapshot(stages, record, "after_ref")
     if before is None or after is None:
         # With no earlier attempt, this attempt's runner-measured delta is the whole delta.
-        return sorted(record.get("changed_files") or []) if first is record else None
+        return sorted(record.get("changed_files") or []) if _same_attempt(first, record) else None
     return sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
 
 
