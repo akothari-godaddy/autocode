@@ -794,7 +794,8 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
             "framework": framework.to_dict() if framework else None,
             "baseline": ({"health": base_suite["health"], "exit_code": base_suite["receipt"]["exit_code"],
                           "output": base_suite["receipt"]["output"]} if base_suite else None),
-            "fail_to_pass": proof.get("fail_to_pass"), "checks": checks}
+            "fail_to_pass": proof.get("fail_to_pass"), "pass_to_pass": proof.get("pass_to_pass"),
+            "checks": checks}
 
 
 def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, review_reasons, *, known_failures,

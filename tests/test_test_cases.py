@@ -219,6 +219,44 @@ if __name__ == "__main__":
     unittest.main()
 
 
+BUG_SEED = {"pager.py": "def page_count(total, size):\n    return total // size\n",
+            "test_pager.py": "import unittest\nfrom pager import page_count\n\n\nclass PagerTests(unittest.TestCase):\n"
+                             "    def test_existing(self):\n        self.assertEqual(2, page_count(10, 5))\n"}
+BUG_FIX = {"pager.py": "def page_count(total, size):\n    return (total + size - 1) // size\n",
+           "test_pager.py": BUG_SEED["test_pager.py"]
+           + "\n    def test_t1_partial_page_counts(self):\n        self.assertEqual(3, page_count(11, 5))\n"
+           + "\n    def test_t4_exact_multiple_and_zero(self):\n"
+             "        self.assertEqual(2, page_count(10, 5))\n        self.assertEqual(0, page_count(0, 5))\n"}
+T1 = {"id": "T1", "given": "total=11, size=5", "when": "page_count(11, 5)", "then": "returns 3"}
+T4 = {"id": "T4", "given": "total=10 and total=0, size=5", "when": "page_count runs", "then": "returns 2 and 0",
+      "kind": "preserve"}
+
+
+class PreserveCaseProofTests(unittest.TestCase):
+    """A preserve case (#129) is proven by the runner's own test runs, not a hand-built proof."""
+
+    def prove(self, cases):
+        project = Project(BUG_SEED)
+        self.addCleanup(project.close)
+        project.write(BUG_FIX)
+        state = {"base_commit": project.base, "settings": {}, "iteration": 1, "stages": [], "history": [],
+                 "goal_contract": {"body": {"task_kind": "bugfix", "acceptance_criteria": [],
+                                            "milestones": [{"id": "M1"}]}},
+                 "investigation": {"outcome": "reproduced", "test_cases": cases}}
+        return regression.prove(state, project.root, Path(tempfile.mkdtemp(prefix="preserve-proof-")))
+
+    def test_a_preserve_case_is_proven_by_a_test_that_passes_before_and_after_the_fix(self):
+        proof = self.prove([T1, T4])
+        self.assertEqual("PASS", proof["verdict"], proof["failures"] + proof["unverified"])
+        self.assertEqual(["test_pager.PagerTests.test_t1_partial_page_counts"], proof["case_tests"]["T1"])
+        self.assertEqual(["test_pager.PagerTests.test_t4_exact_multiple_and_zero"], proof["case_tests"]["T4"])
+
+    def test_the_same_case_as_a_restore_case_still_has_to_fail_first(self):
+        proof = self.prove([T1, {**T4, "kind": "restore"}])
+        self.assertEqual("FAIL", proof["verdict"])
+        self.assertEqual([], proof["case_tests"]["T4"])
+
+
 class DesignOnlyTests(unittest.TestCase):
     """A design job delivers documents: a live one planned every criterion as a test and added tests/."""
 

@@ -521,7 +521,7 @@ class GoVerifyTests(unittest.TestCase):
         result = project.verify()
         self.assertEqual(verify.PASS, result["verdict"], result["failures"] + result["unverified"])
         self.assertEqual(["pager::Test_t1_partial_page_counts"], result["fail_to_pass"])
-        self.assertIn("pager::TestExisting", result["candidate_passed"])
+        self.assertIn("pager::TestExisting", result["pass_to_pass"])
 
     def test_a_go_test_that_also_passes_before_the_fix_does_not_reproduce_the_bug(self):
         project = self.project(GO_SEED)
