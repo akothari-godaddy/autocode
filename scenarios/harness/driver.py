@@ -161,12 +161,6 @@ class Driver:
             need = view["needs"]
             if view["done"] or leaves_for_person(need) or say_at == f"needs:{need['kind']}":
                 return view
-            # An operational AutoResolver escalation (budget, permissions) needs
-            # a person's authority; the driver never makes those decisions. Leave
-            # the pause for the verdict to report as HONEST_BLOCKER.
-            if need["kind"] == "answer" and need.get("resolver_scope") in ("blocker",
-                                                                           "operational_exhaustion"):
-                return view
             if need["kind"] == "continue":
                 self.call("resume")
                 after = self.view()

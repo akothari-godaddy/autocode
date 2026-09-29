@@ -25,23 +25,6 @@ class EvidenceDirectoryTests(unittest.TestCase):
     def test_simultaneous_runs_with_the_same_timestamp_have_separate_evidence(self):
         with tempfile.TemporaryDirectory() as root, patch.object(run, "datetime") as clock:
             clock.now.return_value.strftime.return_value = "20260929T003743Z"
-            parent = Path(root).resolve() / "results"
-            with ThreadPoolExecutor(max_workers=8) as pool:
-                rows = list(pool.map(lambda _: run.evidence_directory(parent, "review-live"), range(16)))
-            self.assertEqual(16, len({path for _, path in rows}))
-            for index, (stamp, path) in enumerate(rows):
-                self.assertEqual("20260929T003743Z", stamp)
-                self.assertEqual(parent, path.parent)
-                self.assertTrue(path.name.startswith(stamp + "-review-live-"))
-                (path / "result.json").write_text(str(index))
-            for index, (_, path) in enumerate(rows):
-                self.assertEqual(str(index), (path / "result.json").read_text())
-
-
-class EvidenceDirectoryTests(unittest.TestCase):
-    def test_simultaneous_runs_with_the_same_timestamp_have_separate_evidence(self):
-        with tempfile.TemporaryDirectory() as root, patch.object(run, "datetime") as clock:
-            clock.now.return_value.strftime.return_value = "20260929T003743Z"
             parent = (Path(root) / "results").resolve()
             with ThreadPoolExecutor(max_workers=8) as pool:
                 rows = list(pool.map(lambda _: run.evidence_directory(parent, "review-live"), range(16)))

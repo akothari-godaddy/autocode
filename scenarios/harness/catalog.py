@@ -64,15 +64,15 @@ class Scenario:
     fake_fault: str = ""
     fake_live_calls: bool = False
     fake_probe: str = ""  # exits 0 while the seed's bug is present: the runner checks the scripted reproduction
-    # [fake] milestones: multi-milestone scenarios (parallel-diamond) declare
-    # each milestone's id, dependencies, owned paths and verify command so the
-    # scripted provider can rehearse parallel scheduling without model spend.
-    fake_milestones: tuple[dict, ...] = ()
     # Follow-up messages, in order, each said to the same run (issue #51).
     turns: tuple[Turn, ...] = ()
     # Model stages the scenario exists to exercise. A run that never reaches one is
     # NOT_EXERCISED rather than passed: it says nothing about that stage.
     requires_stages: tuple[str, ...] = ()
+    # [fake] milestones: multi-milestone scenarios (parallel-diamond) declare
+    # each milestone's id, dependencies, owned paths and verify command so the
+    # scripted provider can rehearse parallel scheduling without model spend.
+    fake_milestones: tuple[dict, ...] = ()
 
     @property
     def seed(self) -> Path:
@@ -133,8 +133,8 @@ def load(scenario_id: str) -> Scenario:
         timeout_minutes=run.get("timeout_minutes", 60), expected=run.get("expected", "complete"),
         known_failure=run.get("known_failure", ""), fake_flags=tuple(fake.get("flags", ())),
         fake_fault=fake.get("fault", ""), fake_live_calls=bool(fake.get("live_investigator", False)),
-        fake_probe=fake.get("probe", ""), fake_milestones=tuple(fake.get("milestones", ())), turns=tuple(turns),
-        requires_stages=tuple(run.get("requires_stages", ())))
+        fake_probe=fake.get("probe", ""), turns=tuple(turns), requires_stages=tuple(run.get("requires_stages", ())),
+        fake_milestones=tuple(fake.get("milestones", ())))
 
 
 def load_all() -> list[Scenario]:

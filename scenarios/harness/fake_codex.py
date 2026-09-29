@@ -246,13 +246,13 @@ def review() -> dict:
         (Path(CONFIG["reference"]) / path).read_text() for path in delivered))).lower()
     patches = sorted(p.name for p in Path.cwd().glob("*.patch"))
 
-    def finding(raw):
-        row = {key: raw.get(key, [] if key == "lines" else "") for key in
+    def finding(f):
+        row = {key: f.get(key, [] if key == "lines" else "") for key in
                ("id", "severity", "file", "lines", "summary", "evidence")}
-        tested = f"test_{str(raw.get('id', '')).lower()}_" in names
-        row["example"] = raw.get("example") or "Scripted example: " + str(raw.get("summary", ""))
-        row["untestable"] = "" if tested else (raw.get("untestable") or
-                           "Scripted review: the scenario solution delivers no test named after this finding")
+        tested = f"test_{str(f.get('id', '')).lower()}_" in names
+        row["example"] = f.get("example") or "Scripted example: " + str(f.get("summary", ""))
+        row["untestable"] = "" if tested else (f.get("untestable") or "Scripted review: the scenario solution "
+                                               "delivers no test named after this finding")
         return row
     return {"verdict": saved.get("verdict", "approve"), "summary": "Scripted review from the scenario solution",
             "change_under_review": "the change named in the request", "change_patch": patches[0] if patches else "",
