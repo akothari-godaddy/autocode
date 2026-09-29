@@ -113,6 +113,10 @@ class TaskRun:
     def feedback(self, text: str) -> dict:
         return self._act("feedback", "--feedback", text)
 
+    def follow_up(self, text: str) -> dict:
+        """Say the next thing to a finished run; continue it afterwards."""
+        return self._act("follow-up", "--follow-up", text)
+
     def _act(self, name: str, *args: str) -> dict:
         """User actions exit 0 once saved; anything else means AutoCode rejected them."""
         self._invoke(name, *args)

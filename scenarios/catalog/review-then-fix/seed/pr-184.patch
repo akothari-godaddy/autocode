@@ -40,7 +40,7 @@ index f3fe33c..0d44b11 100644
 +            self.sleep(policy.backoff_seconds)
 +        raise AssertionError("unreachable")
 diff --git a/regclient/policies.py b/regclient/policies.py
-index 417337d..cbac10c 100644
+index 417337d..5506ffd 100644
 --- a/regclient/policies.py
 +++ b/regclient/policies.py
 @@ -1,5 +1,7 @@
@@ -74,7 +74,7 @@ index 417337d..cbac10c 100644
 +
  
 +TRANSIENT = ("SERVER_BUSY", "RATE_LIMITED")
-+CONNECTION = ("CONNECTION_RESET",)
++SESSION = ("SESSION_LIMIT_EXCEEDED",)
  
 -DEFAULT = RetryPolicy(retryable_errors=("SERVER_BUSY", "RATE_LIMITED"), max_attempts=3)
 +DEFAULT = RetryPolicy(retryable_errors=_errors(TRANSIENT), max_attempts=3)
@@ -86,8 +86,8 @@ index 417337d..cbac10c 100644
 +# Policies for the registries we currently talk to. Anything not listed here
 +# gets DEFAULT.
 +REGISTRIES = {
-+    "com": RetryPolicy(retryable_errors=_errors(TRANSIENT, CONNECTION), max_attempts=4, backoff_seconds=0.5),
-+    "net": RetryPolicy(retryable_errors=_errors(TRANSIENT, CONNECTION), max_attempts=4, backoff_seconds=0.5),
++    "com": RetryPolicy(retryable_errors=_errors(TRANSIENT, SESSION), max_attempts=4, backoff_seconds=0.5),
++    "net": RetryPolicy(retryable_errors=_errors(TRANSIENT, SESSION), max_attempts=4, backoff_seconds=0.5),
 +    "org": RetryPolicy(retryable_errors=_errors(TRANSIENT), max_attempts=3, backoff_seconds=1.0),
  }
  
@@ -96,7 +96,7 @@ index 417337d..cbac10c 100644
 -    return POLICIES.get(tld.lower(), DEFAULT)
 +    return REGISTRIES.get(tld.lower(), DEFAULT)
 diff --git a/tests/test_client.py b/tests/test_client.py
-index 2d67651..8370ffe 100644
+index 2d67651..29add61 100644
 --- a/tests/test_client.py
 +++ b/tests/test_client.py
 @@ -8,28 +8,48 @@ def command(tld="com"):
@@ -133,13 +133,13 @@ index 2d67651..8370ffe 100644
 +        self.assertTrue(client(transport).send(command()).ok)
          self.assertEqual(["txn-1"], transport.executed)
  
-+    def test_com_retries_connection_reset(self):
-+        transport = ScriptedTransport(["error:CONNECTION_RESET", "ok"])
++    def test_com_retries_session_limit(self):
++        transport = ScriptedTransport(["error:SESSION_LIMIT_EXCEEDED", "ok"])
 +        self.assertTrue(client(transport).send(command("com")).ok)
 +        self.assertEqual(2, transport.calls)
 +
-+    def test_org_does_not_retry_connection_reset(self):
-+        transport = ScriptedTransport(["error:CONNECTION_RESET", "ok"])
++    def test_org_does_not_retry_session_limit(self):
++        transport = ScriptedTransport(["error:SESSION_LIMIT_EXCEEDED", "ok"])
 +        with self.assertRaises(RegistryError):
 +            client(transport).send(command("org"))
 +
@@ -154,7 +154,7 @@ index 2d67651..8370ffe 100644
      unittest.main()
 diff --git a/tests/test_policies.py b/tests/test_policies.py
 new file mode 100644
-index 0000000..1abb9e2
+index 0000000..8347e8b
 --- /dev/null
 +++ b/tests/test_policies.py
 @@ -0,0 +1,20 @@
@@ -173,7 +173,7 @@ index 0000000..1abb9e2
 +        self.assertIs(DEFAULT, policy_for("xyz"))
 +
 +    def test_retryable_errors_are_deduplicated_and_sorted(self):
-+        self.assertEqual(("CONNECTION_RESET", "RATE_LIMITED", "SERVER_BUSY"), policy_for("com").retryable_errors)
++        self.assertEqual(("RATE_LIMITED", "SERVER_BUSY", "SESSION_LIMIT_EXCEEDED"), policy_for("com").retryable_errors)
 +
 +
 +if __name__ == "__main__":

@@ -45,13 +45,13 @@ class ClientTests(unittest.TestCase):
             client(transport).send(command("de"))
         self.assertEqual(1, transport.calls)
 
-    def test_com_retries_connection_reset(self):
-        transport = ScriptedTransport(["error:CONNECTION_RESET", "ok"])
+    def test_com_retries_session_limit(self):
+        transport = ScriptedTransport(["error:SESSION_LIMIT_EXCEEDED", "ok"])
         self.assertTrue(client(transport).send(command("com")).ok)
         self.assertEqual(2, transport.calls)
 
-    def test_org_does_not_retry_connection_reset(self):
-        transport = ScriptedTransport(["error:CONNECTION_RESET", "ok"])
+    def test_org_does_not_retry_session_limit(self):
+        transport = ScriptedTransport(["error:SESSION_LIMIT_EXCEEDED", "ok"])
         with self.assertRaises(RegistryError):
             client(transport).send(command("org"))
 

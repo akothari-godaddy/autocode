@@ -166,7 +166,7 @@ def run_check() -> int:
     return proc.returncode
 
 
-def recognize(brief: str) -> dict:
+def recognize(brief: str, follow_up: dict | None = None) -> dict:
     """The fake's script for the job-recognition stage: keyword rules over the brief.
 
     This is not a model and says nothing about model quality; it exists so the
@@ -178,7 +178,9 @@ def recognize(brief: str) -> dict:
     def has(*patterns):
         return any(re.search(pattern, text) for pattern in patterns)
 
-    if has(r"\bimplement (it|this|the design)\b", r"has already been .*approved") and not has(r"do(n't| not) implement anything"):
+    if (follow_up or {}).get("previous_workflow") == "review" and has(r"\bfix\b", r"\bland\b", r"\bapply\b"):
+        kind, signal = "build", "follow-up: act on the review's findings"
+    elif has(r"\bimplement (it|this|the design)\b", r"has already been .*approved") and not has(r"do(n't| not) implement anything"):
         kind, signal = "build", "implement it / already approved"
     elif has(r"\bdesign\b") and has(r"\breview\b", r"do(n't| not) implement", r"\bdesign how\b", r"^design\b"):
         kind, signal = "design", "design + review/don't implement"
@@ -347,7 +349,7 @@ def answer() -> dict:
 
 def report_for(stage: str, data: dict) -> dict:
     if stage == "recognize_workflow":
-        return recognize(data.get("task") or CONFIG["brief"])
+        return recognize(data.get("task") or CONFIG["brief"], data.get("follow_up"))
     if stage == "answer_question":
         return answer()
     if stage == "check_design":

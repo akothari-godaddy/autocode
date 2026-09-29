@@ -37,6 +37,9 @@ def view(state: dict) -> dict:
         # "model" when the recognizer decided it, "user" when --workflow named it; the reason it gave.
         "workflow_source": (state.get("workflow") or {}).get("source"),
         "workflow_reason": (state.get("workflow") or {}).get("reason"),
+        # Which request of the conversation the run is on: 1, then one more per --follow-up
+        # (autocode_follow_up).
+        "turn": len(state.get("turns") or []) + 1,
         "evidence": evidence(state),
     }
 

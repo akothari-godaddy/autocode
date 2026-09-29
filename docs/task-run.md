@@ -58,8 +58,16 @@ All commands take `--workspace WORKSPACE`; commands on an existing run add
 | Approve the plan | `autocode --approve-goal TOKEN` | 0 saved, 2 rejected |
 | Approve a review | `autocode --approve-review CRITERION --review-token TOKEN` | 0 saved, 2 rejected |
 | Plan feedback | `autocode --feedback TEXT` | 0 saved, 2 rejected |
+| Follow up a finished run | `autocode --follow-up TEXT` | 0 saved, 2 rejected |
 
-Answers and approvals never launch a model; continue afterwards. A usage error
+Answers and approvals never launch a model; continue afterwards. A follow-up
+is the next request in the same conversation: on a finished run it records a
+new turn (`turn` in the status view) and reopens the run, which recognizes the
+kind of job again from the new message and continues in the same run
+directory. After a review, a follow-up that asks to act on the findings is
+planned from them: the review's blocking findings are the requirements, so no
+requirements questions are asked, and the plan still goes to the user for
+approval. A usage error
 also exits 2, with a message starting `usage:` on stderr; the client checks for
 it so a mistyped flag is not mistaken for a pause.
 
@@ -81,6 +89,7 @@ meaning must change.
   "stop_reason": null,
   "current_task": {"id": "task-1", "objective": "...", "milestone_id": "M1"},
   "workflow": "build",
+  "turn": 1,
   "evidence": {
     "outcome": "...",
     "base_commit": "...",

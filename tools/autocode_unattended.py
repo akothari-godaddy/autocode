@@ -31,7 +31,7 @@ import sys
 
 # Every flag that records an operator decision or recovers from a pause.
 OPERATOR_FLAGS = (
-    "--answer", "--feedback", "--delegate", "--delegate-all", "--reject-assumption",
+    "--answer", "--feedback", "--follow-up", "--delegate", "--delegate-all", "--reject-assumption",
     "--approve-goal", "--edit-goal", "--approve-review", "--reconcile-review",
     "--accept-completion", "--review-token", "--resume-paused", "--retry-failed-stage",
     "--diagnose-failed-stage", "--retry-builder", "--retry-report", "--abandon-stage",

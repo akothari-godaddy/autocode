@@ -25,11 +25,11 @@ import uuid
 try:
     from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
-    from . import autocode_dependency as dependency, autocode_status_command as status_command
+    from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
 except ImportError:
     import autocode_dependency as dependency, autocode_status_command as status_command
-    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
+    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util
     import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
@@ -280,16 +280,6 @@ def event_thread_id(jsonl: Path) -> str | None:
     return None
 
 
-def final_json(path: Path) -> dict[str, Any]:
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError(f"Agent did not produce valid JSON at {path}: {error}") from error
-    if not isinstance(value, dict):
-        raise RuntimeError(f"Expected an object in {path}")
-    return value
-
-
 def account_stage(state, record):
     """Charge a finished attempt once, including rejected/recovered responses."""
     if not record.get("accounted"):
@@ -386,7 +376,7 @@ def load_stage_report(record, workspace=None, evidence_record=None):
         # evidence validation so archival cannot leave repair pointing at nothing.
         write_json(Path(record['output']), value)
     else:
-        value = final_json(Path(record["output"]))
+        value = util.read_object(Path(record["output"]))
     reported = copy.deepcopy(value)
     value = normalize_plan_challenge_blocking(value, record)
     value = default_missing_provenance(value, record)
@@ -2927,6 +2917,7 @@ def _main_body(unit=None) -> int:
     parser.add_argument("--show-goal", action="store_true", help="Display the exact contract revision and approval token")
     parser.add_argument("--answer", action="append", default=[], metavar="QUESTION_ID=TEXT")
     parser.add_argument("--feedback", metavar="TEXT", help="Send brief feedback to the Requirements Gatherer; never approves implementation")
+    parser.add_argument("--follow-up", metavar="TEXT", help="Say the next thing to a finished run: it recognizes the new job and continues in the same run directory, carrying a review's findings forward")
     parser.add_argument("--delegate", action="append", default=[], metavar="QUESTION_ID",
                         help="Explicitly accept the proposed default and delegate this decision")
     parser.add_argument("--delegate-all", action="store_true",
@@ -2999,7 +2990,7 @@ def _main_body(unit=None) -> int:
                bool(args.answer or args.delegate), bool(args.delegate_all), bool(args.reject_assumption),
                bool(args.approve_goal), bool(args.edit_goal),
                bool(args.approve_review), bool(args.reconcile_review),
-               args.feedback is not None, args.accept_completion, args.abandon_stage is not None,
+               args.feedback is not None, args.follow_up is not None, args.accept_completion, args.abandon_stage is not None,
                args.request_milestone_checkpoints, args.planning_review_call_limit is not None,
                args.bind_dependency, args.receive_dependency]
     if sum(bool(a) for a in actions) > 1:
@@ -3016,8 +3007,8 @@ def _main_body(unit=None) -> int:
         parser.error("--reconcile-review requires --review-token")
     if not args.run_dir and any(actions[2:]):
         parser.error("User actions require an existing --run-dir")
-    if args.feedback is not None and not args.feedback.strip():
-        print("Input rejected: Feedback must be nonempty", file=sys.stderr)
+    if any(text is not None and not text.strip() for text in (args.feedback, args.follow_up)):
+        print("Input rejected: Feedback and follow-ups must be nonempty", file=sys.stderr)
         return 2
 
     if args.ui_run and args.figma_file:
@@ -3212,7 +3203,7 @@ def _main_body(unit=None) -> int:
             if dependency_result is not None:
                 return dependency_result
             decision_action = any((args.answer, args.delegate, args.approve_goal, args.edit_goal,
-                                   args.approve_review, args.reconcile_review, args.feedback is not None,
+                                   args.approve_review, args.reconcile_review, args.feedback is not None, args.follow_up is not None,
                                    args.show_goal, args.accept_completion, args.resolver_response,
                                    args.planning_review_call_limit is not None))
             active = state.get('active_stage') or {}
@@ -3437,7 +3428,7 @@ def _main_body(unit=None) -> int:
             user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
                                args.approve_goal, args.edit_goal,
                                args.approve_review, args.reconcile_review,
-                               args.feedback is not None, args.accept_completion,
+                               args.feedback is not None, args.follow_up is not None, args.accept_completion,
                                args.planning_review_call_limit is not None))
             if user_action:
                 metadata = intervention_metadata(workspace, run_dir, state)
@@ -3490,6 +3481,8 @@ def _main_body(unit=None) -> int:
                         goals.reject_assumption(candidate, assumption_id, args.review_token)
                     if args.feedback is not None:
                         goals.feedback(candidate, args.feedback)
+                    if args.follow_up is not None:
+                        follow_up.accept(candidate, args.follow_up, workspace, now())
                     if args.edit_goal:
                         lifecycle.install_draft(candidate, read_json(args.edit_goal), origin="user_cli_edit")
                         planning_artifacts.prepare_user_cli_edit(candidate, run_dir=run_dir)
