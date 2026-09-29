@@ -27,6 +27,14 @@ import json
 from pathlib import Path
 
 PASS, FAIL = "PASS", "FAIL"
+# Told to the Validator with every request. A live Validator showed "fails without __init__.py" as a check
+# exiting 1 inside a PASS report, which the runner refuses (parallel-diamond, 2026-09-29).
+VALIDATOR_NOTE = """
+CHECKS IN A PASS: every check in a PASS report must exit 0; the runner re-runs each one in a clean copy and
+refuses the report otherwise. To show that something fails as it should (a negative control), write a check
+that exits 0 exactly when the failure happens, for example sh -c '! python3 -m unittest tests/test_x.py' or a
+test that asserts the error. Never cite a check that exits non-zero in a PASS.
+"""
 TIMEOUT_SECONDS = 900
 TAIL_CHARS = 600
 
