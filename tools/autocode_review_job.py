@@ -28,9 +28,11 @@ import json
 from pathlib import Path
 
 try:
+    from . import autocode_stray_writes as stray_writes
     from . import autocode_workflows as workflows
     from .autocode_test_cases import match_cases
 except ImportError:
+    import autocode_stray_writes as stray_writes
     import autocode_workflows as workflows
     from autocode_test_cases import match_cases
 
@@ -207,7 +209,8 @@ def apply(state: dict, value: dict, record: dict, workspace, run_tests=None) -> 
     autocode_verify.scratch_run); without it a blocking finding can only be marked untestable."""
     stray = stray_changes(record.get("changed_files"))
     if stray:
-        raise ValueError("A review must not change the repository; this attempt changed: " + ", ".join(stray))
+        raise stray_writes.StrayWrites(
+            "A review must not change the repository; this attempt changed: " + ", ".join(stray), stray)
     counts = {severity: sum(1 for f in value["findings"] if f["severity"] == severity) for severity in SEVERITIES}
     if value["verdict"] == "approve" and counts["blocking"]:
         raise ValueError("A review with blocking findings cannot approve")

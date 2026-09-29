@@ -41,9 +41,11 @@ import re
 from pathlib import Path
 
 try:
+    from . import autocode_stray_writes as stray_writes
     from . import autocode_workflows as workflows
     from .autocode_test_cases import case_text, case_test_name, match_cases, run_probes  # noqa: F401 (used by callers)
 except ImportError:
+    import autocode_stray_writes as stray_writes
     import autocode_workflows as workflows
     from autocode_test_cases import case_text, case_test_name, match_cases, run_probes  # noqa: F401
 
@@ -156,7 +158,8 @@ def check(value: dict, changed_files) -> None:
     """Reject an investigation that wrote into the repository or does not say what it found."""
     stray = sorted(path for path in (changed_files or []) if not str(path).startswith(NOTES_PREFIX))
     if stray:
-        raise ValueError("An investigation must not change the repository; this attempt changed: " + ", ".join(stray))
+        raise stray_writes.StrayWrites(
+            "An investigation must not change the repository; this attempt changed: " + ", ".join(stray), stray)
     note = value["note_path"]
     if not note.startswith(NOTES_PREFIX) or not note.endswith(".json") or ".." in Path(note).parts:
         raise ValueError(f"note_path must be a .json file under {NOTES_PREFIX}: {note!r}")

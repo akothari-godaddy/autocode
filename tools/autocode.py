@@ -25,11 +25,11 @@ import uuid
 try:
     from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
-    from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util
+    from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
 except ImportError:
     import autocode_dependency as dependency, autocode_status_command as status_command
-    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util
+    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes
     import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
@@ -542,12 +542,12 @@ def recover_legacy_report_repair(state, run_dir, workspace):
 
 def reject_completed_stage(state, run_dir, record, error):
     account_stage(state, record)
+    error = stray_writes.undo(state, record, error)  # a read-only stage's writes are put back first
     failure = failures.record(state, record, error, now())
     originals = archive_rejected_stage(state, run_dir, record, error)
-    # Only fully terminal, source-pinned output errors qualify. Transport failures,
-    # stale artifacts, permissions and completion guards are not repairable here.
+    # Only terminal, source-pinned report errors: not transport, stale, permission, guard or stray-write ones.
     eligible = (isinstance(error, (ValueError, KeyError, RuntimeError))
-                and not isinstance(error, support.Paused)
+                and not isinstance(error, (support.Paused, stray_writes.StrayWrites))
                 and record.get('exit_code') == 0 and record.get('source_revision')
                 and not record.get('timed_out') and not record.get('interrupted')
                 and stage_completed(state, record))

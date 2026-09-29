@@ -49,8 +49,10 @@ from dataclasses import replace
 from pathlib import Path
 
 try:
+    from . import autocode_stray_writes as stray_writes
     from .autocode_test_cases import run_probes
 except ImportError:
+    import autocode_stray_writes as stray_writes
     from autocode_test_cases import run_probes
 
 STAGE = "investigate_stuck"
@@ -292,7 +294,8 @@ def prompt(state: dict, state_path, inventory: dict | None = None, soft_budget_t
 def check(value: dict, changed_files) -> None:
     stray = sorted(str(path) for path in (changed_files or []))
     if stray:
-        raise ValueError("An investigation must not change the repository; this attempt changed: " + ", ".join(stray))
+        raise stray_writes.StrayWrites(
+            "An investigation must not change the repository; this attempt changed: " + ", ".join(stray), stray)
     if not value["diagnosis"].strip():
         raise ValueError("An investigation must say what it found")
     if value["recommendation"] == "retry" and not value["guidance"].strip():

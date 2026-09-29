@@ -26,9 +26,11 @@ import json
 from pathlib import Path
 
 try:
+    from . import autocode_stray_writes as stray_writes
     from . import autocode_workflows as workflows
     from .autocode_test_cases import run_probes
 except ImportError:
+    import autocode_stray_writes as stray_writes
     import autocode_workflows as workflows
     from autocode_test_cases import run_probes
 
@@ -111,7 +113,8 @@ def check(value: dict, changed_files, workspace) -> None:
     note = value["note_path"].strip()
     stray = sorted(str(path) for path in (changed_files or []) if str(path) != note)
     if stray:
-        raise ValueError("A discussion must not change the repository; this attempt changed: " + ", ".join(stray))
+        raise stray_writes.StrayWrites(
+            "A discussion must not change the repository; this attempt changed: " + ", ".join(stray), stray)
     if not value["answer"].strip():
         raise ValueError("The answer is empty")
     if not value["evidence"]:
