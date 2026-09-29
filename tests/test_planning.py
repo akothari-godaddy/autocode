@@ -533,6 +533,35 @@ class JointFlow(unittest.TestCase):
         self.launch(["--run-dir", str(run), "--no-chat"], 2)
         return self.saved()
 
+    def test_bug002_regression_recorded_answers_re_evaluate_readiness(self):
+        """docs/bugs/002-answers-not-reevaluated.md: an --answer must re-evaluate
+        readiness, not linger while the saved summary still says NOT READY."""
+        self.prepare()
+        self.launch(["Build a greeting tool", "--no-chat"], 2)
+        run, state = self.saved()
+        self.assertEqual("WAITING_FOR_USER", state["status"])
+        self.assertTrue(state["pending_questions"])
+        self.launch(["--run-dir", str(run), "--answer", "Q1=CLI"], 0)
+        _, answered = self.saved()
+        self.assertEqual([], answered["pending_questions"])
+        self.assertEqual([], answered["goal_contract"]["body"]["open_blocking_questions"])
+        self.assertEqual("RUNNING", answered["status"])
+        self.assertEqual("", answered.get("discovery_summary", ""))
+        self.launch(["--run-dir", str(run), "--resume-paused", "--no-chat"], 2)
+        _, replanned = self.saved()
+        self.assertEqual("AWAITING_GOAL_APPROVAL", replanned["status"])
+        self.assertEqual([], replanned["goal_contract"]["body"]["open_blocking_questions"])
+
+    def test_bug003_regression_no_chat_prints_why_it_is_waiting(self):
+        """docs/bugs/003-no-chat-exits-silently.md: a non-interactive stop at
+        WAITING_FOR_USER prints the questions and the response route."""
+        self.prepare()
+        result = self.launch(["Build a greeting tool", "--no-chat"], 2)
+        run, state = self.saved()
+        self.assertEqual("WAITING_FOR_USER", state["status"])
+        self.assertIn("Answer ID: Q1", result.stdout)
+        self.assertIn("AutoResolver token:", result.stdout)
+
     def test_opencode_planning_approval_then_implementation_and_validation(self):
         run, state = self.draft()
         stages = state["stages"]
