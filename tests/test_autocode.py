@@ -583,6 +583,17 @@ class RetrofitTest(unittest.TestCase):
         for refs in ([],["nope"],["/etc/hosts"]):
             with self.assertRaises(ValueError): s.evidence_hashes(refs,self.root,self.run)
 
+    def test_run_state_evidence_survives_normal_state_updates(self):
+        live = self.run / "state.json"
+        live.write_text('{"stage":"validation"}')
+        pins = s.evidence_hashes([str(live)], self.root, self.run)
+        frozen = Path(next(iter(pins)))
+        self.assertNotEqual(live, frozen)
+        self.assertEqual(live.read_bytes(), frozen.read_bytes())
+        live.write_text('{"stage":"review"}')
+        self.assertEqual(pins[str(frozen)], s.file_hash(frozen))
+        self.assertNotEqual(pins[str(frozen)], s.file_hash(live))
+
     def test_check_must_match_independent_executed_event(self):
         p=self.run/"sol.jsonl"
         p.write_text(json.dumps({"type":"item.completed","item":{"type":"command_execution","id":"x","command":"ruby tests.rb","exit_code":1,"aggregated_output":"FAIL"}}))

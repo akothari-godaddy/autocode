@@ -1363,10 +1363,11 @@ def resolve_passing_checkpoint(state, question_id, text):
 
 
 def wait_for_user(state, request, *, origin=None, evidence=None, next_stage=None):
+    request = checkpoints.route_review_only_request(state, request, origin)
+    if request is None:
+        return
     if not request["decision_needed"].strip() or not request["impact"].strip():
         raise ValueError("A user request needs the smallest decision and its impact")
-    # Reuse an exact, authenticated decision, not a guessed semantic match or
-    # blanket authorization. Denials and qualified answers must also be honored.
     if request.get("kind") == "permission" and approved(state):
         for answer_id, answer in state.get("answers", {}).items():
             if (answer.get("kind") != "permission_answer"
@@ -1394,7 +1395,6 @@ def wait_for_user(state, request, *, origin=None, evidence=None, next_stage=None
                          pending_questions=[], next_stage="astra_review")
             return
     state.pop("permission_reuse_context", None)
-    request = copy.deepcopy(request)
     origin = origin or {"stage": "goal_request"}
     evidence = copy.deepcopy(evidence or {})
     output = origin.get("output")
