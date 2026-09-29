@@ -85,8 +85,10 @@ The stronger attempt must not be checked by its own model. When the Validator or
 Completion Owner runs the stronger model, it moves to `zai-coding-plan/glm-5.3` for the
 rest of that milestone (keeping its effort, or `high` for a climbed `xhigh`/`max`) and
 returns to its route at the next milestone. The decision records the switch as
-`checker_models`. Pinned and custom-provider checkers are never moved; the cross-model
-guard pauses the run instead.
+`checker_models`. Runs saved before this switch existed use the same model. Pinned and
+custom-provider checkers are never moved; the cross-model guard pauses the run instead. A
+new run refuses a `--builder-strong-model` that is `zai-coding-plan/glm-5.3`, since the
+moved checkers would then check their own model's work.
 
 A parallel Builder cannot move the checkers that will check its batch. When its stronger
 attempt would run on the checkers' model, it stops with `SERIAL_ESCALATION` instead
