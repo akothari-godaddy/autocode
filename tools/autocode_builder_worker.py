@@ -6,7 +6,9 @@ import uuid
 try:
     from . import autocode as runner
     from . import autocode_test_examples as test_examples, autocode_test_cases as test_cases
+    from . import autocode_assignment as assignment
 except ImportError:
+    import autocode_assignment as assignment
     import autocode_test_cases as test_cases
     import autocode as runner
     import autocode_test_examples as test_examples
@@ -56,7 +58,8 @@ def execute(state, directory, workspace, mode):
         state.update(status="RUNNING", next_stage="terra")
         prompt, metrics = runner.support.context_packet(state, "terra", directory / "state.json")
         prompt = test_examples.add_to_prompt(prompt, workspace, state.get("current_task"))
-        prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", test_cases.builder_note(state) + "\nCURRENT HANDOFF DATA\n", 1)
+        prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", test_cases.builder_note(state) + assignment.BUILD_OUTPUT_NOTE
+                                + "\nCURRENT HANDOFF DATA\n", 1)
         metrics = {**metrics, "estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4}
         prompt = ("\nYou are one isolated Builder in a parallel milestone batch. Write only within "
                    "current_task.affected_paths. Other Builders own the other milestones. Do not "

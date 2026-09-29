@@ -626,7 +626,7 @@ def assert_within_assignment(state, record):
     owned = (state.get("current_task") or {}).get("affected_paths") or []
     if not owned or not state.get("goal_contract"):
         return
-    outside = assignment.outside(owned, state.get("stages", []), record)
+    outside = assignment.outside(owned, state.get("stages", []), record, workspace=state.get("workspace"))
     if outside is None:
         raise support.Paused("PAUSED_ASSIGNMENT_SCOPE",
                              "The assignment's starting snapshot is missing; edits retained for inspection")
