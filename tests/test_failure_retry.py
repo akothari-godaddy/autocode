@@ -98,10 +98,16 @@ class FailureRetryCLITests(unittest.TestCase):
         original = next(row for row in state['stages'] if row['stage'] == 'sol')
         state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', next_stage='sol')
         state['settings']['report_repair'] = {'max_attempts': 0}
+        # Seed the same failure the corrupted provider below reproduces: a saved report
+        # without its verdict. Only consecutive identical failures count as repetition.
+        report = support.read(original['output'])
+        report.pop('verdict', None)
         for index in range(3):
-            record = dict(original, output=str(run / f'failed-sol-{index}.json'), rejected=True,
+            output = run / f'failed-sol-{index}.json'
+            support.atomic_json(output, report)
+            record = dict(original, output=str(output), rejected=True,
                           source_revision=support.snapshot(self.project)['revision'])
-            runner.failures.record(state, record, ValueError('Missing verdict'), support.now())
+            runner.failures.record(state, record, ValueError('$: missing verdict'), support.now())
             state['stages'].append(record)
         support.atomic_json(run / 'state.json', state)
         history = copy.deepcopy(state['failure_history'])

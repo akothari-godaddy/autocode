@@ -324,7 +324,9 @@ def escalate_to_repeat_threshold(run_dir: Path, bundle: Bundle) -> None:
     bundle.log("mechanical_escalation", failure_key=failure_key, real_count_before=entry.get("count"),
                real_last_error=entry.get("last_error"),
                note="labeled repeat-count fault injection; not organic repetition; no model call")
-    entry["count"] = 3
+    # The repeated-failure gate reads the consecutive streak; entries saved
+    # before streaks existed fall back to count. Raise both to the threshold.
+    entry["count"] = entry["streak"] = 3
     state["status"] = "PAUSED_REPEATED_FAILURE"
     (run_dir / "state.json").write_text(json.dumps(state, indent=2, default=str))
 
