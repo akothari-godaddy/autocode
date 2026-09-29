@@ -11,9 +11,9 @@ import uuid
 # present, approve, assign, ask the user) are in autocode_goal_lifecycle, which imports this module,
 # never the other way round.
 try:
-    from . import autocode_util as s, autocode_workflows as workflows, autocode_protected_text as protected
+    from . import autocode_util as s, autocode_workflows as workflows, autocode_protected_text as protected, autocode_test_cases as test_cases
 except ImportError:
-    import autocode_util as s, autocode_workflows as workflows, autocode_protected_text as protected
+    import autocode_util as s, autocode_workflows as workflows, autocode_protected_text as protected, autocode_test_cases as test_cases
 
 # The state keys under which a Resolver proposal waits for the user and the request shown to them.
 # autocode_resolver_human owns those records and re-exports these as PRIVATE and PUBLIC; they are
@@ -306,8 +306,8 @@ def revision_guard(state, body, changes, origin):
             _, replacement = consume(item, "reworded" if any(row["change"] == "reworded" for row in declared.get(item, [])) else "removed")
             if replacement and replacement not in body.get(key, []):
                 raise ValueError(f"Rewording {item!r} must appear in {key}")
-    old_criteria = {row["id"]: (row["criterion"], row["verification_method"]) for row in previous.get("acceptance_criteria", [])}
-    new_criteria = {row["id"]: (row["criterion"], row["verification_method"]) for row in body.get("acceptance_criteria", [])}
+    old_criteria = {row["id"]: (row["criterion"], test_cases.proof(row["verification_method"])) for row in previous.get("acceptance_criteria", [])}
+    new_criteria = {row["id"]: (row["criterion"], test_cases.proof(row["verification_method"])) for row in body.get("acceptance_criteria", [])}
     for cid, text in old_criteria.items():
         if new_criteria.get(cid) == text:
             continue

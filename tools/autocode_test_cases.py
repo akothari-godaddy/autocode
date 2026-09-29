@@ -31,6 +31,22 @@ MARK = "test:"
 GUARD_MARK = "guard:"
 
 
+def proof(method) -> str:
+    """A verification method with a test:/guard: mark reduced to the test it names.
+
+    Whether a named test must fail first (test:) or pass before and after (guard:) is how the
+    runner proves a criterion, not what the user agreed to. A planning revision may switch it
+    without a user answer (autocode_goals.revision_guard); the proof still refuses a mislabeled
+    one. A live review-then-fix plan (2026-09-29) could not move "a timeout before execution is
+    still retried" from test: to guard:, as its Plan Reviewer asked, without asking the user.
+    """
+    text = str(method or "").strip()
+    for mark in (MARK, GUARD_MARK):
+        if text.lower().startswith(mark):
+            return "tested: " + text[len(mark):].strip()
+    return text
+
+
 def design_only(state: dict) -> bool:
     """A job recognized as design (autocode_workflows) delivers documents, never code or tests. A live run
     asked to "deliver only a design ... no application code" planned every criterion as a test and added
