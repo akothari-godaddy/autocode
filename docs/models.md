@@ -127,4 +127,28 @@ when switching between Codex and OpenCode; their session IDs cannot be reused ac
 engines. Saved runs retain their original role engines and sessions; no existing run
 is migrated by a dashboard selection.
 
+## When a model is not in your plans
+
+A new run first asks its provider which models your plans offer (`opencode models`).
+If a role's model is not listed, the run stops before any model call and shows:
+
+- every model your plans offer, grouped by plan, each marked **subscription** or **pay
+  per token** and with its tier: **cheap worker** (plans and builds), **strong judge**
+  (checks) or **Resolver only**. A model AutoCode has no tier for says "tier unknown";
+  free, flash and MiMo routes are not offered.
+- a replacement for each missing role. It prefers a subscription over per-token billing,
+  then the tier the role wants, and never shares a model (or GLM family) with the role it
+  checks or is checked by. Only the Resolver is offered GPT-6 Astra. OpenAI routes are
+  not offered when OpenCode signs in to OpenAI another way, such as an API key.
+- the flags to start the run with, for example `--sol-model openai/gpt-6-luna`.
+
+In `--chat`, you can accept all the replacements and the run continues with them, as if
+you had passed the flags. AutoCode never changes a model without you. A saved run is not
+re-routed this way: resuming keeps its models, so start a new run instead.
+
+A listed OpenAI route while OpenCode is signed in with an API key is not a missing model:
+the run pauses at the billing check, as above, and resumes once the ChatGPT login is
+connected. `autocode models` shows the same list at any time and checks every role's
+default route; see [CLI](cli.md).
+
 See also: [Providers](providers.md) · [Workflow](workflow.md) · [CLI](cli.md)
