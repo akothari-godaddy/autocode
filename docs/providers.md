@@ -117,6 +117,9 @@ provider/auth in local Codex config still pauses a saved Codex-engine run.
 
 ## Add a tool
 
+[`examples/claude-provider`](../examples/claude-provider/README.md) is a worked example: it registers the
+`claude` CLI so a run can use Haiku, Sonnet and Opus with no OpenCode or Codex install.
+
 OpenCode is built in. Any other tool registers with one TOML file, not a Python
 package. `--provider <name>` loads `~/.config/autocode/providers/<name>.toml` and,
 if that file is absent, the bundled example at `tools/providers/configs/<name>.toml`.
