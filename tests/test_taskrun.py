@@ -22,7 +22,7 @@ FIXTURE_OPTIONS = ("--engine", "codex", "--joint-planning", "--astra-model", "gp
 
 class RunViewTests(unittest.TestCase):
     def test_contract_fields(self):
-        self.assertEqual({"schema", "status", "done", "needs", "phase", "next_stage", "iteration", "stop_reason",
+        self.assertEqual({"schema", "status", "done", "needs", "phase", "next_stage", "iteration", "stop_reason", "runner_check",
                           "current_task", "workflow", "workflow_source", "workflow_reason", "turn", "evidence",
                           "dependency"},
                          set(run_view.view({"status": "RUNNING"})))
