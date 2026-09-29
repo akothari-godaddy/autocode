@@ -31,6 +31,7 @@ import shlex
 import shutil
 import signal
 import subprocess
+import tempfile
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -511,14 +512,22 @@ def _clear(path):
         shutil.rmtree(path)
 
 
-def make_tree(repo, base, destination, overlay_root, changes, *, dependencies_from=None):
-    """A detached worktree of ``base`` with ``changes`` copied from ``overlay_root``."""
+def make_tree(repo, base, destination, overlay_root, changes, *, dependencies_from=None, patch=None):
+    """A detached worktree of ``base`` with ``changes`` copied from ``overlay_root``.
+
+    ``patch`` (a patch file) is applied to ``base`` before the changes are copied in: the
+    base a review follow-up is proven against is the change the review judged."""
     destination = Path(destination)
     if destination.exists():
         remove_tree(repo, destination)
     destination.parent.mkdir(parents=True, exist_ok=True)
     _git(repo, "worktree", "add", "--detach", str(destination), base)
     try:
+        if patch:
+            applied = subprocess.run(["git", "-C", str(destination), "apply", str(patch)],
+                                     capture_output=True, text=True)
+            if applied.returncode:
+                raise ValueError(f"git apply {patch} failed: {(applied.stderr or applied.stdout).strip()[-300:]}")
         ordered = sorted(changes.items(), key=lambda item: item[1] != "deleted")  # deletions first
         for path, status in ordered:
             target = destination / path
@@ -542,6 +551,17 @@ def make_tree(repo, base, destination, overlay_root, changes, *, dependencies_fr
         remove_tree(repo, destination)
         raise
     return destination
+
+
+def patch_applies(repo, base, patch) -> str:
+    """"" when ``patch`` applies cleanly to ``base``, else why not. Uses a scratch index, no worktree."""
+    with tempfile.TemporaryDirectory() as scratch:
+        env = {**os.environ, "GIT_INDEX_FILE": str(Path(scratch) / "index")}
+        read = subprocess.run(["git", "-C", str(repo), "read-tree", base], capture_output=True, text=True, env=env)
+        check = read if read.returncode else subprocess.run(
+            ["git", "-C", str(repo), "apply", "--check", "--cached", str(patch)], capture_output=True, text=True,
+            env=env)
+    return "" if check.returncode == 0 else (check.stderr or check.stdout).strip()[-300:] or "git apply --check failed"
 
 
 def remove_tree(repo, destination):
@@ -655,11 +675,11 @@ def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeo
 
 
 def baseline(workspace, base, run_dir, *, framework, suite_command, timeout=DEFAULT_TIMEOUT,
-             dependencies_from=None) -> dict:
-    """Run the suite once on the pristine base revision (cached by the caller)."""
+             dependencies_from=None, base_patch=None) -> dict:
+    """Run the suite once on the pristine base revision, with ``base_patch`` applied (cached by the caller)."""
     evidence = Path(run_dir) / "baseline"
     tree = make_tree(workspace, base, Path(run_dir) / "scratch" / "baseline", workspace, {},
-                     dependencies_from=dependencies_from)
+                     dependencies_from=dependencies_from, patch=base_patch)
     try:
         receipt = run_suite(framework, suite_command, tree, evidence, "suite-on-base", timeout=timeout)
     finally:
@@ -685,8 +705,12 @@ def suite_health(receipt) -> str:
 
 def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regression_command=None,
            reported=None, base_suite=None, timeout=DEFAULT_TIMEOUT, dependencies_from=None,
-           allow_no_test=False, new_behavior=False) -> dict:
+           allow_no_test=False, new_behavior=False, base_patch=None) -> dict:
     """Verify the candidate in ``workspace`` against ``base``; see module docstring.
+
+    ``base_patch`` is a patch file applied to ``base`` wherever the proof runs "the original
+    code": a follow-up that fixes a reviewed change is proven against that change, where the
+    review's findings exist, not against the code before it.
 
     ``new_behavior`` is for a feature rather than a bug fix: a new test proves the change
     when it passes on the candidate and did not pass on base, which includes failing to
@@ -734,7 +758,8 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
                                            dependencies_from=dependencies_from)
         if trees and sources and runnable_tests:
             trees["base_with_tests"] = make_tree(workspace, base, run_dir / "scratch" / "base-with-tests",
-                                                 workspace, test_changes, dependencies_from=dependencies_from)
+                                                 workspace, test_changes, dependencies_from=dependencies_from,
+                                                 patch=base_patch)
         # Regression proof: identical tests, base source versus candidate source.
         if trees and runnable_tests and commands["regression"]:
             on_candidate = run_suite(framework, commands["regression"], trees["candidate"], run_dir,
@@ -748,7 +773,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
             _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, review_reasons,
                               new_behavior=new_behavior, known_failures=lambda: _pre_existing(
                                   framework, commands, changes, runnable_tests, workspace, base, run_dir, checks,
-                                  timeout=timeout, dependencies_from=dependencies_from))
+                                  timeout=timeout, dependencies_from=dependencies_from, base_patch=base_patch))
         elif "base_with_tests" in trees and commands["suite"]:
             # No targeted command: the whole suite proves the flip when base was green.
             if base_suite is None or base_suite["health"] != "passing":
@@ -788,7 +813,8 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
         review_reasons.append("non-code files changed: " + ", ".join(stats["non_code_files"][:5]))
     verdict = FAIL if fail else UNVERIFIED if unverified else PASS
     return {"verdict": verdict, "failures": fail, "unverified": unverified, "notes": notes,
-            "review_reasons": review_reasons, "base": base, "source_revision": before,
+            "review_reasons": review_reasons, "base": base, "base_patch": str(base_patch) if base_patch else None,
+            "source_revision": before,
             "changes": changes, "test_files": tests, "source_files": sources, "stats": stats,
             "commands": {k: commands[k] for k in ("suite", "suite_source", "regression", "regression_source")},
             "framework": framework.to_dict() if framework else None,
@@ -882,7 +908,7 @@ def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, rev
 
 
 def _pre_existing(framework, commands, changes, runnable_tests, workspace, base, run_dir, checks, *,
-                  timeout, dependencies_from):
+                  timeout, dependencies_from, base_patch=None):
     """Failures of the changed test files' base versions on the pristine base, by test id."""
     if not framework or not framework.per_test or not str(commands["regression_source"]).startswith("derived"):
         return None
@@ -891,7 +917,7 @@ def _pre_existing(framework, commands, changes, runnable_tests, workspace, base,
     if not command:
         return set()
     tree = make_tree(workspace, base, Path(run_dir) / "scratch" / "base", workspace, {},
-                     dependencies_from=dependencies_from)
+                     dependencies_from=dependencies_from, patch=base_patch)
     try:
         receipt = run_suite(framework, command, tree, run_dir, "regression-files-on-base", timeout=timeout)
     finally:

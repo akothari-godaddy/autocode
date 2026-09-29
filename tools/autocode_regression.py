@@ -35,8 +35,10 @@ try:
     from . import autocode_util as util, autocode_goals as goals, autocode_verify as verify
     from . import autocode_workspaces as workspaces
     from . import autocode_bug_job as bug_job, autocode_test_cases as test_cases
+    from . import autocode_follow_up as follow_up
 except ImportError:
     import autocode_bug_job as bug_job
+    import autocode_follow_up as follow_up
     import autocode_test_cases as test_cases
     import autocode_util as util
     import autocode_goals as goals
@@ -45,7 +47,7 @@ except ImportError:
 
 STAGE = "regression_proof"
 SUMMARY_KEYS = ("verdict", "failures", "unverified", "notes", "review_reasons", "fail_to_pass", "pass_to_pass",
-                "commands", "base", "source_revision", "test_files", "source_files", "case_tests")
+                "commands", "base", "base_patch", "source_revision", "test_files", "source_files", "case_tests")
 
 
 def required(state):
@@ -107,15 +109,35 @@ def suite_timeout(state):
     return max(limit, verify.DEFAULT_TIMEOUT) if limit else None
 
 
-def _baseline(state, workspace, run_dir, base, framework, suite, dependencies):
+def reviewed_patch(state, workspace):
+    """The patch a review follow-up fixes (autocode_follow_up), or None.
+
+    Its findings exist only with that change applied, so the proof's "original code" is the
+    base with the patch applied: on the code before it, a test for a finding can pass (the
+    behavior was fine before the change) and every test the change rewrote fails.
+    """
+    reviewed = follow_up.review_findings(state) or {}
+    name = str(reviewed.get("change_patch") or "").strip()
+    if not name:
+        return None
+    candidates = [Path(workspace) / name, *([Path(state["project_workspace"]) / name]
+                                           if state.get("project_workspace") else [])]
+    return next((path for path in candidates if path.is_file()), candidates[0])
+
+
+def _baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch=None):
     cached = state.get("regression_baseline") or {}
-    if cached.get("base") == base and cached.get("command") == suite and Path(cached.get("path", "")).is_file():
+    patch = str(base_patch) if base_patch else None
+    if (cached.get("base") == base and cached.get("command") == suite and cached.get("base_patch") == patch
+            and Path(cached.get("path", "")).is_file()):
         return util.read(cached["path"])
     result = verify.baseline(workspace, base, Path(run_dir) / "regression", framework=framework,
-                             suite_command=suite, dependencies_from=dependencies, timeout=suite_timeout(state))
+                             suite_command=suite, dependencies_from=dependencies, timeout=suite_timeout(state),
+                             base_patch=base_patch)
     path = Path(run_dir) / "regression" / "baseline.json"
     util.atomic_json(path, result)
-    state["regression_baseline"] = {"base": base, "command": suite, "path": str(path), "health": result["health"]}
+    state["regression_baseline"] = {"base": base, "command": suite, "path": str(path), "health": result["health"],
+                                    "base_patch": patch}
     return result
 
 
@@ -131,11 +153,17 @@ def prove(state, workspace, run_dir):
     started = time.monotonic()
     base = base_commit(state, workspace)
     options = settings(state)
-    if not base:
+    base_patch = reviewed_patch(state, workspace)
+    unappliable = base and base_patch and (
+        "it is missing" if not base_patch.is_file() else verify.patch_applies(workspace, base, base_patch))
+    if not base or unappliable:
+        why = ("No base commit is recorded for this run, so the fix cannot be compared with the original code"
+               if not base else f"The reviewed change {base_patch.name} cannot be applied to the base revision "
+               f"({unappliable}), so the fix cannot be compared with the change the review judged")
         proof = {"verdict": verify.UNVERIFIED, "failures": [], "notes": [], "review_reasons": [],
-                 "unverified": ["No base commit is recorded for this run, so the fix cannot be compared "
-                                "with the original code"], "fail_to_pass": None, "commands": {},
-                 "base": None, "source_revision": current, "test_files": [], "source_files": []}
+                 "unverified": [why], "fail_to_pass": None, "commands": {},
+                 "base": base, "base_patch": str(base_patch) if base_patch else None, "source_revision": current,
+                 "test_files": [], "source_files": []}
         path = None
     else:
         dependencies = state.get("project_workspace") or str(workspace)
@@ -143,14 +171,15 @@ def prove(state, workspace, run_dir):
         framework = verify.detect_framework(workspace, python=options.get("python")
                                             or verify.python_for(dependencies))
         suite = options.get("test_command") or (framework.suite if framework else None)
-        base_suite = _baseline(state, workspace, run_dir, base, framework, suite, dependencies) if suite else None
+        base_suite = (_baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch)
+                      if suite else None)
         number = len(state.get("regression_proofs", [])) + 1
         out = Path(run_dir) / "regression" / f"proof-{number:02d}"
         result = verify.verify(workspace, base, out, framework=framework, suite_command=options.get("test_command"),
                                regression_command=options.get("regression_command"),
                                reported=None, base_suite=base_suite, dependencies_from=dependencies,
                                timeout=suite_timeout(state),
-                               new_behavior=goals.task_kind(state) != "bugfix")
+                               new_behavior=goals.task_kind(state) != "bugfix", base_patch=base_patch)
         path = out / "verification.json"
         util.atomic_json(path, result)
         proof = {key: result.get(key) for key in SUMMARY_KEYS}
