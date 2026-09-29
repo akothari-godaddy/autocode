@@ -140,6 +140,26 @@ class ApplyTests(unittest.TestCase):
         self.assertEqual([CASE], bug_job.large_correction(state)["test_cases"])
         self.assertEqual([CASE], bug_job.test_cases(state))
 
+    def test_a_guard_case_is_accepted_beside_a_regression_case(self):
+        guard = {"id": "T2", "given": "total=10, size=5", "when": "page_count(10, 5)", "then": "returns 2",
+                 "kind": "guard"}
+        state, _ = self.apply(diagnosis(test_cases=[CASE, guard]))
+        self.assertEqual([CASE, guard], bug_job.test_cases(state))
+
+    def test_a_case_needs_a_known_kind_and_a_bug_needs_a_regression_case(self):
+        guard = {**CASE, "kind": "guard"}
+        with self.assertRaisesRegex(ValueError, "regression or guard"):
+            self.apply(diagnosis(test_cases=[{**CASE, "kind": "smoke"}]))
+        with self.assertRaisesRegex(ValueError, "at least one regression case"):
+            self.apply(diagnosis(test_cases=[guard]))
+        self.assertIn("kind", bug_job.CASE["properties"])
+        self.assertNotIn("kind", bug_job.CASE["required"])  # saved diagnoses have none
+
+    def test_the_investigator_is_told_when_a_case_is_a_guard(self):
+        prompt, _ = bug_job.prompt(state_for())
+        self.assertIn('"guard"', prompt)
+        self.assertIn("already works", prompt)
+
     def test_paths_must_stay_inside_the_repository(self):
         for path in ("/etc/passwd", "../outside.py", ".git/config"):
             with self.subTest(path=path), self.assertRaisesRegex(ValueError, "inside the repository"):
@@ -226,6 +246,11 @@ class SmallCorrectionTests(unittest.TestCase):
         small, _ = autoplanner.context({**state, "investigation": {**state["investigation"], "fix_size": "small"}},
                                        "astra_discovery", Path(state["workspace"]) / "state.json")
         self.assertNotIn(autoplanner.BUG_DIAGNOSIS_RULE, small)
+
+    def test_the_planner_does_not_require_a_guard_case_to_fail_first(self):
+        from units import autoplanner
+        self.assertIn('"guard"', autoplanner.BUG_DIAGNOSIS_RULE)
+        self.assertIn("never require it to fail on the original code", autoplanner.BUG_DIAGNOSIS_RULE)
 
     def test_planning_is_told_how_execution_captures_evidence(self):
         from units import autoplanner

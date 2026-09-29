@@ -99,8 +99,8 @@ findings ledger, and, for bug fixes, the runner's own fail-before/pass-after
 regression proof (`verdict`, `fail_to_pass`, `failures`, `unverified`,
 `commands`, `source_revision`, and `case_tests`: each English test case's
 proving tests; `null` otherwise). `test_cases` lists a reproduced bug's
-regression tests in plain English (`id`, `given`, `when`, `then`; empty
-otherwise; see [Bug fixes](workflow.md#bug-fixes)). `check_replay` is the
+regression tests in plain English (`id`, `given`, `when`, `then`, and `kind`,
+`regression` or `guard`; empty otherwise; see [Bug fixes](workflow.md#bug-fixes)). `check_replay` is the
 current validation's checks as the runner itself re-ran them in a clean copy:
 `verdict`, `source_revision` and one row per command (`command`, `exit_code`,
 `timed_out`, `output`); `null` before a PASS validation and for validations

@@ -11,7 +11,8 @@ current source has no passing proof. Every workflow stage still runs.
 When the Investigator wrote the regression tests in plain English (its
 ``test_cases``), the proof also requires each case to have its own test, named
 after the case id, among the tests that fail on base and pass now
-(``case_tests``, from autocode_test_cases.match_cases).
+(``case_tests``, from autocode_test_cases.match_cases). A case the Investigator marked
+``guard`` (behavior that already worked) needs a test that passes now, not one that failed before.
 
 A feature gets the same proof when its approved plan marks acceptance criteria
 as tests (``verification_method: "test: test_c2_..."``,
@@ -41,7 +42,7 @@ except ImportError:
 
 STAGE = "regression_proof"
 SUMMARY_KEYS = ("verdict", "failures", "unverified", "notes", "review_reasons", "fail_to_pass", "commands",
-                "base", "source_revision", "test_files", "source_files", "case_tests")
+                "base", "source_revision", "test_files", "source_files", "case_tests", "candidate_passed")
 
 
 def required(state):
@@ -156,12 +157,16 @@ def check_cases(proof, cases):
                 "The English test cases could not be matched to tests: the test run reported no per-test results"]
             proof["verdict"] = verify.UNVERIFIED
         return
-    proof["case_tests"] = test_cases.match_cases(cases, proof["fail_to_pass"])
+    guards = [case for case in cases if test_cases.is_guard(case)]
+    proof["case_tests"] = test_cases.match_cases([c for c in cases if c not in guards], proof["fail_to_pass"])
+    # A guard holds before the fix too, so it cannot be among the tests that flipped: it only has to pass now.
+    proof["case_tests"].update(test_cases.match_cases(guards, proof.get("candidate_passed") or []))
     missing = [case for case in cases if not proof["case_tests"][case["id"]]]
     if missing:
         proof["failures"] = list(proof.get("failures") or []) + [
             f"Test case {test_cases.case_text(case)} has no test named {test_cases.case_test_name(case['id'])} "
-            "that passes with the change and did not pass without it" for case in missing]
+            + ("that passes with the change" if test_cases.is_guard(case)
+               else "that passes with the change and did not pass without it") for case in missing]
         proof["verdict"] = verify.FAIL
 
 

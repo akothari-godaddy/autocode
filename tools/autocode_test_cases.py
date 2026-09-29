@@ -7,7 +7,9 @@ test proves with a verification_method of ``test: test_<id>_...``
 (``contract_cases``). Either way a person approves English, the Builder writes
 one test per case named after its id, and the runner's proof
 (autocode_regression) checks by name, with no model, that each case has a
-test that passes with the change and did not before (``match_cases``).
+test that passes with the change and did not before (``match_cases``). A bug's Investigator may mark a case ``guard``: a behavior that
+already works on the unfixed code and must keep working (an edge that never broke). Its test
+must pass with the change but cannot fail before it, so only the other cases need to.
 
 In a plan with several milestones, a case is due once its milestone is: the
 proof at a milestone checkpoint covers the current milestone (every member of a
@@ -57,10 +59,20 @@ def in_scope(state: dict) -> set[str] | None:
             for criterion in milestone.get("acceptance_criteria") or []}
 
 
+GUARD = "guard"
+
+
+def is_guard(case: dict) -> bool:
+    """A guard case is a behavior that already holds on the unfixed code and must keep holding. Every
+    other case (no ``kind``, or ``regression``) must fail on the unfixed code and pass with the fix."""
+    return case.get("kind") == GUARD
+
+
 def case_text(case: dict) -> str:
     if "text" in case:
         return f"{case['id']}: {case['text']}"
-    return f"{case['id']}: Given {case['given']}; when {case['when']}; then {case['then']}"
+    label = " (guard: already holds before the fix, must keep holding)" if is_guard(case) else ""
+    return f"{case['id']}{label}: Given {case['given']}; when {case['when']}; then {case['then']}"
 
 
 def case_test_name(case_id: str) -> str:

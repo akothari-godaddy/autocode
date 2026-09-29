@@ -36,7 +36,11 @@ class RunViewTests(unittest.TestCase):
         state = {"status": "TASK_COMPLETE", "investigation": {"outcome": "reproduced", "test_cases": [case]},
                  "regression_proof": {"verdict": "PASS", "case_tests": {"T1": ["test_t1_one_mutation"]}}}
         evidence = run_view.evidence(state)
-        self.assertEqual([case], evidence["test_cases"])
+        # A saved case has no kind: it is a regression case, and the view says so.
+        self.assertEqual([{**case, "kind": "regression"}], evidence["test_cases"])
+        state["investigation"]["test_cases"] = [{**case, "kind": "guard"}]
+        self.assertEqual("guard", run_view.evidence(state)["test_cases"][0]["kind"])
+        state["investigation"]["test_cases"] = [case]
         self.assertEqual({"T1": ["test_t1_one_mutation"]}, evidence["regression_proof"]["case_tests"])
         state["investigation"]["outcome"] = "not_reproduced"
         self.assertEqual([], run_view.evidence(state)["test_cases"])

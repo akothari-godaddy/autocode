@@ -16,11 +16,13 @@ cause, and returns a diagnosis. The runner then:
   task at once (``small_correction``) exists but is off (``SMALL_CORRECTION_ENABLED``).
 
 A reproduced bug comes with ``test_cases``: the regression tests in plain English
-(Given / When / Then with exact values), one per behavior the fix must restore. A
+(Given / When / Then with exact values), one per behavior the fix must restore, plus any
+``guard`` cases for behavior that already works and must keep working. A
 person reads these instead of test code. The Builder writes one test per case,
 named ``test_<id>_...``, and the runner's regression proof (autocode_regression)
-checks, with no model, that every case has a test that fails on the original
-code and passes after the fix (autocode_test_cases.match_cases).
+checks, with no model, that every regression case has a test that fails on the original
+code and passes after the fix, and every guard case one that passes after it
+(autocode_test_cases.match_cases).
 
 "Reproduced" is checked, not trusted: a reproduced bug carries a ``probe``, a
 command that exits 0 exactly when the bug is present on today's code. The runner
@@ -52,8 +54,10 @@ NOTES_PREFIX = "docs/bugs/"
 OUTCOMES = ("reproduced", "not_reproduced")
 TEXT = {"type": "string"}
 TEXTS = {"type": "array", "items": TEXT}
+# kind is optional so saved diagnoses (all regression cases) stay valid; generation schemas require it.
 CASE = {"type": "object", "additionalProperties": False, "required": ["id", "given", "when", "then"],
-        "properties": {"id": TEXT, "given": TEXT, "when": TEXT, "then": TEXT}}
+        "properties": {"id": TEXT, "given": TEXT, "when": TEXT, "then": TEXT,
+                       "kind": {"type": "string", "enum": ["regression", "guard"]}}}
 CASE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -105,7 +109,13 @@ What to do:
      call or command) and then (the exact expected result, with literal values: "returns 1", "prints
      'Hello, Ada'", "exits 2"). No vague words such as "correctly" or "gracefully". The Builder writes one
      test per case named test_<id>_<what it checks> (for example test_t1_new_year_week_is_one_row), and
-     the runner checks that each case's test fails on the original code and passes after the fix.
+     the runner checks that each regression case's test fails on the original code and passes after the fix.
+     kind: "regression" for a behavior the fix must restore, which is wrong on today's code. "guard" for a
+     behavior that already works on today's code and must keep working (an edge case the bug never touched,
+     such as an exact multiple when the bug is in the remainder). Run a guard's given/when on the unfixed
+     code first: if it gives a wrong result it is a regression case, not a guard. A guard's test cannot fail
+     before the fix, so never make a case a regression case if it holds today. At least one case, the first,
+     must be a regression case: the one you reproduced.
    - fix_size: small when the cause is obvious and the fix is one bounded change in one or two files;
      large otherwise. Say large whenever the fix needs design choices or touches several modules.
    - fix_plan: the steps of the fix, and the regression test that fails before it and passes after it.
@@ -187,6 +197,12 @@ def check_cases(cases: list) -> None:
     empty = [case["id"] for case in cases if not all(case[key].strip() for key in ("given", "when", "then"))]
     if empty:
         raise ValueError(f"Every test case needs given, when and then: {empty}")
+    kinds = [case["id"] for case in cases if case.get("kind", "regression") not in ("regression", "guard")]
+    if kinds:
+        raise ValueError(f"A test case kind is regression or guard: {kinds}")
+    if all(case.get("kind") == "guard" for case in cases):
+        raise ValueError("A reproduced bug needs at least one regression case: the behavior you reproduced, "
+                         "which is wrong on today's code. Guard cases only cover what already works")
 
 
 def safe_path(path: str) -> bool:

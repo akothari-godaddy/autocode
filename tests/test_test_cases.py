@@ -217,3 +217,69 @@ class PromptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+BUG_SEED = {"pager.py": "def page_count(total, size):\n    return total // size\n",
+            "test_pager.py": "import unittest\nfrom pager import page_count\n\n\nclass PagerTests(unittest.TestCase):\n"
+                             "    def test_existing(self):\n        self.assertEqual(2, page_count(10, 5))\n"}
+BUG_FIX = {"pager.py": "def page_count(total, size):\n    return (total + size - 1) // size\n",
+           "test_pager.py": BUG_SEED["test_pager.py"]
+           + "\n    def test_t1_partial_page_counts(self):\n        self.assertEqual(3, page_count(11, 5))\n"
+           + "\n    def test_t4_exact_multiple_and_zero(self):\n"
+             "        self.assertEqual(2, page_count(10, 5))\n        self.assertEqual(0, page_count(0, 5))\n"}
+T1 = {"id": "T1", "given": "total=11, size=5", "when": "page_count(11, 5)", "then": "returns 3"}
+T4 = {"id": "T4", "given": "total=10 and total=0, size=5", "when": "page_count runs", "then": "returns 2 and 0"}
+
+
+class GuardCaseTests(unittest.TestCase):
+    """A behavior that already works cannot fail before the fix (a live run stopped on exactly this)."""
+
+    def prove(self, cases, files=BUG_FIX):
+        project = Project(BUG_SEED)
+        self.addCleanup(project.close)
+        project.write(files)
+        state = {"base_commit": project.base, "settings": {}, "iteration": 1, "stages": [], "history": [],
+                 "goal_contract": {"body": {"task_kind": "bugfix", "acceptance_criteria": [],
+                                            "milestones": [{"id": "M1"}]}},
+                 "investigation": {"outcome": "reproduced", "test_cases": cases}}
+        return regression.prove(state, project.root, Path(tempfile.mkdtemp(prefix="guard-proof-")))
+
+    def test_a_guard_case_needs_only_a_test_that_passes_with_the_fix(self):
+        proof = self.prove([T1, {**T4, "kind": "guard"}])
+        self.assertEqual("PASS", proof["verdict"], proof["failures"] + proof["unverified"])
+        self.assertEqual(["test_pager.PagerTests.test_t1_partial_page_counts"], proof["case_tests"]["T1"])
+        self.assertEqual(["test_pager.PagerTests.test_t4_exact_multiple_and_zero"], proof["case_tests"]["T4"])
+
+    def test_the_same_case_without_a_kind_still_has_to_fail_first(self):
+        # Saved diagnoses have no kind; they keep the fail-first rule.
+        for cases in ([T1, T4], [T1, {**T4, "kind": "regression"}]):
+            with self.subTest(cases=cases):
+                proof = self.prove(cases)
+                self.assertEqual("FAIL", proof["verdict"])
+                self.assertEqual([], proof["case_tests"]["T4"])
+                self.assertTrue(any("T4" in failure and "did not pass without it" in failure
+                                    for failure in proof["failures"]), proof["failures"])
+
+    def test_a_guard_without_its_test_fails_the_proof_and_says_what_it_needs(self):
+        files = {**BUG_FIX, "test_pager.py": BUG_FIX["test_pager.py"].replace("test_t4_", "test_other_")}
+        proof = self.prove([T1, {**T4, "kind": "guard"}], files)
+        self.assertEqual("FAIL", proof["verdict"])
+        self.assertEqual([], proof["case_tests"]["T4"])
+        failure, = [failure for failure in proof["failures"] if "T4" in failure]
+        self.assertIn("passes with the change", failure)
+        self.assertNotIn("did not pass without it", failure)
+
+    def test_a_guard_does_not_stand_in_for_the_regression_case(self):
+        # The bug's own case marked guard would need no failing test; the proof still needs one to flip.
+        files = {**BUG_FIX, "test_pager.py": BUG_FIX["test_pager.py"].replace(
+            "    def test_t1_partial_page_counts(self):\n        self.assertEqual(3, page_count(11, 5))\n", "")}
+        proof = self.prove([T1, {**T4, "kind": "guard"}], files)
+        self.assertEqual("FAIL", proof["verdict"])
+        self.assertEqual([], proof["case_tests"]["T1"])
+
+    def test_the_case_reads_as_a_guard_to_the_person_approving_it(self):
+        self.assertIn("guard", test_cases.case_text({**T4, "kind": "guard"}))
+        self.assertNotIn("guard", test_cases.case_text(T4))
+        self.assertTrue(test_cases.is_guard({**T4, "kind": "guard"}))
+        self.assertFalse(test_cases.is_guard({**T4, "kind": "regression"}))
+        self.assertFalse(test_cases.is_guard(T4))
