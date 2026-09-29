@@ -19,7 +19,7 @@ classifiers = [
 dependencies = ["psutil>=7.0,<8"]
 
 [project.scripts]
-autopilot = "autocode_cli.autopilot:cli"
+autopilot = "autocode_cli.autocode:cli"
 autocode = "autocode_cli.autocode:cli"
 autocode-orchestrator = "autocode_cli.autocode_orchestrator:cli"
 autoplanner = "autocode_cli.autoplanner:cli"

@@ -1,8 +1,8 @@
 # Working on AutoCode
 
 Rules for anyone changing this repository, human or agent. They exist because
-the code grew faster than its structure: most of `tools/` now sits in one
-import cycle, and three naming schemes describe the same roles. The goal right
+the code grew faster than its structure: much of `tools/` sits in import
+cycles, and three naming schemes describe the same roles. The goal right
 now is to make the existing workflow dependable and the code easier to change,
 not to add surface area. See `RELIABILITY.md` for product priorities.
 
@@ -33,11 +33,15 @@ were archived at tag `archive/pre-restructure-2026-09-26`
    `autocode_support.py` and `autopilot.py` have line limits recorded in
    `tests/test_architecture.py`. New behavior goes in a new module with one
    purpose. Lower the recorded limit when you shrink one.
-2. **Do not join the import cycle.** 34 modules currently import each other
-   through `autocode.py` (listed in `tests/test_architecture.py`). A new module
+2. **Do not join an import cycle.** 21 modules are in one (listed in
+   `tests/test_architecture.py`): the domain modules around `autocode_goals`,
+   `autocode_support` and `autocode_milestones`, and two pairs of live-trial
+   tools. `autocode.py` and `autopilot` are no longer in one. A new module
    must depend only on lower-level modules, never on `autocode`, `autopilot` or
-   anything that imports them. Pass what you need as arguments instead.
-   Removing a module from the cycle is progress: take it off the list.
+   anything in a cycle. Pass what you need as arguments instead. The shared
+   helpers (clock, hashing, JSON files, locks, snapshots, schemas) are in
+   `autocode_util`, which imports nothing from AutoCode. Removing a module from
+   the cycles is progress: take it off the list (the test says when).
 3. **Target layering**, from the bottom: utilities (files, hashing, locking,
    schemas) → domain (contract, findings, milestones, completion gate; pure
    functions over state) → runtime (processes, providers) → controller

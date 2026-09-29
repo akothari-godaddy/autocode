@@ -167,20 +167,6 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     return record
 
 
-def start_planning(state):
-    if state.get("planning"):
-        state.setdefault("planning_history", []).append(copy.deepcopy(state["planning"]))
-    state["planning"] = {"astra_calls": 0, "reports": {}, "final_token": None}
-    saved_review_limit = state.get('settings', {}).get('planning_review_call_limit')
-    if type(saved_review_limit) is int and saved_review_limit == 0:
-        state['planning'].update(review_call_limit=0, review_call_limit_origin='user_explicit')
-    state.pop(human.PRIVATE, None)
-    state.pop(human.PUBLIC, None)
-    state.pop("user_request", None)
-    next_stage = "plan_review" if state.get("settings", {}).get("planning_flow") == "v2" else "astra_challenge"
-    state.update(status="RUNNING", phase="PLANNING", next_stage=next_stage, pending_questions=[])
-
-
 def _check_code_refs(state, refs, field="code_refs"):
     if not state.get("workspace"):
         return
@@ -1182,13 +1168,11 @@ def run(runtime, state, workspace, run_dir, args):
     return None
 
 
-def cli():
+if __name__ == "__main__":
+    # The dashboard and the macOS app run `python tools/autopilot.py ...`. The CLI lives in autocode.py,
+    # the layer above this controller, so only this script entry imports it; importing autopilot does not.
     try:
         from . import autocode
     except ImportError:
         import autocode
-    return autocode.cli()
-
-
-if __name__ == "__main__":
-    raise SystemExit(cli())
+    raise SystemExit(autocode.cli())

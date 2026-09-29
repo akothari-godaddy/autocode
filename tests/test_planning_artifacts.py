@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
 import autocode_goals as goals
 import autocode_planning as planning
+import autopilot
 import autocode_planning_artifacts as artifacts
 import autocode_planning_graph as planning_graph
 import autocode_support as support
@@ -54,7 +55,7 @@ class PlanningArtifactTests(unittest.TestCase):
                                               "model_pinned": True}}}}
 
     def apply(self, stage, value):
-        planning.apply(self.state, stage, value, {"output": f"{stage}.json"}, run_dir=self.run)
+        autopilot.apply_planning(self.state, stage, value, {"output": f"{stage}.json"}, run_dir=self.run)
         artifacts.flush_pending(self.state, self.run)
 
     def initialize_plan(self):
@@ -182,7 +183,7 @@ class PlanningArtifactTests(unittest.TestCase):
     def test_artifact_transaction_rolls_back_files_when_state_persistence_fails(self):
         support.atomic_json(self.run / "state.json", self.state)
         candidate = copy.deepcopy(self.state)
-        planning.apply(candidate, "requirements", {"requirements": requirements(), "summary": "ready"},
+        autopilot.apply_planning(candidate, "requirements", {"requirements": requirements(), "summary": "ready"},
                        {"stage": "requirements", "output": "requirements.json"}, run_dir=self.run)
         with self.assertRaisesRegex(OSError, "state persistence failed"):
             artifacts.commit_pending(candidate, self.run,
