@@ -21,10 +21,12 @@ try:
     from . import autocode_util as s
     from . import autocode_milestones as milestones
     from . import autocode_finding_scope as finding_scope
+    from . import autocode_review_gate as review_gate
 except ImportError:
     import autocode_util as s
     import autocode_milestones as milestones
     import autocode_finding_scope as finding_scope
+    import autocode_review_gate as review_gate
 
 SOURCES = ("sol", "astra")
 SEVERITIES = ("critical", "high", "medium", "low")
@@ -255,14 +257,18 @@ def record_validation(state, validation, record):
 def record_decision(state, decision, record):
     """The Plan Reviewer's structured findings behave like the Validator's.
 
-    A BLOCKED review still records the defects it already identified. It does not
-    close anything: the pause is about a missing decision, not a passing recheck.
+    A BLOCKED review closes findings only when its sole missing decision is a
+    declared human artifact review and the independent validation is fresh.
     """
     initial_scope = (_initial_task_scope(state.get("goal_contract", {}), decision.get("next_task") or {})
                      if record.get("stage") == "astra_plan" and not state.get("current_task") else None)
     _record(state, "astra", decision.get("findings", []), record, initial_scope)
     if decision.get("status") == "BLOCKED":
-        return
+        required = {row["id"] for row in state.get("goal_contract", {}).get("body", {}).get("acceptance_criteria", [])
+                    if row.get("human_review") and row["id"] in (report_scope(state) or {}).get("criteria", [])}
+        if (not review_gate.review_only_permission(decision, decision.get("user_request", {}), required)
+                or not milestones.fresh_validation(state, s.snapshot(state["workspace"]))):
+            return
     _apply_dispositions(state, "astra", decision.get("finding_dispositions", []), record,
                         report_scope(state),
                         {c["id"] for c in state.get("goal_contract", {}).get("body", {}).get("acceptance_criteria", [])},

@@ -13,12 +13,13 @@ import shlex
 import subprocess
 import tomllib
 
-# The shared helpers live in autocode_util; they are re-exported here so existing
-# callers (support.snapshot, support.Paused, ...) and test patches keep working.
+# Re-export shared helpers for existing callers and test patches.
 try:
+    from . import autocode_evidence_snapshot as evidence_snapshot
     from .autocode_util import (Paused, atomic_json, changed_paths, digest, file_hash, model_output_schema, now,
                                 read, run_lock, snapshot, validate_schema, workspace_lock)
 except ImportError:
+    import autocode_evidence_snapshot as evidence_snapshot
     from autocode_util import (Paused, atomic_json, changed_paths, digest, file_hash, model_output_schema, now,
                                read, run_lock, snapshot, validate_schema, workspace_lock)
 
@@ -207,8 +208,7 @@ def criteria_definition(criteria):
 def implementation_evidence_paths(refs, events_path):
     """Resolve actual executed-event references to their preserved event log.
 
-    File references retain the existing containment and hashing checks. An event
-    must identify exactly one completed command, never a message or step marker.
+    File references retain containment checks; events identify one completed command.
     """
     resolved = []
     completed = None
@@ -230,7 +230,6 @@ def implementation_evidence_paths(refs, events_path):
 def evidence_hashes(refs, workspace, run_dir):
     found = {}
     for ref in refs:
-        # Leading/trailing whitespace in a cited path is a formatting artifact, not semantics.
         path = Path(ref.split("#", 1)[0].strip())
         path = path if path.is_absolute() else Path(workspace) / path
         path = path.resolve()
@@ -238,6 +237,7 @@ def evidence_hashes(refs, workspace, run_dir):
             raise ValueError(f"Evidence outside project: {ref}")
         if not path.is_file():
             raise ValueError(f"Missing evidence: {ref}")
+        path = evidence_snapshot.stable_path(path, run_dir)
         found[str(path)] = file_hash(path)
     if not found:
         raise ValueError("Evidence references are empty")

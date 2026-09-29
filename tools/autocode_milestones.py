@@ -15,9 +15,11 @@ import uuid
 try:
     from . import autocode_util as s
     from . import autocode_carryforward as carryforward
+    from . import autocode_review_gate as review_gate
 except ImportError:
     import autocode_util as s
     import autocode_carryforward as carryforward
+    import autocode_review_gate as review_gate
 
 
 DEFAULTS = {"enabled": True, "max_seconds": 5400, "stalled_reviews": 3, "max_replans": 1}
@@ -55,7 +57,90 @@ new contract; validate every criterion and the full flow before COMPLETE.
 The runner allows one such automatic replan before pausing persistent failure.
 Budget exhaustion stops additional writing at a saved boundary; the Validator and Plan Reviewer may
 still verify finished work. File edits and reworded reports alone are not progress.
+If only a declared human artifact review remains, report the verified findings in
+a normal advancement decision. The runner presents its own review control; do
+not ask permission to create that control or claim the user already approved.
 """
+
+
+def route_review_only_request(state, request, origin):
+    """Turn a model's review permission into a runner gate or technical retry."""
+    if not enabled(state) or not isinstance(origin, dict) or origin.get("stage") != "astra_review":
+        return copy.deepcopy(request)
+    output = origin.get("output")
+    if not output or not Path(output).is_file():
+        return copy.deepcopy(request)
+    try:
+        report = s.read(output)
+        from . import autocode_goals as goals
+        from . import autocode_findings as findings
+    except ImportError:
+        import autocode_goals as goals
+        import autocode_findings as findings
+    except (OSError, ValueError):
+        return copy.deepcopy(request)
+    required = set(scope(state)["acceptance_criteria"]).intersection(goals.missing_human_reviews(state))
+    if not review_gate.review_only_permission(report, request, required) or not goals.approved(state):
+        return copy.deepcopy(request)
+    current = s.snapshot(Path(state["workspace"]))
+    ready = evidence_ready(state, current)
+    if not ready:
+        fresh = fresh_validation(state, current)
+        blockers = findings.blocking_for_milestone(state, scope(state))
+        state["milestone_blocker"] = ("Current independent evidence is stale" if not fresh else
+                                      "Current milestone still has open findings: " +
+                                      ", ".join(row["id"] for row in blockers))
+        state.update(status="RUNNING", phase="READY_TO_EXECUTE",
+                     next_stage="sol" if not fresh else "astra_review", pending_questions=[])
+        state.pop("user_request", None)
+        return None
+    return {"kind": "human_review", "criteria": sorted(required),
+            "decision_needed": "Review the verified current milestone before it advances",
+            "impact": "The approved contract requires your review of this validated artifact",
+            "options": [], "discovered": "Independent evidence passed; human review remains",
+            "proposed_delta": ""}
+
+
+def recover_review_only_request(state, public):
+    """Retire an authenticated review-only permission and re-enter the real gate."""
+    if not public or public.get("scope") != "permission":
+        return False
+    try:
+        from . import autocode_resolver_human as human
+        from . import autocode_goals as goals
+    except ImportError:
+        import autocode_resolver_human as human
+        import autocode_goals as goals
+    entry = state.get("resolver", {}).get("human_escalations", {}).get(public["request_id"], {})
+    origin = entry.get("identity", {}).get("proposal", {}).get("origin", {})
+    request = public.get("request", {})
+    if route_review_only_request_preview(state, request, origin) is False:
+        return False
+    if human.current(state) != public:
+        return False
+    entry.update(status="superseded", superseded_at=s.now(),
+                 superseded_reason="Review-only permission replaced by the runner's evidence gate")
+    state.pop(human.PUBLIC, None)
+    state.pop("user_request", None)
+    state["pending_questions"] = []
+    goals.wait_for_user(state, request, origin=origin, next_stage="astra_review")
+    state.setdefault("user_events", []).append({"kind": "review_request_rerouted", "actor": "runner",
+        "at": s.now(), "old_request_id": public["request_id"], "milestone_id": scope(state)["id"]})
+    return True
+
+
+def route_review_only_request_preview(state, request, origin):
+    """Check report identity before retiring a published request."""
+    output = origin.get("output")
+    if origin.get("stage") != "astra_review" or not output or not Path(output).is_file():
+        return False
+    try:
+        report = s.read(output)
+    except (OSError, ValueError):
+        return False
+    required = {row["id"] for row in state.get("goal_contract", {}).get("body", {}).get("acceptance_criteria", [])
+                if row.get("human_review") and row["id"] in scope(state)["acceptance_criteria"]}
+    return review_gate.review_only_permission(report, request, required)
 
 
 def enabled(state):

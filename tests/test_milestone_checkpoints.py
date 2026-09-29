@@ -351,6 +351,95 @@ class MilestoneCheckpointTests(unittest.TestCase):
         self.assign('M2')
         self.assertEqual('M2', self.state['current_task']['milestone_id'])
 
+    def test_review_only_permission_becomes_evidence_bound_review(self):
+        self.start(human=True)
+        self.validate()
+        finding_record = {'stage': 'astra_review', 'output': str(self.run / 'earlier-review.json')}
+        findings.record_decision(self.state, {'status': 'REWORK', 'findings': [
+            {'severity': 'high', 'finding': 'M1 check was missing', 'evidence': 'earlier review'}],
+            'finding_dispositions': []}, finding_record)
+        finding_id = findings.open_entries(self.state, 'astra')[0]['id']
+        request = {'kind': 'permission', 'decision_needed': 'Perform the C1 human review via the runner',
+                   'impact': 'The approved milestone requires human review', 'options': ['Review it'],
+                   'proposed_delta': 'No change to the approved goal, scope or product behavior.'}
+        decision = {**self.decision(status='BLOCKED'), 'findings': [], 'user_request': request,
+                    'finding_dispositions': [{'id': finding_id, 'disposition': 'resolved',
+                                              'evidence': 'Independent checks now pass'}]}
+        output = self.run / 'review-only.json'
+        output.write_text(json.dumps(decision))
+        findings.record_decision(self.state, decision, {'stage': 'astra_review', 'output': str(output)})
+        self.assertEqual([], findings.open_entries(self.state, 'astra'))
+        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
+        goals.human.evaluate(self.state)
+        self.assertEqual('human_review', goals.human.current(self.state)['scope'])
+        self.assertEqual(['C1'], self.state['user_request']['criteria'])
+        self.assertEqual({}, self.state['human_reviews'])
+
+    def test_stale_validation_retries_before_requesting_human_review(self):
+        self.start(human=True)
+        self.validate()
+        request = {'kind': 'permission', 'decision_needed': 'Perform the C1 human review via the runner',
+                   'impact': 'The approved milestone requires human review', 'options': ['Review it'],
+                   'proposed_delta': 'No change to the approved goal, scope or product behavior.'}
+        decision = {**self.decision(status='BLOCKED'), 'findings': [], 'user_request': request}
+        output = self.run / 'stale-review.json'
+        output.write_text(json.dumps(decision))
+        stale = self.run / 'state.json'
+        stale.write_text('{}')
+        self.state['validation']['evidence_hashes'][str(stale)] = s.file_hash(stale)
+        stale.write_text('{"updated":true}')
+        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
+        self.assertEqual(('RUNNING', 'sol'), (self.state['status'], self.state['next_stage']))
+        self.assertFalse(self.state.get('pending_questions'))
+
+    def test_published_review_permission_recovers_without_user_answer(self):
+        self.start(human=True)
+        self.validate()
+        request = {'kind': 'permission', 'decision_needed': 'Perform the C1 human review via the runner',
+                   'impact': 'The approved milestone requires human review', 'options': ['Review it'],
+                   'proposed_delta': 'No change to the approved goal, scope or product behavior.'}
+        decision = {**self.decision(status='BLOCKED'), 'findings': [], 'user_request': request}
+        output = self.run / 'published-review.json'
+        output.write_text(json.dumps(decision))
+        stale = self.run / 'state.json'
+        stale.write_text('{}')
+        self.state['validation']['evidence_hashes'][str(stale)] = s.file_hash(stale)
+        stale.write_text('{"updated":true}')
+        self.state['run_dir'] = str(self.run.resolve())
+        goals.human.queue(self.state, 'permission', {'stage': 'astra_review', 'output': str(output)},
+                          request=request, questions=[{'id': 'old', 'question': request['decision_needed'],
+                                                      'why': request['impact'], 'options': request['options']}],
+                          next_stage='astra_review')
+        goals.human.evaluate(self.state)
+        old = goals.human.current(self.state)['request_id']
+        self.assertTrue(m.route_review_only_request_preview(self.state, request,
+                        {'stage': 'astra_review', 'output': str(output)}))
+        self.assertFalse(m.fresh_validation(self.state, s.snapshot(self.root)))
+        self.assertIn('C1', goals.missing_human_reviews(self.state))
+        preview = copy.deepcopy(self.state)
+        origin = preview['resolver']['human_escalations'][old]['identity']['proposal']['origin']
+        self.assertIsNone(m.route_review_only_request(preview, request, origin))
+        self.assertFalse(self.state.get('active_stage'))
+        self.assertFalse(self.state.get('uncertain_artifacts'))
+        runner.normalize_human_boundary(self.state, self.run)
+        self.assertEqual(('RUNNING', 'sol'), (self.state['status'], self.state['next_stage']))
+        self.assertEqual('superseded', self.state['resolver']['human_escalations'][old]['status'])
+        self.assertIsNone(goals.human.current(self.state))
+        self.assertFalse(self.state.get('answers'))
+
+    def test_material_permission_remains_a_human_decision(self):
+        self.start(human=True)
+        self.validate()
+        request = {'kind': 'permission', 'decision_needed': 'Change the C1 acceptance criterion',
+                   'impact': 'The approved product behavior would change', 'options': ['Allow change'],
+                   'proposed_delta': 'Change the approved goal and product behavior.'}
+        decision = {**self.decision(status='BLOCKED'), 'findings': [], 'user_request': request}
+        output = self.run / 'material-permission.json'
+        output.write_text(json.dumps(decision))
+        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
+        goals.human.evaluate(self.state)
+        self.assertEqual('permission', goals.human.current(self.state)['scope'])
+
     def test_operator_activation_preserves_contract_and_routes_existing_work_to_sol(self):
         self.start()
         self.state['settings'].pop('milestone_checkpoints')

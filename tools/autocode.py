@@ -131,7 +131,7 @@ def normalize_human_boundary(state, run_dir):
             state.get(resolver_human.PRIVATE, {}).get('scope') != 'operational_exhaustion'):
         return
     public = resolver_human.current(state)
-    if public and not milestones.release_obsolete_gate_request(state, public):
+    if public and not (milestones.recover_review_only_request(state, public) or milestones.release_obsolete_gate_request(state, public)):
         return
     proposal = state.get(resolver_human.PRIVATE)
     if not proposal and state.get('status') in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL', 'PAUSED_GOAL_UNAPPROVED'):
