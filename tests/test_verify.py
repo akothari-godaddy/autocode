@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -447,3 +448,98 @@ class VerifyCase(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+GO_SEED = {"go.mod": "module pager\n\ngo 1.21\n",
+           "pager.go": "package pager\n\nfunc PageCount(total, size int) int {\n\treturn total / size\n}\n",
+           "pager_test.go": "package pager\n\nimport \"testing\"\n\n"
+                            "func TestExisting(t *testing.T) {\n\tif PageCount(10, 5) != 2 {\n\t\tt.Fatal(\"10/5\")\n\t}\n}\n"}
+GO_FIX = {"pager.go": "package pager\n\nfunc PageCount(total, size int) int {\n\treturn (total + size - 1) / size\n}\n",
+          "pager_test.go": GO_SEED["pager_test.go"]
+          + "\nfunc Test_t1_partial_page_counts(t *testing.T) {\n\tif PageCount(11, 5) != 3 {\n\t\tt.Fatal(\"11/5\")\n\t}\n}\n"}
+
+
+class GoResultTests(unittest.TestCase):
+    """Go's per-test results come from `go test -json` (a live Go port could not be proven without them)."""
+
+    def events(self, *rows):
+        return "\n".join(json.dumps(row) for row in rows)
+
+    def test_tests_subtests_skips_and_a_package_that_did_not_build(self):
+        text = self.events(
+            {"Action": "start", "Package": "m/a"},
+            {"Action": "run", "Package": "m/a", "Test": "TestOk"},
+            {"Action": "pass", "Package": "m/a", "Test": "TestOk"},
+            {"Action": "run", "Package": "m/a", "Test": "TestTable"},
+            {"Action": "run", "Package": "m/a", "Test": "TestTable/case_1"},
+            {"Action": "fail", "Package": "m/a", "Test": "TestTable/case_1"},
+            {"Action": "fail", "Package": "m/a", "Test": "TestTable"},
+            {"Action": "run", "Package": "m/a", "Test": "TestLater"},
+            {"Action": "skip", "Package": "m/a", "Test": "TestLater"},
+            {"Action": "fail", "Package": "m/a"},
+            {"Action": "output", "Package": "m/b", "Output": "m/b/b_test.go:3: undefined: New\n"},
+            {"Action": "fail", "Package": "m/b"}) + "\n# m/b\nplain compiler output\n"
+        results = verify._go_results(text)
+        self.assertEqual(["m/a::TestOk"], results["passed"])
+        self.assertEqual(["m/a::TestLater"], results["skipped"])
+        self.assertEqual(["m/a::TestTable", "m/a::TestTable/case_1", "m/b::[build failed]"], results["failed"])
+        self.assertEqual(["m/b::[build failed]"], results["collection_errors"])
+        self.assertTrue(results["complete"])
+
+    def test_a_test_that_never_ended_makes_the_results_incomplete_and_no_events_give_none(self):
+        text = self.events({"Action": "run", "Package": "m", "Test": "TestHangs"}, {"Action": "fail", "Package": "m"})
+        self.assertFalse(verify._go_results(text)["complete"])
+        self.assertIsNone(verify._go_results("go: command not found\n"))
+
+    def test_the_runner_asks_go_for_json_only_on_a_plain_go_test_command(self):
+        go = verify.Framework("go", "go test ./...")
+        self.assertEqual("go test -json ./...", verify._with_results(go, "go test ./...", "x.xml"))
+        self.assertEqual("go test -json -run X .", verify._with_results(go, "go test -run X .", "x.xml"))
+        self.assertEqual("go test -json ./...", verify._with_results(go, "go test -json ./...", "x.xml"))
+        for command in ("cd sub && go test ./...", "go vet ./...", "go test ./... | tee log"):
+            self.assertEqual(command, verify._with_results(go, command, "x.xml"))
+            self.assertFalse(verify.expects_results(go, command))
+        self.assertTrue(verify.expects_results(go, "go test ./..."))
+        # A test id carries the test's own name, so an English case matches it (T1 -> Test_t1_...).
+        import autocode_test_cases as test_cases
+        self.assertEqual({"T1": ["pager::Test_t1_partial_page_counts"]},
+                         test_cases.match_cases([{"id": "T1"}], ["pager::TestExisting", "pager::Test_t1_partial_page_counts"]))
+
+
+@unittest.skipUnless(shutil.which("go"), "needs a Go toolchain")
+class GoVerifyTests(unittest.TestCase):
+    """Real Go modules through the runner's proof: base with the new tests, then the candidate."""
+
+    def project(self, files):
+        project = Project(files)
+        self.addCleanup(project.close)
+        return project
+
+    def test_a_go_bug_fix_is_proven_by_the_test_that_fails_before_and_passes_after(self):
+        project = self.project(GO_SEED)
+        project.write(GO_FIX)
+        result = project.verify()
+        self.assertEqual(verify.PASS, result["verdict"], result["failures"] + result["unverified"])
+        self.assertEqual(["pager::Test_t1_partial_page_counts"], result["fail_to_pass"])
+        self.assertIn("pager::TestExisting", result["candidate_passed"])
+
+    def test_a_go_test_that_also_passes_before_the_fix_does_not_reproduce_the_bug(self):
+        project = self.project(GO_SEED)
+        project.write({**GO_FIX, "pager_test.go": GO_FIX["pager_test.go"].replace("PageCount(11, 5) != 3",
+                                                                                  "PageCount(10, 5) != 2")})
+        result = project.verify()
+        self.assertEqual(verify.FAIL, result["verdict"])
+        self.assertTrue(any("do not reproduce the bug" in failure for failure in result["failures"]), result["failures"])
+
+    def test_a_go_feature_test_that_cannot_build_on_base_proves_new_behavior(self):
+        project = self.project(GO_SEED)
+        project.write({"pager.go": GO_SEED["pager.go"] + "\nfunc Pages(total, size int) int { return PageCount(total, size) }\n",
+                       "pager_test.go": GO_SEED["pager_test.go"]
+                       + "\nfunc Test_c2_pages(t *testing.T) {\n\tif Pages(10, 5) != 2 {\n\t\tt.Fatal(\"pages\")\n\t}\n}\n"})
+        result = project.verify(new_behavior=True)
+        self.assertEqual(verify.PASS, result["verdict"], result["failures"] + result["unverified"])
+        self.assertIn("pager::Test_c2_pages", result["fail_to_pass"])
+        # The same change is not a bug reproduction: on base the new test only fails to build.
+        result = project.verify()
+        self.assertEqual(verify.FAIL, result["verdict"])
+        self.assertTrue(any("fail to import or collect" in failure for failure in result["failures"]), result["failures"])
