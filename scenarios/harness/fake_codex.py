@@ -202,6 +202,10 @@ def check_design(data: dict) -> dict:
     design = data.get("design_document") or ""
     blockers = Path(CONFIG["reference"]) / Path(design).with_suffix(".blockers.json") if design else None
     conflicts = json.loads(blockers.read_text()).get("conflicts", []) if blockers and blockers.is_file() else []
+    conflicts = [{**{k: c.get(k, [] if k in ("files", "options") else "") for k in
+                     ("design_says", "conflicts_with", "files", "options")},
+                  "example": str(c.get("example") or "Scripted example: " + str(c.get("conflicts_with", ""))),
+                  "probe": str(c.get("probe", ""))} for c in conflicts]
     return {"design_document": design, "summary": "Scripted design check from the scenario solution",
             "constraints": [] if conflicts else [f"Implement {design} exactly as written"], "conflicts": conflicts}
 
@@ -221,8 +225,11 @@ def stray_edits(allowed: str) -> None:
 
 def review() -> dict:
     """The fake's review: the findings from the solution it was told to apply (reference or broken).
-    The runner writes review/findings.json from this report."""
-    stray_edits("review/")
+    The runner writes review/findings.json from this report. In a scenario with
+    follow-up turns the solution is the end state of the whole conversation, whose
+    code changes belong to a later turn, so the review does not play them as stray edits."""
+    if not CONFIG.get("turns"):
+        stray_edits("review/")
     path = Path(CONFIG["reference"]) / "review" / "findings.json"
     saved = json.loads(path.read_text()) if path.is_file() else {}
     # Targeted tests in the solution are delivered into the workspace under review/tests/,
@@ -233,6 +240,8 @@ def review() -> dict:
         shutil.copytree(tests, Path.cwd() / "review" / "tests", dirs_exist_ok=True,
                         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
         delivered = sorted(f"review/tests/{p.name}" for p in tests.glob("test_*.py"))
+    # A blocking finding is proven by the runner when the solution delivers a test named after it
+    # (F1 -> test_f1_...); otherwise the scripted review says why it is not tested.
     names = " ".join(re.findall(r"def (test_\w+)", " ".join(
         (Path(CONFIG["reference"]) / path).read_text() for path in delivered))).lower()
     patches = sorted(p.name for p in Path.cwd().glob("*.patch"))
@@ -268,11 +277,33 @@ def investigate() -> dict:
                               if reproduced else [],
             "test_paths": ([p for p in PATHS if "test" in p] or ["tests/"]) if reproduced else [],
             "invariant": text("invariant") or ("Scripted invariant" if reproduced else ""),
+            "test_cases": (saved.get("test_cases") or scripted_cases()) if reproduced else [],
             "conclusion": text("conclusion", "finding", "fix") or "Scripted conclusion",
             "fix_size": (saved.get("fix_size") or "small") if reproduced else "none",
             "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
             "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"],
-            "plan_approval_requested": bool(saved.get("plan_approval_requested"))}
+            "plan_approval_requested": bool(saved.get("plan_approval_requested")),
+            # The runner checks the reproduction: [fake] probe in scenario.toml exits 0 while the seed's
+            # bug is present; a scenario without one takes the untestable path.
+            "probe": (CONFIG.get("probe") or "") if reproduced else "",
+            "untestable": ("" if CONFIG.get("probe") else "Scripted investigation: this scenario configures "
+                           "no reproduction probe") if reproduced else ""}
+
+
+def scripted_cases() -> list[dict]:
+    """English test cases for a scripted diagnosis: one per test function the solution adds, with the
+    test's own name as the case id, so the runner can match each case to its test. A solution with no
+    new test (a fix without a test) still gets one case, which then has nothing to prove it."""
+    root, names = Path(CONFIG["reference"]), []
+    for relative in PATHS:
+        if "test" not in Path(relative).name or not relative.endswith(".py"):
+            continue
+        before = Path.cwd() / relative
+        existing = set(re.findall(r"def (test_\w+)", before.read_text())) if before.is_file() else set()
+        names += [name for name in re.findall(r"def (test_\w+)", (root / relative).read_text()) if name not in existing]
+    return [{"id": name.removeprefix("test_"), "given": "the scripted seed", "when": f"{name} runs",
+             "then": "it passes only with the fix"} for name in names] or \
+        [{"id": "T1", "given": "the scripted seed", "when": "the reported case runs", "then": "it is fixed"}]
 
 
 def design() -> dict:
@@ -285,7 +316,10 @@ def design() -> dict:
         return {"mode": "propose", "design_under_review": "", "verdict": "not_applicable",
                 "summary": "A new design is requested", "satisfied": [], "concerns": [], "questions": []}
     saved = json.loads(path.read_text())
-    concerns = [{key: str(c.get(key, "")) for key in ("id", "area", "severity", "summary", "evidence")}
+    # A blocking concern needs its example; a scripted review probes nothing (probe "").
+    concerns = [{**{key: str(c.get(key, "")) for key in ("id", "area", "severity", "summary", "evidence")},
+                 "example": str(c.get("example") or "Scripted example: " + str(c.get("summary", ""))),
+                 "probe": str(c.get("probe", ""))}
                 for c in saved.get("concerns", [])]
     return {"mode": "review", "design_under_review": "the design named in the request",
             "verdict": "request_changes" if any(c["severity"] == "blocking" for c in concerns) else "approve",
@@ -320,7 +354,8 @@ def report_for(stage: str, data: dict) -> dict:
         return check_design(data)
     if stage == "investigate_stuck":
         # A scripted run that got stuck is a scenario defect; pause and say so.
-        return {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
+        return {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": [],
+                "example": "", "probe": "", "untestable": ""}
     if stage == "review_change":
         return review()
     if stage == "review_design":
@@ -421,7 +456,10 @@ def report_for(stage: str, data: dict) -> dict:
         return {**common, "verdict": status, "checks_run": [CHECK], "findings": [],
                 "finding_dispositions": [], "unverified_criteria": [],
                 "checks": [{"command": CHECK, "exit_code": code, "evidence_ref": "event:check"}],
-                "criterion_results": [{"id": "C1", "status": status, "evidence_refs": ["event:check"]}],
+                # Every criterion of the approved contract (a bug fix's English test cases add some).
+                "criterion_results": [{"id": row["id"], "status": status, "evidence_refs": ["event:check"]}
+                                      for row in ((data.get("goal_contract") or {}).get("body") or {})
+                                      .get("acceptance_criteria") or [{"id": "C1"}]],
                 "end_to_end_result": {"status": status, "summary": f"{CHECK} exited {code}",
                                       "evidence_refs": ["event:check"]}}
     if stage in ("astra_review", "astra_plan") and MILESTONES and not (data.get("goal_contract") or {}).get("revision"):
