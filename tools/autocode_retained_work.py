@@ -23,8 +23,12 @@ def fresh_candidate(state, record, current_revision):
     if (record.get("changed_files") or task.get("kind") != "implement"
             or not owned or not state.get("goal_contract")):
         return None
-    paths = assignment.retained_changes(state.get("stages", []), record)
-    if not paths or assignment.outside(owned, state.get("stages", []), record) != []:
+    stages, workspace = state.get("stages", []), state.get("workspace")
+    # A compiled program a build left behind is neither out of scope nor part of the
+    # candidate: the Validator reviews source (autocode_assignment.build_output).
+    paths = [path for path in assignment.retained_changes(stages, record) or []
+             if not assignment.build_output(workspace, path, stages, record)]
+    if not paths or assignment.outside(owned, stages, record, workspace=workspace) != []:
         return None
     try:
         after = json.loads(Path(record["after_ref"]).read_text())
@@ -46,7 +50,7 @@ def validated_candidate(state, value, record, workspace, current_revision):
     if (not declared or not affected or not declared <= affected
             or not value.get('commands_run') or not value.get('evidence_refs')
             or any(not (Path(workspace) / path).is_file() for path in declared)
-            or assignment.outside(list(affected), state.get('stages', []), record) != []):
+            or assignment.outside(list(affected), state.get('stages', []), record, workspace=workspace) != []):
         return None
     revision = current_revision
     criteria = {row['id'] for row in (state.get('goal_contract') or {}).get('body', {}).get('acceptance_criteria', [])}
