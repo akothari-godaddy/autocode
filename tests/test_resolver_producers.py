@@ -173,6 +173,37 @@ class ResolverProducerTests(unittest.TestCase):
                 with self.assertRaisesRegex(support.Paused, 'already received'):
                     autopilot.queue_resolution(self.state, self.decision(), self.record('astra_review', self.decision()))
 
+    def test_a_repeated_block_after_an_answered_diagnosis_waits_for_the_user_instead_of_failing(self):
+        # Live greenfield-greeting-cli and port-policy-go runs (2026-09-29) could not move: after the
+        # diagnosis's question was answered and the source was unchanged, the Completion Owner blocked
+        # again, the refusal of a second diagnosis rejected its valid report, and repair could never fix it.
+        self.ready()
+        self.apply('astra_review', self.decision())
+        diagnosis = {**self.decision(), 'diagnosis': 'The regression proof has no test command to run'}
+        diagnosed = self.apply('astra_resolve', diagnosis)
+        # The user answers the diagnosis's question; the source does not change.
+        self.state.pop(human.PRIVATE, None)
+        self.state.pop(human.PUBLIC, None)
+        self.state.update(status='RUNNING', next_stage='astra_review')
+        for status in ('BLOCKED', 'REWORK'):
+            with self.subTest(status=status):
+                before = copy.deepcopy(self.state)
+                value = self.decision(status)
+                if status == 'REWORK':
+                    value['user_request'] = {**envelope(self.state)['user_request']}
+                record = self.apply('astra_review', value)
+                self.assertFalse(record.get('rejected'))
+                self.assertEqual(record['output'], self.state['stages'][-1]['output'])
+                self.assertNotEqual('astra_resolve', self.state['next_stage'])
+                proposal = self.state[human.PRIVATE]
+                self.assertEqual(diagnosis['diagnosis'], proposal['evidence']['diagnosis'])
+                self.assertEqual(diagnosed['output'], proposal['evidence']['output'])
+                self.assertTrue(proposal['evidence']['repeated_on_unchanged_source'])
+                self.assertEqual('astra_review', proposal['origin']['stage'])
+                # Still one diagnosis for this task and source.
+                self.assertEqual(1, sum(row.get('stage') == 'astra_resolve' for row in self.state['stages']))
+                self.state = before
+
     def test_final_only_reports_remain_unaccepted_source_reports(self):
         self.ready()
         self.state['settings']['workflow'] = {'mode': workflow.FINAL_MODE}

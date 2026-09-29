@@ -806,8 +806,11 @@ def queue_resolution(state, decision, record, *, source_stage='astra_review', so
     previous = state.get('resolution_request') or {}
     if (previous.get('task_id') == task['id'] and previous.get('source_revision') == revision
             and previous.get('diagnosis_output')):
-        raise support.Paused('PAUSED_RESOLVER', 'This task and source already received a resolver diagnosis; '
-                             'the existing blocker must be reconciled before another diagnosis')
+        if human.PRIVATE in state or human.PUBLIC in state:
+            raise support.Paused('PAUSED_RESOLVER', 'This task and source already received a resolver diagnosis; '
+                                 'the existing blocker must be reconciled before another diagnosis')
+        return unit_module('astra_resolve').wait_on_existing_diagnosis(state, decision, record, previous,
+                                                                       source_stage=source_stage)
     resolved = [row for row in state.get('stages', []) if row.get('stage') == 'astra_resolve'
                 and row.get('source_revision') == revision and not row.get('rejected')]
     if (len(resolved) >= failures.REPEAT_THRESHOLD
