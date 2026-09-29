@@ -37,8 +37,9 @@ jobs:
         # separately fails if an exclusion entry no longer matches anything
         # discovered, so a stale exclusion cannot mask real coverage.
         # A pull request runs only the tests for the files it changes
-        # (--changed); master and manual runs run everything. Test modules run
-        # side by side, one per CPU.
+        # (--changed), without the slow modules in tests/suite_slow.json;
+        # master and manual runs run everything. Test modules run side by
+        # side, one per CPU.
         run: |
           if [ "${{ github.event_name }}" = pull_request ]; then
             python3 tools/run_suite.py --verbosity 2 --changed "origin/${{ github.base_ref }}"

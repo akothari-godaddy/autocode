@@ -149,5 +149,23 @@ class SelectTestsTests(unittest.TestCase):
         self.assertIsNone(run_suite.tools_module("docs/cli.md"))
 
 
+class DropSlowTests(unittest.TestCase):
+    def test_a_slow_module_selected_for_a_changed_source_is_left_out(self):
+        kept, skipped = run_suite.drop_slow({"tests.test_fast": "tests tools/a.py", "tests.test_slow": "tests tools/a.py"},
+                                            {"tests.test_slow": "106 s"})
+        self.assertEqual({"tests.test_fast": "tests tools/a.py"}, kept)
+        self.assertEqual(["tests.test_slow"], skipped)
+
+    def test_a_slow_module_that_itself_changed_still_runs(self):
+        kept, skipped = run_suite.drop_slow({"tests.test_slow": "changed"}, {"tests.test_slow": "106 s"})
+        self.assertEqual({"tests.test_slow": "changed"}, kept)
+        self.assertEqual([], skipped)
+
+    def test_the_slow_list_names_only_real_test_modules(self):
+        slow = run_suite.load_exclusions(run_suite.DEFAULT_SLOW_PATH)
+        self.assertTrue(slow)
+        self.assertEqual([], sorted(set(slow) - set(run_suite.test_modules({}))))
+
+
 if __name__ == "__main__":
     unittest.main()

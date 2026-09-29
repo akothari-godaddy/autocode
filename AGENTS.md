@@ -105,12 +105,17 @@ computing, so it runs one test module per CPU at a time (`--jobs 1` for one
 process). `--changed` picks the tests for the files changed since
 `origin/master`: a changed test, the tests named after a changed `tools/`
 module, and the tests that import it directly (the script's docstring has the
-rules). Before committing a change to `tools/`, run `--changed` and the fake
-scenario runs.
+rules). It leaves out the slow end-to-end modules in `tests/suite_slow.json`
+(over 10 s each in CI, about three quarters of the suite's time) unless the
+module itself changed; `--include-slow` runs them too. Before committing a
+change to `tools/`, run `--changed` and the fake scenario runs.
 
-A pull request's CI runs `--changed`; a push to master runs every test. A break
-that crosses modules can therefore first show up on master: fix it forward
-straight away. Run the full suite yourself only when you change something many
+A pull request's CI runs `--changed`; a push to master runs every test,
+including the slow ones. A break that crosses modules, or one only a slow
+module catches, can therefore first show up on master: fix it forward
+straight away. Making a slow test fast (in-process instead of a CLI
+subprocess, a copied Git fixture instead of `git init`, a fake clock instead
+of a wait) and taking it off the slow list is progress. Run the full suite yourself only when you change something many
 modules share. Every module taken out of the import cycle makes `--changed`
 more precise.
 

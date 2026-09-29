@@ -18,6 +18,7 @@ Usage:
     python3 tools/run_suite.py                  # discover tests/test_*.py, apply exclusions, run
     python3 tools/run_suite.py --jobs 1          # the same, in one process (the old serial run)
     python3 tools/run_suite.py --changed         # only the tests for what changed since origin/master
+    python3 tools/run_suite.py --changed --include-slow   # the same, with the slow end-to-end modules
     python3 tools/run_suite.py --list-excluded   # print excluded modules and reasons, run nothing
 
 By default each test module runs in its own interpreter, one per CPU at a time.
@@ -32,6 +33,12 @@ file by name, and always test_architecture. A change to the suite machinery
 itself runs everything. It does not follow imports transitively: most of
 tools/ is one import cycle, so that would select almost every test. A break
 that crosses modules is caught by the full run on master.
+
+--changed also leaves out the slow end-to-end modules listed, with their CI
+time, in tests/suite_slow.json (over 10 s each: they start the CLI, Git and fake
+models as real processes), unless the module itself changed or --include-slow
+is given. They run on master. Most tests are fast; those 19 modules are 345
+tests and about three quarters of the suite's time.
 
 Exit code is 0 only when every non-excluded test passes (or is itself
 skipped by its own test-level skip guard) and every exclusion entry matched
@@ -55,6 +62,7 @@ HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
 TESTS_DIR = REPO_ROOT / "tests"
 DEFAULT_EXCLUSIONS_PATH = TESTS_DIR / "suite_exclusions.json"
+DEFAULT_SLOW_PATH = TESTS_DIR / "suite_slow.json"
 
 
 def load_exclusions(path: Path) -> dict[str, str]:
@@ -125,7 +133,7 @@ def discover(start_dir: Path = TESTS_DIR, top_level_dir: Path = REPO_ROOT) -> un
 ALWAYS = ("tests.test_architecture",)
 # A change here can change which tests run or how, so it runs the whole suite.
 FULL_SUITE_TRIGGERS = ("tools/run_suite.py", "tests/__init__.py", "tests/suite_exclusions.json",
-                       "pyproject.toml", ".github/workflows/")
+                       "tests/suite_slow.json", "pyproject.toml", ".github/workflows/")
 
 
 def imported_names(source: str) -> set[str]:
@@ -174,6 +182,12 @@ def select_tests(changed: list[str], sources: dict[str, str]) -> dict[str, str] 
                 if Path(path).name in source:
                     selected.setdefault(test, f"mentions {path}")
     return selected
+
+
+def drop_slow(selected: dict[str, str], slow: dict[str, str]) -> tuple[dict[str, str], list[str]]:
+    """Leave out the slow modules a change selected, except one whose own file changed."""
+    skipped = sorted(module for module, why in selected.items() if module in slow and why != "changed")
+    return {module: why for module, why in selected.items() if module not in skipped}, skipped
 
 
 def changed_paths(base: str) -> list[str]:
@@ -238,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
                         help="report the N slowest tests (Python 3.12+; runs in one process)")
     parser.add_argument("--changed", nargs="?", const="origin/master", metavar="BASE",
                         help="run only the tests for files changed since BASE (default origin/master)")
+    parser.add_argument("--include-slow", action="store_true",
+                        help="with --changed, also run the slow modules listed in tests/suite_slow.json")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 1, metavar="N",
                         help="test modules to run at once, each in its own interpreter "
                              "(default: one per CPU; 1 runs everything in this process)")
@@ -271,11 +287,20 @@ def main(argv: list[str] | None = None) -> int:
         print()
 
     modules = test_modules(exclusions)
+    slow = load_exclusions(DEFAULT_SLOW_PATH)
+    stale_slow = sorted(set(slow) - set(modules))
+    if stale_slow:
+        print(f"STALE SLOW ENTRY: {stale_slow} in {DEFAULT_SLOW_PATH} matched no test module; "
+              "remove it or fix the module name.", file=sys.stderr)
+        return 2
     if args.changed:
         changed = changed_paths(args.changed)
         sources = {module: REPO_ROOT.joinpath(*module.split(".")).with_suffix(".py").read_text()
                    for module in modules}
         selected = select_tests(changed, sources)
+        skipped: list[str] = []
+        if selected is not None and not args.include_slow:
+            selected, skipped = drop_slow(selected, slow)
         if selected is None:
             print(f"{len(changed)} file(s) changed since {args.changed}, including the suite machinery: "
                   "running every test module.\n")
@@ -284,6 +309,9 @@ def main(argv: list[str] | None = None) -> int:
                   f"{len(modules)} test modules:")
             for module, why in sorted(selected.items()):
                 print(f"  - {module}: {why}")
+            if skipped:
+                print(f"Left out {len(skipped)} slow end-to-end module(s); they run on master "
+                      f"(--include-slow runs them now): {', '.join(skipped)}")
             print()
             modules = [module for module in modules if module in selected]
             kept = unittest.TestSuite(test for test in iter_tests(kept) if _module_of(test.id()) in selected)
