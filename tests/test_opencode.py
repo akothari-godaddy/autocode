@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_event_log as event_log
 import autocode_configure
 import autocode_milestones as milestones
 import autocode_opencode as oc
@@ -30,6 +31,63 @@ def event(kind, **part):
 def terminal(**overrides):
     return event("step_finish", reason="stop", tokens={"input": 10, "output": 5, "reasoning": 2,
                  "cache": {"read": 7, "write": 3}}, **overrides)
+
+
+
+class EventLogTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix" and os.geteuid() != 0,
+                         "permission enforcement needs an unprivileged POSIX process")
+    def test_provider_cannot_overwrite_events_but_stdout_still_completes(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "events.jsonl"
+            # Reproduce the live failure: a shell tool mistakes its raw events
+            # path for the final report, then the provider emits more events.
+            child = r'''
+import json, pathlib, sys
+path = pathlib.Path(sys.argv[1])
+def emit(kind, **part):
+    print(json.dumps({"type": kind, "sessionID": "ses_fixture", "part": {
+        "id": "prt_" + kind, "sessionID": "ses_fixture", "messageID": "msg_fixture", **part}}), flush=True)
+emit("step_start")
+try:
+    path.write_text("this would replace the recorded events")
+except PermissionError:
+    pass
+else:
+    raise AssertionError("provider overwrote its event log")
+emit("text", text='{"ok": true}')
+emit("step_finish", reason="stop", tokens={"input": 10, "output": 5, "reasoning": 0,
+     "cache": {"read": 0, "write": 0}})
+'''
+            with event_log.open_events(path) as sink:
+                result = subprocess.run([sys.executable, "-c", child, str(path)],
+                                        stdout=sink, stderr=subprocess.PIPE, text=True)
+            self.assertEqual(0, result.returncode, result.stderr)
+            rows = [json.loads(line) for line in path.read_text().splitlines()]
+            self.assertEqual(["step_start", "text", "step_finish"], [row["type"] for row in rows])
+            self.assertTrue(any(row["type"] == "turn.completed" for row in oc.normalized_events(rows)))
+            self.assertEqual({"ok": True}, oc.final_report(path))
+
+    def test_existing_log_or_symlink_is_never_truncated(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "events.jsonl"
+            path.write_text("saved evidence")
+            with self.assertRaises(FileExistsError):
+                event_log.open_events(path)
+            link = Path(temp) / "linked.jsonl"
+            link.symlink_to(path)
+            with self.assertRaises(FileExistsError):
+                event_log.open_events(link)
+            self.assertEqual("saved evidence", path.read_text())
+
+    def test_interrupted_recording_keeps_partial_events(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "events.jsonl"
+            with self.assertRaisesRegex(RuntimeError, "interrupted"):
+                with event_log.open_events(path) as sink:
+                    sink.write('{"type":"step_start"}\n')
+                    raise RuntimeError("interrupted")
+            self.assertEqual('{"type":"step_start"}\n', path.read_text())
 
 
 class OpenCodeTests(unittest.TestCase):
