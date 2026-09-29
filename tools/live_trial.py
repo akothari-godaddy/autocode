@@ -37,7 +37,7 @@ sys.path.insert(0, str(HERE))
 import live_profiles as profiles  # noqa: E402
 import live_scenarios as scenarios  # noqa: E402
 import autocode_process as processes  # noqa: E402
-import autocode_support as support  # noqa: E402
+import autocode_util as util  # noqa: E402
 from autopilot_testkit import Bundle, source_revision  # noqa: E402
 from score_autocode_run import usage_summary  # noqa: E402
 
@@ -665,9 +665,9 @@ def main(argv: list[str] | None = None) -> int:
         bundle.log("workspace_ready", project=str(project), mode=args.mode)
         oracle_path = Path(scenarios.__file__).resolve()
         oracle_hash = hashlib.sha256(oracle_path.read_bytes()).hexdigest()
-        baseline_snapshot = support.snapshot(project)
+        baseline_snapshot = util.snapshot(project)
         baseline_revision = baseline_snapshot['revision']
-        baseline_content_sha256 = support.digest(baseline_snapshot['files'])
+        baseline_content_sha256 = util.digest(baseline_snapshot['files'])
         bundle.log('oracle_fingerprint', path=str(oracle_path), sha256=oracle_hash,
                    baseline_revision=baseline_revision, baseline_content_sha256=baseline_content_sha256)
         if args.mode == "program":
@@ -680,12 +680,12 @@ def main(argv: list[str] | None = None) -> int:
         run["mode"] = args.mode
         if hashlib.sha256(oracle_path.read_bytes()).hexdigest() != oracle_hash:
             raise TrialError('Oracle source changed during the trial; result cannot be trusted')
-        run['candidate_revision'] = support.snapshot(project)['revision']
+        run['candidate_revision'] = util.snapshot(project)['revision']
         run['oracle_sha256'] = oracle_hash
         # A program's product is the merged integration branch, never the untouched project root.
         result = judge(run, spec, run.get("product", project), bundle)
         if (hashlib.sha256(oracle_path.read_bytes()).hexdigest() != oracle_hash
-                or support.snapshot(project)['revision'] != run['candidate_revision']):
+                or util.snapshot(project)['revision'] != run['candidate_revision']):
             raise TrialError('Oracle or candidate changed during scoring; result cannot be trusted')
         run.update(baseline_revision=baseline_revision, baseline_content_sha256=baseline_content_sha256,
                    workload_kind=workload_kind,

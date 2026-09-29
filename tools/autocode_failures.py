@@ -14,9 +14,9 @@ from pathlib import Path
 import re
 
 try:
-    from . import autocode_support as support
+    from . import autocode_util as util
 except ImportError:
-    import autocode_support as support
+    import autocode_util as util
 
 
 REPEAT_THRESHOLD = 3
@@ -35,7 +35,7 @@ def identity(record, error):
 
 
 def key(identity_value):
-    return support.digest(identity_value)
+    return util.digest(identity_value)
 
 
 def _owner(row):
@@ -53,7 +53,7 @@ def signature(stage_record, error, probe):
         text = text.replace(str(Path(stage_record["output"]).with_suffix("")), "<attempt>")
     text = " ".join(re.sub(r"\b[0-9a-f]{12,}\b", "<hex>", text).split())
     kinds = {label: {k: v for k, v in row.items() if k != "bytes"} for label, row in probe.items()}
-    return support.digest({"error_class": getattr(error, "status", None) or type(error).__name__,
+    return util.digest({"error_class": getattr(error, "status", None) or type(error).__name__,
                            "error": text, "output": kinds})
 
 

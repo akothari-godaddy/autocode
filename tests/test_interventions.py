@@ -134,7 +134,7 @@ class InterventionTests(unittest.TestCase):
         self.assertEqual([], interventions.inspect(self.workspace, self.run)["requests"])
         self.assertEqual(before_entries, sorted(path.relative_to(self.run) for path in self.run.iterdir()))
         self.assertEqual(before_state, self.state_path.read_bytes())
-        with patch.object(interventions.support, "atomic_json", side_effect=OSError("full")):
+        with patch.object(interventions.util, "atomic_json", side_effect=OSError("full")):
             with self.assertRaisesRegex(interventions.InterventionError, "update failed"):
                 interventions.submit(self.workspace, self.run, request_id="failed", kind="pause", text="")
         self.assertFalse((self.run / interventions.INBOX_NAME).exists())

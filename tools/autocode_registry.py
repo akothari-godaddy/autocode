@@ -17,9 +17,9 @@ import time
 from typing import Any
 
 try:
-    from . import autocode_support as support
+    from . import autocode_util as util
 except ImportError:
-    import autocode_support as support
+    import autocode_util as util
 
 
 REGISTRY_VERSION = 1
@@ -130,7 +130,7 @@ def register_run(workspace: Path, run_dir: Path, state: dict[str, Any]) -> dict[
         document["runs"][run_id] = {"id": run_id, "workspace_id": workspace_id,
                                      "workspace": str(workspace), "run_dir": str(run_dir), "task_id": task_id}
         try:
-            support.atomic_json(path, document)
+            util.atomic_json(path, document)
         except OSError as error:
             raise RegistryError("write_failed", f"Registry update failed: {error}") from error
     return {"workspace_id": workspace_id, "run_id": run_id, "task_id": task_id}
@@ -154,7 +154,7 @@ def _register_imported_run(workspace: Path, run_dir: Path, state: dict[str, Any]
         document["workspaces"][workspace_id] = {"id": workspace_id, "workspace": str(workspace)}
         document["runs"][run_id] = record
         try:
-            support.atomic_json(path, document)
+            util.atomic_json(path, document)
         except OSError as error:
             raise RegistryError("write_failed", f"Registry update failed: {error}") from error
     return {"workspace_id": workspace_id, "run_id": run_id, "task_id": _run_task_id(state)}, True

@@ -169,7 +169,7 @@ class RegistryImportTests(unittest.TestCase):
             registry.registry_import(selected, max_depth=-1)
         with self.assertRaisesRegex(registry.RegistryError, "budget"):
             registry.registry_import(selected, directory_budget=0)
-        with patch.object(registry.support, "atomic_json", side_effect=OSError("full")):
+        with patch.object(registry.util, "atomic_json", side_effect=OSError("full")):
             result = registry.registry_import(selected)
         self.assertFalse(result["complete"])
         self.assertEqual("write_failed", result["registry_error"]["code"])

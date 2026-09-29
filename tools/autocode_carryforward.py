@@ -7,9 +7,9 @@ import copy
 from pathlib import Path
 
 try:
-    from . import autocode_support as s
+    from . import autocode_util as s
 except ImportError:
-    import autocode_support as s
+    import autocode_util as s
 
 
 def valid_path(value):

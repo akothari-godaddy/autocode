@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import autocode as runner, autopilot, autocode_goals as goals
 import autocode_milestones as milestones, autocode_resolver_human as human
-import autocode_support as support, autocode_workflow as workflow
+import autocode_support as support, autocode_util as util, autocode_workflow as workflow
 from goal_fixtures import body, envelope
 from units import autoresolver
 
@@ -19,9 +19,12 @@ class ResolverProducerTests(unittest.TestCase):
         self.root = Path(temp.name)
         self.run = self.root / '.autocode'
         self.run.mkdir()
-        self.snapshot = patch.object(support, 'snapshot', return_value={'revision': 'source-one'})
-        self.snapshot.start()
-        self.addCleanup(self.snapshot.stop)
+        # The runner reads the source revision through autocode_support; the Resolver and the
+        # human-review evaluator read it through autocode_util. Pin both.
+        for module in (support, util):
+            pinned = patch.object(module, 'snapshot', return_value={'revision': 'source-one'})
+            pinned.start()
+            self.addCleanup(pinned.stop)
         self.state = {'version': 3, 'task_id': 'goal-one', 'task': 'Build greeting',
                       'workspace': str(self.root), 'run_dir': str(self.run), 'iteration': 1,
                       'settings': {}, 'status': 'RUNNING', 'next_stage': 'astra_discovery',

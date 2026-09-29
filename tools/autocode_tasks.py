@@ -11,10 +11,10 @@ import subprocess
 import sys
 
 try:
-    from . import autocode_support as support, autocode_workspaces as workspaces
+    from . import autocode_util as util, autocode_workspaces as workspaces
     from . import autocode_resolver_human as human
 except ImportError:
-    import autocode_support as support
+    import autocode_util as util
     import autocode_workspaces as workspaces
     import autocode_resolver_human as human
 
@@ -72,8 +72,8 @@ def flow_key(source, manifest):
 
 def new_state(source, manifest, project):
     return {'version': 1, 'name': manifest['name'], 'manifest': str(source),
-            'manifest_sha256': support.file_hash(source), 'project_workspace': str(project),
-            'created_at': support.now(), 'status': 'RUNNING',
+            'manifest_sha256': util.file_hash(source), 'project_workspace': str(project),
+            'created_at': util.now(), 'status': 'RUNNING',
             'lanes': {lane['id']: {'workspace': None, 'tasks': {
                 task['id']: {'status': 'PENDING', 'mode': task['mode'], 'task': task['task']}
                 for task in lane['tasks']}} for lane in manifest['lanes']}}
@@ -99,7 +99,7 @@ def refresh_task(record):
     record.update({key: public[key] for key in (
         'human_request_authorized', 'human_escalation', 'pending_questions', 'user_request')})
     if status in (TERMINAL_UI if record['mode'] == 'ui' else TERMINAL_CODE):
-        record.update(status='COMPLETE', finished_at=support.now())
+        record.update(status='COMPLETE', finished_at=util.now())
         if record['mode'] == 'ui':
             record['figma_file'] = saved.get('figma_file')
     elif public['human_request_authorized']:
@@ -142,7 +142,7 @@ def launch_task(project, flow_dir, lane, task, record, lane_state):
             if source.get('status') != 'COMPLETE' or source.get('mode') != 'ui':
                 raise ValueError(f'{task["id"]} needs completed UI task {task["ui_from"]}')
             command += ['--ui-run', source['run_dir']]
-    record.update(status='RUNNING', started_at=support.now(), command=command)
+    record.update(status='RUNNING', started_at=util.now(), command=command)
     before = set(workspace.glob('.autocode/runs/*'))
     result = subprocess.run(command, cwd=workspace, capture_output=True, text=True)
     artifact = flow_dir / lane['id'] / task['id']
@@ -155,7 +155,7 @@ def launch_task(project, flow_dir, lane, task, record, lane_state):
         created = set(workspace.glob('.autocode/runs/*')) - before
         if len(created) == 1:
             record['run_dir'] = str(created.pop().resolve())
-    record.update(exit_code=result.returncode, finished_at=support.now())
+    record.update(exit_code=result.returncode, finished_at=util.now())
     refresh_task(record)
     if record['status'] == 'RUNNING':
         record['status'] = 'FAILED' if result.returncode not in (0, 2) or not record.get('run_dir') else 'PAUSED'
@@ -180,7 +180,7 @@ def summarize(manifest, state, state_path):
 
 def execute_flow(args, source, manifest, project, flow_dir, state_path):
     state = json.loads(state_path.read_text()) if state_path.is_file() else new_state(source, manifest, project)
-    if state['manifest_sha256'] != support.file_hash(source) or state['project_workspace'] != str(project):
+    if state['manifest_sha256'] != util.file_hash(source) or state['project_workspace'] != str(project):
         raise ValueError('Task flow manifest or project differs from its saved checkpoint')
     while True:
         rows = ready(manifest, state)
@@ -191,7 +191,7 @@ def execute_flow(args, source, manifest, project, flow_dir, state_path):
             if not lane_state['workspace']:
                 lane_state['workspace'] = workspaces.create(
                     project, f'{manifest["name"]} {lane["id"]}')['workspace']
-        support.atomic_json(state_path, state)
+        util.atomic_json(state_path, state)
         with ThreadPoolExecutor(max_workers=args.max_parallel) as pool:
             futures = {pool.submit(launch_task, project, flow_dir, lane, task, record,
                                    state['lanes'][lane['id']]): (lane, task)
@@ -202,10 +202,10 @@ def execute_flow(args, source, manifest, project, flow_dir, state_path):
                     future.result()
                 except Exception as error:
                     state['lanes'][lane['id']]['tasks'][task['id']].update(
-                        status='FAILED', error=str(error), finished_at=support.now())
-                support.atomic_json(state_path, state)
+                        status='FAILED', error=str(error), finished_at=util.now())
+                util.atomic_json(state_path, state)
     result = summarize(manifest, state, state_path)
-    support.atomic_json(state_path, state)
+    util.atomic_json(state_path, state)
     print(json.dumps(result, indent=2))
     return 0 if state['status'] == 'COMPLETE' else 2
 
@@ -237,9 +237,9 @@ def cli(argv=None):
     workspaces.keep_out_of_git(project)
     flow_dir.mkdir(parents=True, exist_ok=True)
     try:
-        with support.workspace_lock(flow_dir):
+        with util.workspace_lock(flow_dir):
             return execute_flow(args, source, manifest, project, flow_dir, state_path)
-    except (support.Paused, ValueError) as error:
+    except (util.Paused, ValueError) as error:
         parser.error(str(error))
 
 

@@ -13,6 +13,7 @@ import autocode as runner
 import autocode_goals as goals
 import autocode_interventions as inbox
 import autocode_support as support
+import autocode_util as util
 from . import test_goals as fixtures
 
 
@@ -106,12 +107,13 @@ class InterventionOrderingTests(unittest.TestCase):
     def test_crash_after_effect_commit_before_inbox_clear_recovers_without_replay(self):
         self.submit('pause', 'pause')
         self.submit('feedback')
-        original = support.atomic_json
+        original = util.atomic_json
         def crash_on_acknowledgement(path, value):
             if path == self.run / inbox.INBOX_NAME:
                 raise SystemExit('simulated process loss before inbox acknowledgement')
             original(path, value)
-        with patch.object(support, 'atomic_json', side_effect=crash_on_acknowledgement):
+        # The inbox acknowledgement is written by autocode_interventions, through autocode_util.
+        with patch.object(util, 'atomic_json', side_effect=crash_on_acknowledgement):
             with self.assertRaises(SystemExit):
                 runner.consume_interventions(self.state, self.run, self.workspace)
         disk = support.read(self.run / 'state.json')
