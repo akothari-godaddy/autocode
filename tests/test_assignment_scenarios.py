@@ -407,6 +407,23 @@ class AssignmentScenarios(unittest.TestCase):
         self.assertEqual(["src/greeting.py"], self.state["changed_files"])
         self.assertEqual("sol", self.state["next_stage"])
 
+    def test_empty_starting_tree_retains_new_file_for_validation(self):
+        criteria = [{"id": "C1", "criterion": "Create the new source file",
+                     "verification_method": "Read src/new.py", "human_review": False}]
+        milestones = [{"id": "M1", "objective": "Create src/new.py", "depends_on": [],
+                       "acceptance_criteria": ["C1"], "affected_paths": ["src/new.py"]}]
+        self.approve(milestones, criteria)
+        self.state["settings"]["orchestration"]["enabled"] = False
+        self.assertEqual({}, s.snapshot(self.root)["files"])
+        self.assertRegex(self.serial_attempt("new_file_escape"), "outside the assigned paths")
+        (self.root / "unrelated.txt").unlink()
+        self.assertIsNone(self.serial_attempt("no_change"))
+        self.assertEqual("sol", self.state["next_stage"])
+        self.assertEqual(["src/new.py"], self.state["changed_files"])
+        self.assertEqual(["src/new.py"], self.state["implementation"]["changed_files"])
+        self.assertFalse(self.state["retained_candidate_handoffs"][-1]["previously_validated"])
+        self.assertTrue((self.root / "src/new.py").is_file())
+
     def test_serial_retry_pauses_when_the_starting_snapshot_is_missing(self):
         self.serial_greeting("escape_tests")
         first = next(row for row in self.state["stages"] if row.get("stage") == "terra")

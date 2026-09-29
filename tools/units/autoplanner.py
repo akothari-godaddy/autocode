@@ -58,6 +58,10 @@ criterion under the milestone that delivers it: the runner checks a milestone's 
 already accepted, at that milestone's checkpoint, so a test must not depend on a later milestone. Keep criteria
 a test cannot check (documentation, visual design, performance under real load) with an ordinary
 verification_method.
+For independent parallel milestones, use distinct milestone-specific criterion IDs as well as disjoint
+affected_paths: the scheduler serializes milestones that share criterion IDs. Scope each criterion to its
+own milestone; put cross-component integration checks in a dependent milestone. Do not weaken coverage or
+rename protected criteria in an existing contract without the required user-backed change.
 """
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
@@ -82,6 +86,10 @@ capture it passing. Do not plan scratch copies outside the workspace, and do not
 missing prerequisite or ask the user to authorize it. Running the project's tests also creates files
 (__pycache__/, *.pyc, caches) and the runner keeps its own files under .autocode/: never cite these as
 evidence, and any check of which files changed must ignore them.
+CONTRACT DELTA: contract_changes describes only changes from the current goal_contract revision in this
+handoff, not cumulative history. A permission already incorporated into that revision is not a new change:
+retain its approved text, cite the saved authorization in the summary, and omit it from contract_changes.
+If no protected item changes against the current revision, return contract_changes=[].
 """
 CONTRACT_FIELDS_RULE = """
 CONTRACT LISTS: when open_blocking_questions is empty, the runner refuses a contract whose deliverables,

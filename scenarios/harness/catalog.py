@@ -1,7 +1,6 @@
 """The scenario catalog: one directory per scenario under ``scenarios/catalog/``.
 
-    <id>/scenario.toml   title, category, requirements, fake-mode check, budgets, expected outcome,
-                         and optional [[turn]] follow-up messages
+    <id>/scenario.toml   title, category, requirements, fake-mode check, budgets, expected outcome
     <id>/brief.md        the request given to AutoCode, verbatim
     <id>/seed/           starting project, committed before the run (optional)
     <id>/oracle.py       check(project, scenario[, run]) -> list[Check]
@@ -18,28 +17,16 @@ from dataclasses import dataclass
 from pathlib import Path
 
 CATALOG = Path(__file__).resolve().parent.parent / "catalog"
-# The kind of engineering job. The first eight change or create code; the next
-# four are read-only jobs whose deliverable is a report (README, "Workflows");
-# a conversation moves one run between several of them, turn by turn.
+# The kind of engineering job. The first eight change or create code; the last
+# four are read-only jobs whose deliverable is a report (README, "Workflows").
 CATEGORIES = ("bugfix", "feature", "greenfield", "port", "parallel", "architecture", "figma", "system",
-              "review", "design", "discuss", "investigate", "conversation")
+              "review", "design", "discuss", "investigate")
 # How a correct run ends: with completion, with a stop (a blocker or a question
 # the user must answer), or either.
 EXPECTED = ("complete", "stop", "any")
-KEYS = {"title", "category", "requires", "fake", "run", "turn"}
-RUN_KEYS = {"max_steps", "timeout_minutes", "expected", "known_failure", "requires_stages"}
-FAKE_KEYS = {"check", "flags", "fault", "live_investigator", "probe"}
-# A follow-up turn is said to the same run once it reaches the state ``after``
-# names: it completed, it stopped, or it is waiting on a particular need
-# (``needs:answer``), in which case the message is said instead of the driver
-# serving that need itself.
-TURN_AFTER = ("complete", "stop")
-
-
-@dataclass(frozen=True)
-class Turn:
-    after: str
-    say: str
+KEYS = {"title", "category", "requires", "fake", "run"}
+RUN_KEYS = {"max_steps", "timeout_minutes", "expected", "known_failure"}
+FAKE_KEYS = {"check", "flags", "fault", "live_investigator", "milestones"}
 
 
 @dataclass(frozen=True)
@@ -63,12 +50,10 @@ class Scenario:
     fake_flags: tuple[str, ...] = ()
     fake_fault: str = ""
     fake_live_calls: bool = False
-    fake_probe: str = ""  # exits 0 while the seed's bug is present: the runner checks the scripted reproduction
-    # Follow-up messages, in order, each said to the same run (issue #51).
-    turns: tuple[Turn, ...] = ()
-    # Model stages the scenario exists to exercise. A run that never reaches one is
-    # NOT_EXERCISED rather than passed: it says nothing about that stage.
-    requires_stages: tuple[str, ...] = ()
+    # [fake] milestones: multi-milestone scenarios (parallel-diamond) declare
+    # each milestone's id, dependencies, owned paths and verify command so the
+    # scripted provider can rehearse parallel scheduling without model spend.
+    fake_milestones: tuple[dict, ...] = ()
 
     @property
     def seed(self) -> Path:
@@ -115,13 +100,6 @@ def load(scenario_id: str) -> Scenario:
     unknown = set(fake) - FAKE_KEYS
     if unknown:
         raise ValueError(f"{scenario_id}/scenario.toml: unknown [fake] keys {sorted(unknown)}")
-    turns = []
-    for number, turn in enumerate(meta.get("turn", []), start=1):
-        if set(turn) != {"after", "say"} or not str(turn["say"]).strip():
-            raise ValueError(f"{scenario_id}: [[turn]] {number} needs exactly `after` and a nonempty `say`")
-        if turn["after"] not in TURN_AFTER and not str(turn["after"]).startswith("needs:"):
-            raise ValueError(f"{scenario_id}: [[turn]] {number} after must be one of {TURN_AFTER} or needs:<kind>")
-        turns.append(Turn(turn["after"], turn["say"].strip()))
     return Scenario(
         id=scenario_id, dir=root, title=meta["title"], category=meta["category"],
         brief=(root / "brief.md").read_text().strip(), requires=tuple(meta.get("requires", ())),
@@ -129,7 +107,7 @@ def load(scenario_id: str) -> Scenario:
         timeout_minutes=run.get("timeout_minutes", 60), expected=run.get("expected", "complete"),
         known_failure=run.get("known_failure", ""), fake_flags=tuple(fake.get("flags", ())),
         fake_fault=fake.get("fault", ""), fake_live_calls=bool(fake.get("live_investigator", False)),
-        fake_probe=fake.get("probe", ""), turns=tuple(turns), requires_stages=tuple(run.get("requires_stages", ())))
+        fake_milestones=tuple(fake.get("milestones", ())))
 
 
 def load_all() -> list[Scenario]:
