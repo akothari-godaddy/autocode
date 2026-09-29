@@ -59,6 +59,32 @@ def blocking_entries(state) -> list:
     return [row for row in open_entries(state) if row.get("blocking", True)]
 
 
+def recheck_by_validator(state, value, source_revision):
+    """The Completion Owner's decision, as VALIDATE when only the Validator's own findings block completion.
+
+    Only the Validator closes the findings it raised, and a report repair cannot (_record). Live
+    greenfield and architecture runs (Claude models, 2026-09-29) deadlocked there: the Validator's
+    closing report was repaired, its findings stayed open, and every Completion Owner COMPLETE was
+    rejected until the run stopped. The run goes back to the Validator for a fresh review only when its
+    latest validation passed and did not report these findings again: a FAIL, or a finding raised in
+    that same report, is the Validator's current word and the gate refuses completion as before. At
+    most once per source revision and set of findings; ``validator_rechecks`` records each (read only here).
+    """
+    if value.get("status") not in ("COMPLETE", "TASK_COMPLETE"):
+        return value
+    blocking = blocking_entries(state)
+    validation = state.get("validation") or {}
+    if (not blocking or any(row.get("source") != "sol" for row in blocking) or validation.get("verdict") != "PASS"
+            or any(row.get("last_reported_in") == validation.get("output") for row in blocking)):
+        return value
+    key = {"source_revision": source_revision, "findings": sorted(row["id"] for row in blocking)}
+    asked = state.setdefault("validator_rechecks", [])
+    if key in asked:
+        return value
+    asked.append(key)
+    return {**value, "status": "VALIDATE"}
+
+
 def blocking_for_milestone(state, current_scope) -> list:
     """Open blockers relevant to partial acceptance, without closing later findings."""
     approved = state.get("goal_contract", {}).get("body", {}).get("milestones", [])

@@ -230,6 +230,14 @@ def _prove(state, workspace, run_dir, current, scope, progress):
     return proof
 
 
+def rejection(state):
+    """The completion gate's reason when the current source has no passing proof."""
+    proof = state.get("regression_proof") or {}
+    reasons = "; ".join((proof.get("failures") or []) + (proof.get("unverified") or [])) or \
+        "no proof exists for the current source"
+    return f"Completion rejected: this change has no passing regression proof for the current source ({reasons})"
+
+
 def check_cases(proof, cases):
     """Each English test case needs a test named after it.
 
