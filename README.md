@@ -190,104 +190,31 @@ The rules we preserve are:
 
 ## Where we are going
 
-The following is the intended direction. It is **not** a list of features already shipped, and it does not authorize unattended implementation of the whole roadmap.
-
-The order below was reviewed against [`63ee862`](https://github.com/charlieanna/autocode/tree/63ee862c378f1d2988e31c49d64486b529ae16dc) on September 26, 2026. Each item is an open proposal tracked in [#14](https://github.com/charlieanna/autocode/issues/14); review questions live on the linked issues.
+This is direction, not a list of shipped features — those live in [What is implemented today](#what-is-implemented-today) — and it does not authorize unattended implementation of the roadmap. The umbrella proposal is [#14](https://github.com/charlieanna/autocode/issues/14); review questions live on the linked issues.
 
 ### Order of work
 
 | When | Work | Proposal |
 | --- | --- | --- |
-| Now | Reliability fixes and the AutoReview review coverage plan | [#17](https://github.com/charlieanna/autocode/issues/17) |
-| In parallel | One conversation as a read-only projection of saved records; one role vocabulary | [#18](https://github.com/charlieanna/autocode/issues/18), [#19](https://github.com/charlieanna/autocode/issues/19) |
-| Next | Intent-based workflows, starting with **fix** and **review** only | [#20](https://github.com/charlieanna/autocode/issues/20) |
-| Then | A live draft plan while requirements are clarified | [#21](https://github.com/charlieanna/autocode/issues/21) |
-| When a real project needs it | Workstreams on top of task lanes; interface contracts; skeleton-first integration | [#22](https://github.com/charlieanna/autocode/issues/22), [#23](https://github.com/charlieanna/autocode/issues/23) |
-| Throughout | Measured small-task cost; a live-trial exit gate for each step | [#15](https://github.com/charlieanna/autocode/issues/15), [#16](https://github.com/charlieanna/autocode/issues/16) |
+| Now | Live-model qualification: an eight-step ladder decides what counts as proven | [#110](https://github.com/charlieanna/autocode/issues/110) |
+| Now | Open-source readiness: a ten-minute first task on a clean machine; releases, changelog, saved-run compatibility | [#67](https://github.com/charlieanna/autocode/issues/67), [#68](https://github.com/charlieanna/autocode/issues/68) |
+| Next | The chat-first dashboard: one conversation, question cards, exact-version approvals, live preview | [#27](https://github.com/charlieanna/autocode/issues/27)–[#36](https://github.com/charlieanna/autocode/issues/36) |
+| Next | Multi-turn workflows: one conversation that changes activity | [#51](https://github.com/charlieanna/autocode/issues/51) |
+| When a real project needs it | Big-project completion: workstream pickup, Figma components, local deployment | [#22](https://github.com/charlieanna/autocode/issues/22), [#23](https://github.com/charlieanna/autocode/issues/23), [#57](https://github.com/charlieanna/autocode/issues/57), [#58](https://github.com/charlieanna/autocode/issues/58) |
+| Throughout | Measured small-task cost, from recorded live runs only | [#15](https://github.com/charlieanna/autocode/issues/15) |
 
 Why this order:
 
-- Reliability work is still finding real defects on small tasks. See [`docs/bugs/`](docs/bugs/): four reports from September 25–26, two still open.
-- Live evidence is thin. The C#→Go trial passed on a single re-run, the bug-fix trial has not been re-run, and the UI trial has never run because its design fixture is missing. See [live re-trials](audits/autopilot-test-catalogue/LIVE_RERUN.md).
-- Small jobs are not yet small. A greeting CLI took 832 seconds through AutoCode against 38 seconds for a direct agent ([comparison](audits/task-vs-autopilot-2026-09-24.md)), and live trials took 11–24 stages. Hierarchy adds stages; it does not remove them.
+- The five engineering workflows (build, bugfix, review, design, discuss) shipped in [#106](https://github.com/charlieanna/autocode/pull/106), and the big-project layers (`autocode program`, `autocode components`) exist. The open question is no longer what ships but what is *proven live*: the qualification ladder in [#110](https://github.com/charlieanna/autocode/issues/110) now decides that, and its early steps have passed live.
+- All four [`docs/bugs/`](docs/bugs/) reports from September 25–26 are fixed, verified, and carry named regression tests. New defects get new notes there.
+- Small-job cost is **not yet measured** on current master. Stage budgets and run metrics exist, but no recorded live baseline numbers have been published; until [#15](https://github.com/charlieanna/autocode/issues/15) records them, “not yet measured” is the honest number.
 - A polished conversation on top of a pipeline that still gets stuck makes the product look more finished than it is. UX work proceeds, but only as a view of existing records.
 
-**Every step needs a measurable exit gate.** For example: a user can follow the to-do trial (LIVE-02) end to end in the dashboard without opening `state.json`, and a fix run of the bug-fix trial (LIVE-03) meets agreed time and stage targets. Fake-provider results and live-model results are reported separately ([#16](https://github.com/charlieanna/autocode/issues/16)).
+**Every step needs a measurable exit gate.** Fake-provider results and live-model results are reported separately ([#16](https://github.com/charlieanna/autocode/issues/16)).
 
 **Not planned yet:** arbitrary recursive agents, automatic model selection across large catalogues, separate services per role, a plugin marketplace, a workflow DSL, user-selectable modes, multi-user collaboration, distributed execution, a second findings system, or a second state database.
 
-### 1. Strengthen AutoReview first — immediate non-UX priority
-
-**Current:** Validator + Completion Owner, candidate-bound checks, a findings ledger, and controller-owned gates.
-
-**Next:** Make the review obligation explicit before carrying out the checks ([#17](https://github.com/charlieanna/autocode/issues/17)):
-
-```text
-Approved contract + exact candidate + open findings
-                         |
-                         v
-                 Review coverage plan
-                         |
-                         v
-            Tester produces executed evidence
-                         |
-                         v
-             Independent technical review
-                         |
-                         v
-        Deterministic assessment of gaps and findings
-                         |
-                         v
-            AutoPilot selects the permitted next action
-```
-
-The planned review model should identify which criteria were checked, how, against what source and environment, with what evidence, and what remains unverified. A result may contain **both** confirmed defects and missing verification; neither should hide the other.
-
-**Tester** and **Reviewer** are responsibilities, not new agents or services. The existing workflow modes already move independent validation between the Validator and the Plan Reviewer, so each responsibility is assigned by stage.
-
-Start by strengthening existing command evidence and review contracts. Add domain-specific verification only where a real task requires it: browser interactions, design comparison, migration parity, or behavioral simulations. Testing generates observations; review interprets them; the controller enforces advancement. A schema-complete review plan is not proof that its tests are sufficient.
-
-Evolve the existing units and compatibility paths. Do not create a second findings database or silently remove required reviews from saved runs.
-
-### 2. Make one conversation work across the engineering lifecycle — UX track
-
-**Current:** Planning conversations, task views, checkpoint history, and feedback/control surfaces exist. The runner saves progress messages in `state.json`, and the dashboard merges them with answers, plan revisions, and feedback receipts in the browser.
-
-**Target:** One continuous conversation for a piece of engineering work, with project-wide visibility and relevant artifacts alongside it. Questions, status requests, proposed scope changes, and control actions have distinct effects.
-
-- **One tested projection** ([#18](https://github.com/charlieanna/autocode/issues/18)). The conversation is built from saved records by one server-side function: stages, answers, plan revisions, approvals, findings, and checkpoints. Events have stable IDs derived from those records. AutoPilot never reads the projection, so it cannot become a second workflow record.
-- **One role vocabulary** ([#19](https://github.com/charlieanna/autocode/issues/19)). Display names come from one mapping and label the responsibility exercised at that stage. Stage IDs and saved state keys do not change.
-- **A live draft plan** ([#21](https://github.com/charlieanna/autocode/issues/21)). While the human clarifies the request, a Planner maintains a versioned draft; a Plan Reviewer checks it before approval. This starts only after answers reliably trigger re-evaluation ([Bug 002](docs/bugs/002-answers-not-reevaluated.md)). A draft is never approvable, and refreshes are bounded.
-
-The user should be able to ask “Why is this still open?” and see the current blocking findings and missing evidence—not read every agent transcript. A live preview makes UI work tangible. Task, plan, finding, and evidence details remain available without losing the conversation.
-
-Show concise explanations of actions, decisions, and observations—not private model reasoning or invented progress percentages. State panels show counts backed by records, such as tasks done, criteria verified, open findings, and pending decisions. UX work can proceed separately from backend review improvements.
-
-### 3. Support the engineering outcome, not one compulsory coding pipeline
-
-**Current:** The main approved-build workflow, callable units, and a dedicated Figma path exist.
-
-**Planned:** Composable workflows that produce the artifact the user actually requested:
-
-| Request | Intended result |
-| --- | --- |
-| “Build this feature.” | An integrated candidate with requirement-linked verification. |
-| “Find and fix this bug.” | Reproduction, diagnosis, bounded correction, and regression evidence. |
-| “Review this PR.” | Findings and check results without changing the code; fixing it is a separate authorized action. |
-| “Review or implement this architecture.” | A design assessment, or a plan that faithfully implements the approved design. |
-| “Discuss these tradeoffs.” | Options, assumptions, consequences, and a decision record—not unsolicited implementation. |
-| “Review or build this UI.” | A design assessment or implementation, with rendered and interaction evidence. |
-
-These are target workflows, not claims that today's CLI automatically classifies and implements every intent. Reuse the same units and approval rules instead of building a different engine for every request. The [task-type scenarios](docs/scenarios.md) freeze one request of each kind with an independent oracle, so a claim that a workflow works can be tested rather than asserted.
-
-Start with **fix** and **review** ([#20](https://github.com/charlieanna/autocode/issues/20)).:
-
-- **Fix** is where small-task cost targets should be met ([#15](https://github.com/charlieanna/autocode/issues/15)).
-- **Review** must be read-only, enforced by AutoPilot rather than by leaving the Builder out of the sequence.
-- **Intent reconciles existing routing.** The workflow mode, the task-lane `ui`/`code` mode, and the Figma path already choose pipelines; intent must reconcile with them rather than become a fourth routing setting.
-- **The proposed intent is shown at the existing approval boundary.** Mistaking a discussion for a build writes code nobody asked for; the reverse is only a missed opportunity.
-
-### 4. Grow from bounded tasks to large projects
+### Grow from bounded tasks to large projects
 
 **Current:** Milestones, dependency-aware Builder batches, manually defined task lanes, and [programs](docs/program.md). Lanes schedule complete runs in separate worktrees without a parent contract or automatic merging. Programs derive workstreams from an approved plan, run each through its own review gates, and merge completed workstreams in dependency order onto an integration branch for final integration work. Deployment workstreams need explicit authorization.
 
@@ -313,7 +240,7 @@ Integrate early through a skeleton-first slice—for example, one learner studie
 
 Keep small jobs small. A typo fix does not need a program hierarchy. Deployment, credentials, and external mutations remain separately authorized.
 
-### 5. Add specialist delegation only when it helps
+### Add specialist delegation only when it helps
 
 **Exploratory, not a V1 dependency:** A unit may eventually request bounded specialists for independent investigation, security review, compatibility checks, or other task-specific questions.
 
@@ -383,7 +310,7 @@ python3 -m unittest tests/test_escalation.py tests/test_autocode.py \
   tests/test_process.py
 ```
 
-This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), [audit artifacts](audits/), and [AGENTS.md](AGENTS.md#testing). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
+This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), the archived audit records under the `archive/pre-restructure-2026-09-26` tag, and [AGENTS.md](AGENTS.md#testing). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
 
 ```sh
 python3 -m unittest tests.test_scenario_oracles tests.test_program tests.test_live_trial
