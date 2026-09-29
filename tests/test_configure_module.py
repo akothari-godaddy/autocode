@@ -231,8 +231,9 @@ class PackageModeImportTests(unittest.TestCase):
                 "and callable(runner.check_subscription); "
                 "assert runner.DEFAULT_ENGINE == 'opencode'; "
                 "assert runner.BUDGET_ARGUMENTS['iteration_ceiling'][0] == 'max_iterations'")
-        result = subprocess.run([str(REPO / ".venv" / "bin" / "python"), "-c", code],
-                                cwd=str(REPO), capture_output=True, text=True)
+        # The interpreter running the tests has this checkout installed (editable, as autocode_cli); a fixed
+        # .venv path exists only on a developer machine, not in CI.
+        result = subprocess.run([sys.executable, "-c", code], cwd=str(REPO), capture_output=True, text=True)
         self.assertEqual(0, result.returncode, result.stderr)
 
     # The regression-proof gate discovers criterion cases as test_ac<id>_*;
