@@ -55,7 +55,9 @@ in this conversation, saved in the repository at report_path. The user's request
 them, and they are the requirements: plan a fix for each blocking finding, with an acceptance criterion and a
 regression test that fails on the reviewed change and passes after the fix. When the reviewed change is a patch
 file (change_patch) that is not applied yet, the plan applies it first and fixes the findings on top of it, so
-the change the user asked to land keeps everything else it does. The runner proves each regression test itself,
+the change the user asked to land keeps everything else it does. Behavior the reviewed change already has and
+must keep (what its own tests cover, what no finding says is broken) is a "guard:" criterion, never "test:": it
+cannot fail on the reviewed change. The runner proves each regression test itself,
 against the base code with change_patch applied (the change the review judged): do not add a criterion or task
 to capture the tests failing without the fixes. Leave the advisory findings as they are
 unless the request asks for them. Do not ask the user what the findings mean; ask only about a genuine choice
@@ -87,8 +89,12 @@ repository: give that criterion an ordinary verification_method, not "test:".
 A "test:" criterion describes behavior that does not exist before the run, so its test fails (or cannot run) on
 the code as it is. Something that already holds, or holds as soon as a directory exists, is not: in Python 3 a
 package directory imports without __init__.py, so "the package is importable" passes before the change and the
-runner can never prove it. Check such a criterion with an ordinary verification_method, and make the "test:"
-criteria the behavior the new code adds (a function's result, a command's output, a refused input).
+runner can never prove it. Make the "test:" criteria the behavior the new code adds or fixes (a function's
+result, a command's output, a refused input).
+Behavior that already works and must keep working (the change must not break it) is a guard: write it as the
+same kind of example, with verification_method "guard: test_<criterion id in lowercase>_<what it checks>". The
+runner checks that its test passes both before and after the change. A guard needs a real behavior to check;
+something trivially true (a package that imports, a file that exists) gets an ordinary verification_method.
 For independent parallel milestones, use distinct milestone-specific criterion IDs as well as disjoint
 affected_paths: the scheduler serializes milestones that share criterion IDs. Scope each criterion to its
 own milestone; put cross-component integration checks in a dependent milestone. Do not weaken coverage or
@@ -100,7 +106,7 @@ DESIGN_DELIVERABLES_RULE = """
 DESIGN DELIVERABLES: this job delivers a design, not code. Deliver exactly the files the request names and
 nothing else: no application code, no test files, no scripts. Every milestone's affected_paths and the
 initial_task's affected_paths list only those files (or their directory). Never mark a verification_method
-"test:". Verify each criterion by what the Validator can check directly in the delivered files: read them,
+"test:" or "guard:". Verify each criterion by what the Validator can check directly in the delivered files: read them,
 and run read-only commands against them (for example python3 -c that loads a JSON file and checks a field),
 without adding any file to the repository.
 """

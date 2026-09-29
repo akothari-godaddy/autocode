@@ -41,6 +41,14 @@ class ContractCasesTests(unittest.TestCase):
                          test_cases.contract_cases(state))
         self.assertEqual("C2: " + EXAMPLE["criterion"], test_cases.case_text(test_cases.contract_cases(state)[0]))
 
+    def test_a_guard_criterion_is_a_preserve_case(self):
+        guard = {**EXAMPLE, "id": "C4", "verification_method": "guard: test_c4_adds_still"}
+        state = {"goal_contract": {"body": {"milestones": [{"id": "M1"}], "acceptance_criteria": [EXAMPLE, guard]}}}
+        self.assertEqual([{"id": "C2", "text": EXAMPLE["criterion"]},
+                          {"id": "C4", "text": EXAMPLE["criterion"], "kind": "preserve"}],
+                         test_cases.contract_cases(state))
+        self.assertIn('"guard:"', test_cases.builder_note(state))
+
     def test_no_plan_no_cases(self):
         self.assertEqual([], test_cases.contract_cases({}))
         self.assertEqual("", test_cases.builder_note({}))
@@ -190,6 +198,34 @@ class FeatureProofTests(unittest.TestCase):
         self.assertEqual("FAIL", proof["verdict"])
         self.assertEqual([], proof["case_tests"]["C3"])
         self.assertTrue(any("C3: Given calc.mul" in failure and "test_c3_" in failure for failure in proof["failures"]))
+
+
+    # Live review-then-fix plans (2026-09-29) could only mark "a timeout before execution is still
+    # retried" as test:, which the change never broke; the proof refused it or the plan asked the user.
+    GUARD = {"id": "C4", "criterion": "Given calc.add; when add(1, 2) runs; then it still returns 3",
+             "verification_method": "guard: test_c4_add_still_works", "human_review": False}
+    GUARD_TEST = "\n    def test_c4_add_still_works(self):\n        self.assertEqual(3, add(1, 2))\n"
+    OWN_FILE = "import unittest\nfrom calc import add\n\n\nclass GuardTests(unittest.TestCase):" + GUARD_TEST
+
+    def test_a_guard_passes_with_a_test_that_passes_before_and_after(self):
+        proof = self.prove([EXAMPLE, self.GUARD], {**FEATURE, "test_guard.py": self.OWN_FILE})
+        self.assertEqual("PASS", proof["verdict"], proof["failures"] + proof["unverified"])
+        self.assertEqual(["test_guard.GuardTests.test_c4_add_still_works"], proof["case_tests"]["C4"])
+
+    def test_a_guard_that_could_not_run_before_counts_with_a_note(self):
+        # Its file imports sub, which the change adds, so on the original code the file does not import.
+        proof = self.prove([EXAMPLE, self.GUARD], {**FEATURE, "test_calc.py": FEATURE["test_calc.py"] + self.GUARD_TEST})
+        self.assertEqual("PASS", proof["verdict"], proof["failures"] + proof["unverified"])
+        self.assertEqual(["test_calc.CalcTests.test_c4_add_still_works"], proof["case_tests"]["C4"])
+        self.assertTrue(any("not shown to have passed before" in note for note in proof["notes"]), proof["notes"])
+
+    def test_a_guard_whose_test_ran_and_failed_before_the_change_is_mis_tagged(self):
+        new_behavior = {**self.GUARD, "id": "C5", "verification_method": "guard: test_c5_sub_exists"}
+        test = ("import unittest\nimport calc\n\n\nclass MoreTests(unittest.TestCase):\n"
+                "    def test_c5_sub_exists(self):\n        self.assertEqual(2, calc.sub(5, 3))\n")
+        proof = self.prove([EXAMPLE, new_behavior], {**FEATURE, "test_more.py": test})
+        self.assertEqual("FAIL", proof["verdict"])
+        self.assertTrue(any("fails on the original code" in failure for failure in proof["failures"]), proof["failures"])
 
 
 class BaseAndTimeoutTests(unittest.TestCase):
