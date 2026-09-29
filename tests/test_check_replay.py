@@ -120,3 +120,21 @@ class CliTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ValidatorNoteTests(unittest.TestCase):
+    """A live Validator cited a check exiting 1 as a negative control inside a PASS (parallel-diamond,
+    2026-09-29); every Validator request now says how to write one that exits 0."""
+
+    def test_the_validator_is_told_and_the_builder_is_not(self):
+        from tests.test_bug_job import approved_small_fix
+        from units import common
+        state = approved_small_fix()
+        schemas = Path(check_replay.__file__).with_name("autocode-schemas")
+        state_path = Path(state["workspace"]) / "state.json"
+        validator = common.execution_request(state, "sol", state_path, schemas)
+        self.assertIn(check_replay.VALIDATOR_NOTE, validator.prompt.split("\nCURRENT HANDOFF DATA\n")[0])
+        self.assertIn("sh -c '! python3", check_replay.VALIDATOR_NOTE)
+        self.assertEqual((len(validator.prompt.encode()) + 3) // 4, validator.metrics["estimated_prompt_tokens"])
+        builder = common.execution_request(state, "terra", state_path, schemas)
+        self.assertNotIn(check_replay.VALIDATOR_NOTE, builder.prompt)

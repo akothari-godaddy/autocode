@@ -372,3 +372,15 @@ class QuestionDraftTraceTests(EpisodeCase):
         self.assertFalse(planner.traces_coverage(clarification_only([self.QUESTION])))
         with self.assertRaisesRegex(ValueError, "R1 is not covered"):
             self.bind(self.pending("R1", "R2"), body())
+
+
+class NewBehaviorCriterionRuleTests(EpisodeCase):
+    """A live plan made "the package is importable" a test: criterion; it passes before the change
+    (a namespace package), so the milestone could never be proven (parallel-diamond, 2026-09-29)."""
+
+    def test_build_planning_says_a_test_criterion_is_new_behavior(self):
+        prompt, _ = planner.context(self.state, "astra_discovery", Path("/tmp/state.json"))
+        rule = 'A "test:" criterion describes behavior that does not exist before the run'
+        self.assertIn(rule, planner.EXAMPLE_CRITERIA_RULE)
+        self.assertIn(rule, prompt)
+        self.assertIn("imports without __init__.py", prompt)
