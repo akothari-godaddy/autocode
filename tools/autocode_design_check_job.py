@@ -26,9 +26,11 @@ import json
 from pathlib import Path
 
 try:
+    from . import autocode_stray_writes as stray_writes
     from . import autocode_workflows as workflows
     from .autocode_test_cases import run_probes
 except ImportError:
+    import autocode_stray_writes as stray_writes
     import autocode_workflows as workflows
     from autocode_test_cases import run_probes
 
@@ -105,7 +107,8 @@ def blockers_path(design_document: str) -> str:
 def check(state: dict, value: dict, changed_files, workspace) -> None:
     stray = sorted(str(path) for path in (changed_files or []))
     if stray:
-        raise ValueError("Checking a design must not change the repository; this attempt changed: " + ", ".join(stray))
+        raise stray_writes.StrayWrites(
+            "Checking a design must not change the repository; this attempt changed: " + ", ".join(stray), stray)
     expected = (state.get("workflow") or {}).get("design_document", "")
     if value["design_document"].strip() != expected:
         raise ValueError(f"The check must be of the approved design {expected!r}, not {value['design_document']!r}")
