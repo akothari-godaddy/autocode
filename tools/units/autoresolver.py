@@ -10,12 +10,12 @@ import copy
 import json
 from pathlib import Path
 try:
-    from .. import autocode_support as support, autocode_goals as goals, autocode_bug_job as bug_job
+    from .. import autocode_util as util, autocode_goals as goals, autocode_bug_job as bug_job
     from .. import autocode_discuss_job as discuss_job, autocode_stuck_job as stuck_job, autocode_failures as failures
     from .. import autocode_providers, autocode_verify as verify
 except ImportError:
     import autocode_verify as verify
-    import autocode_support as support
+    import autocode_util as util
     import autocode_goals as goals
     import autocode_bug_job as bug_job
     import autocode_discuss_job as discuss_job
@@ -106,7 +106,7 @@ def wait_on_existing_diagnosis(state, decision, record, request, *, source_stage
     evidence = {"diagnosis": diagnosis, "output": output, "repeated_on_unchanged_source": True,
                 "hashes": dict(request.get("evidence_hashes") or {})}
     if Path(output).is_file():
-        evidence["hashes"][output] = support.file_hash(Path(output))
+        evidence["hashes"][output] = util.file_hash(Path(output))
     origin = {"stage": source_stage, **{key: record[key] for key in ("output", "source_revision", "task_id")
                                         if key in record}}
     goals.wait_for_user(state, asked, origin=origin, evidence=evidence, next_stage="astra_review")
@@ -125,12 +125,12 @@ def start_small_correction(state, workspace):
     goals.validate_body(state, body, ready=True)
     contract = state["goal_contract"]
     event = {"kind": "goal_approval", "actor": "workflow_policy", "policy": bug_job.SMALL_FIX_POLICY,
-             "at": support.now(), "token": goals.token(contract)}
+             "at": util.now(), "token": goals.token(contract)}
     state.setdefault("user_events", []).append(event)
     contract.update(approval_status="approved", approval_event=event)
     state.update(phase="READY_TO_EXECUTE", status="RUNNING", pending_questions=[])
     decision = goals.initial_decision(body)
-    goals.assign_task(state, decision, support.snapshot(Path(workspace)))
+    goals.assign_task(state, decision, util.snapshot(Path(workspace)))
     state.update(next_action=decision["next_objective"], affected_paths=decision["affected_paths"],
                  next_stage=dispatch.build_stage(state))
     goals.record_decision(state, decision)
@@ -145,15 +145,15 @@ def guard(state, workspace):
             or request.get('contract_hash') != state['goal_contract']['hash']
             or request.get('task_id') != state.get('current_task', {}).get('id')
             or not output or output not in request.get('evidence_hashes', {})
-            or request.get('source_revision') != support.snapshot(workspace)['revision']):
-        raise support.Paused('PAUSED_STALE_HANDOFF', 'Repair diagnosis needs the current reviewed source and task')
+            or request.get('source_revision') != util.snapshot(workspace)['revision']):
+        raise util.Paused('PAUSED_STALE_HANDOFF', 'Repair diagnosis needs the current reviewed source and task')
     if request.get('diagnosis_output'):
-        raise support.Paused('PAUSED_RESOLVER', 'The saved blocker already has a diagnosis; reconcile it before another resolver call')
+        raise util.Paused('PAUSED_RESOLVER', 'The saved blocker already has a diagnosis; reconcile it before another resolver call')
     if failures.repeated(state, {'stage': 'astra_resolve', 'source_revision': request['source_revision']}):
-        raise support.Paused('PAUSED_REPEATED_FAILURE', 'Resolver failure limit reached for this source; no additional diagnosis authorized')
+        raise util.Paused('PAUSED_REPEATED_FAILURE', 'Resolver failure limit reached for this source; no additional diagnosis authorized')
     for path, digest in request.get('evidence_hashes', {}).items():
-        if not Path(path).is_file() or support.file_hash(path) != digest:
-            raise support.Paused('PAUSED_STALE_HANDOFF', 'Repair evidence changed; review again before resolving')
+        if not Path(path).is_file() or util.file_hash(path) != digest:
+            raise util.Paused('PAUSED_STALE_HANDOFF', 'Repair evidence changed; review again before resolving')
 
 
 def prepare_stuck(state, state_path):
@@ -224,9 +224,9 @@ def prepare(state, stage, state_path, schema_dir):
 def validate(state, value, record, workspace):
     guard(state, workspace)
     if record.get('changed_files') or record['source_revision'] != state['resolution_request']['source_revision']:
-        raise support.Paused('PAUSED_STALE_HANDOFF', 'Resolver must leave the reviewed source unchanged')
+        raise util.Paused('PAUSED_STALE_HANDOFF', 'Resolver must leave the reviewed source unchanged')
     if record.get('rejected') or record.get('exit_code', 0) != 0 or not Path(record.get('output') or '').is_file():
-        raise support.Paused('PAUSED_STALE_HANDOFF', 'Resolver diagnosis requires its saved successful read-only output')
+        raise util.Paused('PAUSED_STALE_HANDOFF', 'Resolver diagnosis requires its saved successful read-only output')
     if value.get('status') not in ('REWORK', 'BLOCKED') or not value.get('diagnosis', '').strip():
         raise ValueError('Resolver requires a diagnosis and a REWORK or BLOCKED decision')
     if value['status'] == 'REWORK' and (not value.get('evidence') or value.get('next_task', {}).get('kind') != 'implement'):
@@ -262,11 +262,11 @@ def diagnosis_guard(state, workspace):
     goals.execution_guard(state)
     request = state.get('diagnosis_request') or {}
     if (request.get('contract_hash') != state['goal_contract']['hash']
-            or request.get('source_revision') != support.snapshot(workspace)['revision']):
-        raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis needs the current source and approved contract')
+            or request.get('source_revision') != util.snapshot(workspace)['revision']):
+        raise util.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis needs the current source and approved contract')
     for path, digest in request.get('evidence_hashes', {}).items():
-        if not Path(path).is_file() or support.file_hash(path) != digest:
-            raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis evidence changed; reconcile before diagnosing')
+        if not Path(path).is_file() or util.file_hash(path) != digest:
+            raise util.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis evidence changed; reconcile before diagnosing')
 
 
 def prepare_diagnosis(state, stage, state_path, schema_dir):
@@ -301,7 +301,7 @@ def prepare_diagnosis(state, stage, state_path, schema_dir):
 def validate_diagnosis(state, value, record, workspace):
     diagnosis_guard(state, workspace)
     if record.get('changed_files') or record.get('source_revision') != state['diagnosis_request']['source_revision']:
-        raise support.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis must leave the reviewed source unchanged')
+        raise util.Paused('PAUSED_STALE_HANDOFF', 'Diagnosis must leave the reviewed source unchanged')
     if not value.get('diagnosis', '').strip():
         raise ValueError('Diagnosis requires a nonempty explanation')
     recommendation = value.get('recommendation') or {}
@@ -317,10 +317,10 @@ def preserve_review_criteria(state, value):
     for row in value['acceptance_criteria']:
         cid = row['id']
         if cid in seen:
-            raise support.Paused('PAUSED_INVALID_OUTPUT', 'Duplicate acceptance IDs')
+            raise util.Paused('PAUSED_INVALID_OUTPUT', 'Duplicate acceptance IDs')
         seen.add(cid)
         if cid not in by_id or row['criterion'] != by_id[cid]['criterion']:
-            raise support.Paused('PAUSED_CRITERIA_CHANGE', 'Repair cannot change approved acceptance criteria')
+            raise util.Paused('PAUSED_CRITERIA_CHANGE', 'Repair cannot change approved acceptance criteria')
     # Preserve the last review's order, statuses and evidence, including omitted
     # criteria. Diagnosis supplies repair instructions, not a new review verdict.
     return {**value, 'acceptance_criteria': copy.deepcopy(authoritative)}

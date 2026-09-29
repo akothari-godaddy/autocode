@@ -18,11 +18,11 @@ from __future__ import annotations
 import copy
 
 try:
-    from . import autocode_support as s
+    from . import autocode_util as s
     from . import autocode_milestones as milestones
     from . import autocode_finding_scope as finding_scope
 except ImportError:
-    import autocode_support as s
+    import autocode_util as s
     import autocode_milestones as milestones
     import autocode_finding_scope as finding_scope
 

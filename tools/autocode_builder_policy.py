@@ -1,9 +1,9 @@
 """Runner-owned retry decisions. Models diagnose; configuration selects routes."""
 import copy
 try:
-    from . import autocode_support as s
+    from . import autocode_util as s
 except ImportError:
-    import autocode_support as s
+    import autocode_util as s
 
 # The stronger attempt is GPT-6 Sol at xhigh: Astra is too expensive and only for the
 # Resolver (user 2026-09-28). The default checkers also run GPT-6 Sol, so for the rest of

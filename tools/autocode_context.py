@@ -6,9 +6,9 @@ from pathlib import Path
 
 def compact(base, state_path):
     try:
-        from . import autocode_support as support
+        from . import autocode_util as util
     except ImportError:
-        import autocode_support as support
+        import autocode_util as util
     result = copy.deepcopy(base)
     moved = {}
     # Never remove requirements, saved answers, human decisions or current findings.
@@ -25,12 +25,12 @@ def compact(base, state_path):
         else:
             result.pop(key, None)
     if moved:
-        archive = Path(state_path).parent / 'context' / (support.digest(moved) + '.json')
+        archive = Path(state_path).parent / 'context' / (util.digest(moved) + '.json')
         if not archive.exists():
-            support.atomic_json(archive, moved)
-        elif support.read(archive) != moved:
+            util.atomic_json(archive, moved)
+        elif util.read(archive) != moved:
             raise ValueError('Saved context artifact changed: ' + str(archive))
-        result['context_artifact'] = {'path': str(archive), 'sha256': support.file_hash(archive),
+        result['context_artifact'] = {'path': str(archive), 'sha256': util.file_hash(archive),
                                       'fields': {key: {'total': len(value) if isinstance(value, (dict, list)) else None}
                                                  for key, value in moved.items()},
                                       'instruction': 'Earlier material is preserved here. Retrieve relevant fields before relying on historical evidence. This index does not change requirements or authorize skipping checks.'}

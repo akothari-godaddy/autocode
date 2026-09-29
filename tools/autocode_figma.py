@@ -3,9 +3,9 @@ import json
 from pathlib import Path
 from urllib.parse import urlparse
 try:
-    from . import autocode_support as support
+    from . import autocode_util as util
 except ImportError:
-    import autocode_support as support
+    import autocode_util as util
 
 
 def design_url(value):
@@ -35,7 +35,7 @@ def load_handoff(run_dir):
         path = root / ref['path']
         if path.is_symlink() or not path.resolve().is_relative_to(root) or not path.is_file():
             raise ValueError('UI handoff artifact is missing or outside the run')
-        if support.file_hash(path) != ref['sha256']:
+        if util.file_hash(path) != ref['sha256']:
             raise ValueError('UI handoff changed after acceptance; rerun its review')
     execution = (('terra', 'COMPLETE'), ('sol', 'PASS'), ('astra', 'ACCEPT')) if version == 1 else (
         ('builder', 'COMPLETE'), ('validator', 'PASS'), ('decision_owner', 'ACCEPT'))

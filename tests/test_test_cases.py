@@ -101,7 +101,7 @@ class MilestoneScopeTests(unittest.TestCase):
     def test_a_proof_for_a_smaller_scope_is_not_reused(self):
         state = planned("M2", accepted=["M1"])
         state["regression_proof"] = {"verdict": "PASS", "source_revision": "rev", "case_scope": ["C1"]}
-        with patch.object(regression.support, "snapshot", return_value={"revision": "rev"}), \
+        with patch.object(regression.util, "snapshot", return_value={"revision": "rev"}), \
                 patch.object(regression, "base_commit", return_value=None):
             proof = regression.prove(state, Path(tempfile.mkdtemp()), Path(tempfile.mkdtemp()))
         self.assertEqual(["C1", "C2"], proof["case_scope"])

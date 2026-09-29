@@ -12,11 +12,11 @@ from pathlib import Path
 import tempfile
 
 try:
-    from . import autocode_goals as goals, autocode_planning_graph as graph, autocode_support as support
+    from . import autocode_goals as goals, autocode_planning_graph as graph, autocode_util as util
 except ImportError:
     import autocode_goals as goals
     import autocode_planning_graph as graph
-    import autocode_support as support
+    import autocode_util as util
 
 
 STAGE_STEMS = {
@@ -77,7 +77,7 @@ def verify_predecessor(state, stage, run_dir):
         path = _safe_path(run_dir, identity["path"])
         if not path.is_file():
             raise ValueError(f"Planning predecessor {previous_stage} {kind} is missing")
-        if support.file_hash(path) != identity["sha256"]:
+        if util.file_hash(path) != identity["sha256"]:
             raise ValueError(f"Planning predecessor {previous_stage} {kind} hash does not match state")
         verified[kind] = {**identity, "absolute_path": str(path)}
     verified["stage"] = previous_stage
@@ -171,7 +171,7 @@ def prepare(state, stage, report, *, origin=None, run_dir=None, input_override=N
         "graph_node_diffs": node_diffs,
         "graph_edge_diffs": edge_diffs,
     }
-    support.validate_schema(delta, goals.DELTA_SCHEMA)
+    util.validate_schema(delta, goals.DELTA_SCHEMA)
     delta_path = artifact_path.removesuffix(".json") + ".delta.json"
     delta_bytes = _canonical_bytes(delta)
     delta_identity = _identity(delta_path, delta_bytes)
@@ -234,11 +234,11 @@ def prepare_user_cli_edit(state, *, run_dir=None):
     artifact_identity = prior["artifact"]
     if run_dir is not None:
         path = _safe_path(run_dir, artifact_identity["path"])
-        if not path.is_file() or support.file_hash(path) != artifact_identity["sha256"]:
+        if not path.is_file() or util.file_hash(path) != artifact_identity["sha256"]:
             raise ValueError("v2 --edit-goal prior plan artifact hash does not match state")
         delta_identity = prior.get("delta", {})
         delta_path = _safe_path(run_dir, delta_identity.get("path", ""))
-        if not delta_path.is_file() or support.file_hash(delta_path) != delta_identity.get("sha256"):
+        if not delta_path.is_file() or util.file_hash(delta_path) != delta_identity.get("sha256"):
             raise ValueError("v2 --edit-goal prior plan delta hash does not match state")
         prior_value = json.loads(path.read_text())
     else:
@@ -278,7 +278,7 @@ def flush_pending(state, run_dir):
                 identity = entry[kind]
                 path = _safe_path(run_dir, identity["path"])
                 if path.exists():
-                    if not path.is_file() or support.file_hash(path) != identity["sha256"]:
+                    if not path.is_file() or util.file_hash(path) != identity["sha256"]:
                         raise ValueError(f"Refusing to overwrite unrecorded planning artifact {identity['path']}")
                     continue
                 atomic_write(path, entry[data_key])
@@ -287,7 +287,7 @@ def flush_pending(state, run_dir):
             identity = entry["identity"]
             path = _safe_path(run_dir, identity["path"])
             if path.exists():
-                current_hash = support.file_hash(path) if path.is_file() else ""
+                current_hash = util.file_hash(path) if path.is_file() else ""
                 if current_hash == identity["sha256"]:
                     continue
                 if not entry.get("replaces_sha256") or current_hash != entry["replaces_sha256"]:
@@ -324,7 +324,7 @@ def rollback_created(created, run_dir):
         path = _safe_path(run_dir, identity["path"])
         if not path.exists():
             continue
-        if not path.is_file() or support.file_hash(path) != identity["sha256"]:
+        if not path.is_file() or util.file_hash(path) != identity["sha256"]:
             raise ValueError(f"Refusing to remove changed planning artifact {identity['path']}")
         if "previous_bytes" in identity:
             atomic_write(path, identity["previous_bytes"])
@@ -366,9 +366,9 @@ def reconcile_orphans(state, run_dir):
         if relative in referenced:
             continue
         archive.mkdir(parents=True, exist_ok=True)
-        destination = archive / f"{path.stem}-{support.file_hash(path)[:12]}{path.suffix}"
+        destination = archive / f"{path.stem}-{util.file_hash(path)[:12]}{path.suffix}"
         if destination.exists():
-            if not destination.is_file() or support.file_hash(destination) != support.file_hash(path):
+            if not destination.is_file() or util.file_hash(destination) != util.file_hash(path):
                 raise ValueError(f"Refusing to overwrite orphan archive {destination.relative_to(run_dir)}")
             path.unlink()
             reconciled.append({"path": relative, "archive": str(destination.relative_to(run_dir)), "action": "archived"})

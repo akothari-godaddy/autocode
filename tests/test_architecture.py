@@ -11,22 +11,20 @@ from pathlib import Path
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
 # Modules caught in one import cycle with autocode.py on 2026-09-26, plus those master
-# brought in with it on 2026-09-28 (d0b0ce9, 332c318). Taking a module out of the
+# brought in with it on 2026-09-28 (d0b0ce9, 332c318), less those that have left it since
+# (2026-09-29: the shared helpers moved to autocode_util). Taking a module out of the
 # cycle is progress (remove it here); adding one fails.
 TANGLED = frozenset({
-    "autocode", "autocode_baseline", "autocode_builder_policy", "autocode_carryforward",
-    "autocode_planning_graph", "autocode_program", "autocode_verify",
-    "autocode_planning_artifacts", "autocode_regression", "autocode_resolver_human", "autocode_reviewer_fallback",
-    "autocode_context", "autocode_dispatch", "autocode_failures", "autocode_figma",
-    "autocode_findings", "autocode_goals", "autocode_interventions", "autocode_milestones",
-    "autocode_orchestrator", "autocode_planning", "autocode_registry", "autocode_resolver_runtime",
-    "autocode_status", "autocode_support", "autocode_tasks", "autocode_ui", "autocode_workflow",
-    "autopilot", "units.autocode", "units.autoplanner", "units.autoresolver", "units.autoreview", "units.common",
+    "autocode", "autocode_carryforward", "autocode_dispatch", "autocode_findings", "autocode_goals",
+    "autocode_interventions", "autocode_milestones", "autocode_planning", "autocode_planning_artifacts",
+    "autocode_planning_graph", "autocode_regression", "autocode_resolver_human", "autocode_resolver_runtime",
+    "autocode_reviewer_fallback", "autocode_status", "autocode_support", "autocode_workflow", "autopilot",
+    "units.autocode", "units.autoplanner", "units.autoresolver", "units.autoreview", "units.common",
 })
 
 # Line counts on 2026-09-28, after merging master at 24617cc and moving subcommand dispatch out of
 # autocode.py. Lower these when a module shrinks.
-MAX_LINES = {"autocode.py": 3796, "autocode_goals.py": 1903, "autocode_support.py": 1077, "autopilot.py": 1194}
+MAX_LINES = {"autocode.py": 3796, "autocode_goals.py": 1903, "autocode_support.py": 923, "autopilot.py": 1194}
 
 
 def source_modules() -> dict[str, Path]:
@@ -82,6 +80,10 @@ class ArchitectureTests(unittest.TestCase):
         self.assertFalse(cycle - TANGLED, "these modules now import, directly or indirectly, a module that imports "
                          "them back through autocode.py; depend on lower-level modules instead: "
                          f"{sorted(cycle - TANGLED)}")
+
+    def test_the_shared_helpers_import_nothing_from_autocode(self):
+        # autocode_util is the bottom layer; one AutoCode import would drag its 18 users back into the cycle.
+        self.assertEqual(set(), import_graph()["autocode_util"])
 
     def test_largest_modules_do_not_grow(self):
         for name, limit in MAX_LINES.items():

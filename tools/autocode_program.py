@@ -30,10 +30,10 @@ import threading
 import uuid
 
 try:
-    from . import autocode_support as support, autocode_workspaces as workspaces
+    from . import autocode_util as util, autocode_workspaces as workspaces
     from . import autocode_goals as goals, autocode_planning_graph as graph
 except ImportError:
-    import autocode_support as support
+    import autocode_util as util
     import autocode_workspaces as workspaces
     import autocode_goals as goals
     import autocode_planning_graph as graph
@@ -267,14 +267,14 @@ def derive_manifest(state, *, name=None, source_run=None):
 
 def new_state(source, manifest, project, key):
     return {"version": 1, "name": manifest["name"], "key": key, "manifest": str(source),
-            "manifest_sha256": support.file_hash(source), "project_workspace": str(project),
-            "created_at": support.now(), "status": "RUNNING", "integration": None,
+            "manifest_sha256": util.file_hash(source), "project_workspace": str(project),
+            "created_at": util.now(), "status": "RUNNING", "integration": None,
             "workstreams": {row["id"]: {"status": "PENDING", "kind": row["kind"]} for row in manifest["workstreams"]},
             "events": []}
 
 
 def note(state, event, **detail):
-    state.setdefault("events", []).append({"at": support.now(), "event": event, **detail})
+    state.setdefault("events", []).append({"at": util.now(), "event": event, **detail})
 
 
 def _worktree(project, name, branch, base):
@@ -391,7 +391,7 @@ def refresh(record):
         return
     if status in TERMINAL_CODE:
         if record["status"] not in ("COMPLETE", "CONFLICT"):
-            record.update(status="COMPLETE", finished_at=support.now())
+            record.update(status="COMPLETE", finished_at=util.now())
     elif status == "RUNNING" and record["status"] in ("COMPLETE", "CONFLICT"):
         record["status"] = "WAITING"
         record.pop("finished_at", None)
@@ -434,16 +434,16 @@ def launch(project, program_dir, manifest, workstream, record, state, options):
     with STATE_LOCK:
         if not record.get("run_dir"):
             record.setdefault("runs_before", [str(p) for p in workspace.glob(".autocode/runs/*")])
-        record.update(status="RUNNING", started_at=support.now(), command=command)
+        record.update(status="RUNNING", started_at=util.now(), command=command)
         record.pop("error", None)
         # Save the worktree and discovery boundary before launch, so an interrupted
         # controller can recover its child checkpoint instead of duplicating it.
-        support.atomic_json(program_dir / "state.json", state)
+        util.atomic_json(program_dir / "state.json", state)
     result = subprocess.run(command, cwd=workspace, capture_output=True, text=True)
     (artifact / "stdout.log").write_text(result.stdout)
     (artifact / "stderr.log").write_text(result.stderr)
     with STATE_LOCK:
-        record.update(exit_code=result.returncode, last_invocation_at=support.now())
+        record.update(exit_code=result.returncode, last_invocation_at=util.now())
         refresh(record)
         if record["status"] == "RUNNING":
             record["status"] = "FAILED" if result.returncode not in (0, 2) or not record.get("run_dir") else "WAITING"
@@ -456,7 +456,7 @@ def check_ownership(workstream, record):
     """Check the delivered diff, including prior commits, deletions and new files."""
     workspace = Path(record["workspace"])
     if workspaces.git(workspace, "rev-parse", "--abbrev-ref", "HEAD") != record["branch"]:
-        raise support.Paused("PAUSED_OWNERSHIP", f"Workstream {workstream['id']} is not on its recorded branch; "
+        raise util.Paused("PAUSED_OWNERSHIP", f"Workstream {workstream['id']} is not on its recorded branch; "
                              "restore the worktree to its recorded branch before integrating")
     paths = set()
     for args in (("diff", "--name-only", "--no-renames", "-z", record["base_commit"], "HEAD", "--"),
@@ -469,7 +469,7 @@ def check_ownership(workstream, record):
         paths.update(found)
     outside = sorted(p for p in paths if not any(p == own or p.startswith(own + "/") for own in workstream["owns"]))
     if outside:
-        raise support.Paused("PAUSED_OWNERSHIP", f"Workstream {workstream['id']} changed paths outside owns: "
+        raise util.Paused("PAUSED_OWNERSHIP", f"Workstream {workstream['id']} changed paths outside owns: "
                              f"{', '.join(outside)}. Remove those changes from both its branch and worktree, "
                              "then rerun; nothing was merged")
 
@@ -477,7 +477,7 @@ def check_ownership(workstream, record):
 def _commit_all(workspace, message):
     """Commit every change except runner metadata; return the new commit or None when clean."""
     if workspaces.git(workspace, "diff", "--cached", "--name-only", "--", ".autocode"):
-        raise support.Paused("PAUSED_METADATA", "Runner metadata is staged; unstage .autocode before integrating")
+        raise util.Paused("PAUSED_METADATA", "Runner metadata is staged; unstage .autocode before integrating")
     workspaces.git(workspace, "add", "-A", "--", ".", ":!.autocode")
     if not workspaces.git(workspace, "diff", "--cached", "--name-only"):
         return None
@@ -489,26 +489,26 @@ def integrate(state, workstream, record):
     """Merge one completed workstream onto the integration branch; pause on conflict."""
     integration = Path(state["integration"]["workspace"])
     if workspaces.git(integration, "rev-parse", "--abbrev-ref", "HEAD") != state["integration"]["branch"]:
-        raise support.Paused("PAUSED_INTEGRATION_DIRTY", "Restore the integration worktree to its recorded branch before merging")
+        raise util.Paused("PAUSED_INTEGRATION_DIRTY", "Restore the integration worktree to its recorded branch before merging")
     title = workstream["brief"].strip().splitlines()[0][:72]
     if workstream["kind"] == "integration":
         base = record.get("base_commit", state["integration"]["base_commit"])
         if workspaces.git(integration, "diff", "--name-only", base, "HEAD", "--", ".autocode"):
-            raise support.Paused("PAUSED_METADATA", "Integration committed runner metadata; remove that metadata diff before resuming")
+            raise util.Paused("PAUSED_METADATA", "Integration committed runner metadata; remove that metadata diff before resuming")
         commit = _commit_all(integration, f"Program {state['name']}: {workstream['id']} - {title}")
-        record.update(status="MERGED", merged_commit=commit or integration_head(state), merged_at=support.now(),
+        record.update(status="MERGED", merged_commit=commit or integration_head(state), merged_at=util.now(),
                       merge_note="committed on the integration branch" if commit else "no source changes")
         note(state, "workstream_merged", workstream=workstream["id"], commit=record["merged_commit"])
         return
     if workspaces.git(integration, "status", "--porcelain", "--untracked-files=no"):
-        raise support.Paused("PAUSED_INTEGRATION_DIRTY",
+        raise util.Paused("PAUSED_INTEGRATION_DIRTY",
                              f"The integration worktree {integration} has uncommitted tracked changes; commit or restore them")
     check_ownership(workstream, record)
     workspace = Path(record["workspace"])
     commit = _commit_all(workspace, f"Program {state['name']}: {workstream['id']} - {title}")
     check_ownership(workstream, record)
     if commit is None and workspaces.git(workspace, "rev-parse", "--verify", "HEAD") == record.get("base_commit"):
-        record.update(status="MERGED", merged_commit=integration_head(state), merged_at=support.now(),
+        record.update(status="MERGED", merged_commit=integration_head(state), merged_at=util.now(),
                       merge_note="no source changes")
         note(state, "workstream_merged", workstream=workstream["id"], commit=record["merged_commit"], changes=False)
         return
@@ -519,11 +519,11 @@ def integrate(state, workstream, record):
         subprocess.run(["git", "-C", str(integration), "merge", "--abort"], capture_output=True, text=True)
         record.update(status="CONFLICT", conflict=(result.stdout + result.stderr).strip()[-2000:])
         note(state, "merge_conflict", workstream=workstream["id"], branch=record["branch"])
-        raise support.Paused(
+        raise util.Paused(
             "PAUSED_MERGE_CONFLICT",
             f"Merging workstream {workstream['id']} ({record['branch']}) into {state['integration']['branch']} conflicts. "
             f"Resolve it by hand in {integration} (git merge --no-ff {record['branch']}), commit, then rerun the program.")
-    record.update(status="MERGED", merged_commit=integration_head(state), merged_at=support.now())
+    record.update(status="MERGED", merged_commit=integration_head(state), merged_at=util.now())
     note(state, "workstream_merged", workstream=workstream["id"], commit=record["merged_commit"])
 
 
@@ -532,12 +532,12 @@ def adopt_manual_merge(state, workstream, record):
     integration = Path(state["integration"]["workspace"])
     if (workspaces.git(integration, "rev-parse", "--abbrev-ref", "HEAD") != state["integration"]["branch"]
             or workspaces.git(integration, "status", "--porcelain", "--untracked-files=no")):
-        raise support.Paused("PAUSED_INTEGRATION_DIRTY", "Finish the resolution on the recorded integration branch before resuming")
+        raise util.Paused("PAUSED_INTEGRATION_DIRTY", "Finish the resolution on the recorded integration branch before resuming")
     check_ownership(workstream, record)
     result = subprocess.run(["git", "-C", str(integration), "merge-base", "--is-ancestor", record["branch"], "HEAD"],
                             capture_output=True, text=True)
     if result.returncode == 0:
-        record.update(status="MERGED", merged_commit=integration_head(state), merged_at=support.now(),
+        record.update(status="MERGED", merged_commit=integration_head(state), merged_at=util.now(),
                       merge_note="conflict resolved manually")
         record.pop("conflict", None)
         note(state, "workstream_merged", workstream=workstream["id"], commit=record["merged_commit"], manual=True)
@@ -613,7 +613,7 @@ def summarize(manifest, state, state_path):
 def execute(options, source, manifest, project, program_dir, state_path):
     state = json.loads(state_path.read_text()) if state_path.is_file() else new_state(
         source, manifest, project, program_key(manifest))
-    if state["manifest_sha256"] != support.file_hash(source) or state["project_workspace"] != str(project):
+    if state["manifest_sha256"] != util.file_hash(source) or state["project_workspace"] != str(project):
         raise ValueError(f"Program manifest or project differs from its saved checkpoint {state_path}; "
                          "a saved program's manifest is frozen. Use a new program name to start over")
     by_id = {row["id"]: row for row in manifest["workstreams"]}
@@ -659,7 +659,7 @@ def execute(options, source, manifest, project, program_dir, state_path):
             for workstream, record in batch:
                 if (workstream["kind"] == "integration" and record["status"] == "PENDING"
                         and workspaces.git(state["integration"]["workspace"], "status", "--porcelain", "--untracked-files=no")):
-                    raise support.Paused("PAUSED_INTEGRATION_DIRTY", "Commit existing integration changes before starting its run")
+                    raise util.Paused("PAUSED_INTEGRATION_DIRTY", "Commit existing integration changes before starting its run")
             launched.update(workstream["id"] for workstream, _ in batch)
             with ThreadPoolExecutor(max_workers=options["max_parallel"]) as pool:
                 futures = {pool.submit(launch, project, program_dir, manifest, workstream, record, state, options): workstream
@@ -671,9 +671,9 @@ def execute(options, source, manifest, project, program_dir, state_path):
                     except Exception as error:  # noqa: BLE001 - keep the program state honest
                         with STATE_LOCK:
                             state["workstreams"][workstream["id"]].update(status="FAILED", error=str(error),
-                                                                           finished_at=support.now())
+                                                                           finished_at=util.now())
                     save()
-    except support.Paused as pause:
+    except util.Paused as pause:
         note(state, "paused", status=pause.status, reason=str(pause))
         state["pause"] = {"status": pause.status, "reason": str(pause)}
         result = summarize(manifest, state, state_path)
@@ -690,7 +690,7 @@ def execute(options, source, manifest, project, program_dir, state_path):
 
 def _save(state_path, state):
     with STATE_LOCK:
-        support.atomic_json(state_path, state)
+        util.atomic_json(state_path, state)
 
 
 # --- CLI ------------------------------------------------------------------------
@@ -789,9 +789,9 @@ def cli_run(argv, *, status_only=False):
     options = {"max_parallel": args.max_parallel, "authorize_deployment": args.authorize_deployment,
                "engine": args.engine, "passthrough": passthrough, "retry_workstreams": args.retry_workstream}
     try:
-        with support.workspace_lock(program_dir):
+        with util.workspace_lock(program_dir):
             return execute(options, source, manifest, project, program_dir, state_path)
-    except (support.Paused, ValueError) as error:
+    except (util.Paused, ValueError) as error:
         parser.error(str(error))
 
 

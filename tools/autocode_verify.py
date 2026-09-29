@@ -37,9 +37,9 @@ import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
 
 try:
-    from . import autocode_support as support, autocode_agent_env as agent_env
+    from . import autocode_util as util, autocode_agent_env as agent_env
 except ImportError:
-    import autocode_support as support, autocode_agent_env as agent_env
+    import autocode_util as util, autocode_agent_env as agent_env
 
 PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"
 # Directories that hold tests wherever they appear, and ones that do only at the repository root:
@@ -695,7 +695,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
     """
     workspace, run_dir = Path(workspace), Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
-    before = support.snapshot(workspace)["revision"]
+    before = util.snapshot(workspace)["revision"]
     changes = changed_files(workspace, base)
     tests = [p for p in changes if is_test_path(p)]
     sources = [p for p in changes if not is_test_path(p)]
@@ -778,7 +778,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
     finally:
         for tree in trees.values():
             remove_tree(workspace, tree)
-    after = support.snapshot(workspace)["revision"]
+    after = util.snapshot(workspace)["revision"]
     if after != before:
         unverified.append("The candidate changed while it was being verified; verify again")
     stats = diff_stats(workspace, base, changes)

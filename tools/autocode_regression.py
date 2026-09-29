@@ -32,13 +32,13 @@ import time
 from pathlib import Path
 
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_verify as verify
+    from . import autocode_util as util, autocode_goals as goals, autocode_verify as verify
     from . import autocode_workspaces as workspaces
     from . import autocode_bug_job as bug_job, autocode_test_cases as test_cases
 except ImportError:
     import autocode_bug_job as bug_job
     import autocode_test_cases as test_cases
-    import autocode_support as support
+    import autocode_util as util
     import autocode_goals as goals
     import autocode_verify as verify
     import autocode_workspaces as workspaces
@@ -80,12 +80,12 @@ def settings(state):
 def _baseline(state, workspace, run_dir, base, framework, suite, dependencies):
     cached = state.get("regression_baseline") or {}
     if cached.get("base") == base and cached.get("command") == suite and Path(cached.get("path", "")).is_file():
-        return support.read(cached["path"])
+        return util.read(cached["path"])
     result = verify.baseline(workspace, base, Path(run_dir) / "regression", framework=framework,
                              suite_command=suite, dependencies_from=dependencies,
                              timeout=settings(state).get("test_timeout", verify.DEFAULT_TIMEOUT))
     path = Path(run_dir) / "regression" / "baseline.json"
-    support.atomic_json(path, result)
+    util.atomic_json(path, result)
     state["regression_baseline"] = {"base": base, "command": suite, "path": str(path), "health": result["health"]}
     return result
 
@@ -93,7 +93,7 @@ def _baseline(state, workspace, run_dir, base, framework, suite, dependencies):
 def prove(state, workspace, run_dir):
     """Run (or reuse) the proof for the current source; return its summary. Launches no model."""
     workspace = Path(workspace)
-    current = support.snapshot(workspace)["revision"]
+    current = util.snapshot(workspace)["revision"]
     saved = state.get("regression_proof") or {}
     scope = sorted(case["id"] for case in cases(state))
     # The cases due grow as milestones are accepted; a proof for a smaller scope is stale.
@@ -123,19 +123,19 @@ def prove(state, workspace, run_dir):
                                timeout=options.get("test_timeout", verify.DEFAULT_TIMEOUT),
                                new_behavior=goals.task_kind(state) != "bugfix")
         path = out / "verification.json"
-        support.atomic_json(path, result)
+        util.atomic_json(path, result)
         proof = {key: result.get(key) for key in SUMMARY_KEYS}
         check_cases(proof, cases(state))
         proof["checks"] = {label: {"command": receipt["command"], "exit_code": receipt["exit_code"],
                                    "timed_out": receipt["timed_out"], "output": receipt["output"]}
                            for label, receipt in result["checks"].items()}
-    proof.update(case_scope=scope, path=str(path) if path else None, proved_at=support.now(),
+    proof.update(case_scope=scope, path=str(path) if path else None, proved_at=util.now(),
                  duration_seconds=round(time.monotonic() - started, 1))
     state["regression_proof"] = proof
     state.setdefault("regression_proofs", []).append(
         {k: proof.get(k) for k in ("verdict", "source_revision", "path", "proved_at", "duration_seconds")})
     # A visible, runner-owned step in the stage history: no provider, no tokens.
-    record = {"stage": STAGE, "role": "runner", "iteration": state.get("iteration"), "finished_at": support.now(),
+    record = {"stage": STAGE, "role": "runner", "iteration": state.get("iteration"), "finished_at": util.now(),
               "runner_owned": True, "engine": "runner", "duration_seconds": proof["duration_seconds"],
               "metrics": {"provider_tokens": {"input_tokens": 0, "cached_input_tokens": 0, "output_tokens": 0,
                                               "reasoning_output_tokens": 0}},

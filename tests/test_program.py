@@ -409,7 +409,7 @@ class ExecutionTests(unittest.TestCase):
         (self.project / ".autocode").mkdir()
         (self.project / ".autocode/state.json").write_text("{}")
         git(self.project, "add", ".autocode/state.json")
-        with self.assertRaisesRegex(program.support.Paused, "metadata is staged"):
+        with self.assertRaisesRegex(program.util.Paused, "metadata is staged"):
             program._commit_all(self.project, "Do not commit metadata")
         self.assertEqual(self.head, git(self.project, "rev-parse", "HEAD"))
 
@@ -449,7 +449,7 @@ class ExecutionTests(unittest.TestCase):
 
     def test_reopened_child_loses_cached_completion_before_merging(self):
         path = self.write_manifest(manifest())
-        pause = program.support.Paused("PAUSED_METADATA", "Inspect staged files")
+        pause = program.util.Paused("PAUSED_METADATA", "Inspect staged files")
         with patch.object(program, "_commit_all", side_effect=pause):
             _, result = self.run_program(path)
         record = result["workstreams"][0]

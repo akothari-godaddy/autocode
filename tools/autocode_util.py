@@ -1,0 +1,176 @@
+"""Standard-library helpers every layer of AutoCode shares: the clock, hashing,
+atomic JSON files, workspace and run locks, source snapshots and the small JSON
+Schema subset used by reports.
+
+The bottom layer (AGENTS.md): it imports nothing from AutoCode, so any module can
+use it without joining the import cycle through autocode.py.
+"""
+from __future__ import annotations
+
+import contextlib
+import copy
+import datetime as dt
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+
+def now():
+    return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def digest(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def file_hash(path):
+    h = hashlib.sha256()
+    with Path(path).open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def atomic_json(path, value):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".checkpoint-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(tmp, path)
+        directory = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def read(path):
+    return json.loads(Path(path).read_text())
+
+
+class Paused(RuntimeError):
+    def __init__(self, status, reason):
+        super().__init__(reason)
+        self.status = status
+
+
+@contextlib.contextmanager
+def workspace_lock(workspace):
+    path = Path(workspace) / ".autocode" / "writer.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Paused("PAUSED_WORKSPACE_BUSY", "Another autocode runner holds this workspace lock")
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+@contextlib.contextmanager
+def run_lock(run_dir):
+    """Serialize mutations for one run without blocking independent runs."""
+    path = Path(run_dir) / "writer.lock"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a+") as handle:
+        try:
+            fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise Paused("PAUSED_RUN_BUSY", "Another autocode runner holds this run lock")
+        try:
+            yield
+        finally:
+            fcntl.flock(handle, fcntl.LOCK_UN)
+
+
+def snapshot(workspace):
+    """Hash current source content, executable modes and nested Git worktrees."""
+    root = Path(workspace)
+    names = subprocess.check_output(
+        ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"], cwd=root
+    ).decode().split("\0")
+    files = {}
+    for name in sorted(set(filter(None, names))):
+        if (name.startswith((".autocode/", ".autocode-ui/"))
+                or "/__pycache__/" in f"/{name}" or name.endswith(".pyc")):
+            continue
+        path = root / name
+        if path.is_symlink():
+            files[name] = "symlink:" + os.readlink(path)
+        elif path.is_file():
+            files[name] = ("executable:" if path.stat().st_mode & 0o111 else "") + file_hash(path)
+        elif path.is_dir():
+            files[name] = ("submodule:" + snapshot(path)["revision"] if (path / ".git").exists()
+                           else "uninitialized-submodule")
+        elif not path.exists():
+            files[name] = "deleted"
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+    return {"head": head, "files": files, "revision": digest({"head": head, "files": files})}
+
+
+def changed_paths(before, after):
+    return sorted(p for p in before["files"].keys() | after["files"].keys()
+                  if before["files"].get(p) != after["files"].get(p))
+
+
+def model_output_schema(schema):
+    """Strict generation schema; retain permissive schemas for saved reports.
+
+    Codex structured output requires every object property to be required.
+    Requiring fields in new responses must not invalidate sealed old contracts
+    or mutate shared schema constants (e.g. legacy optional milestone ownership).
+    """
+    result = copy.deepcopy(schema)
+    def visit(node):
+        if isinstance(node, dict):
+            if node.get("type") == "object":
+                node["required"] = list(node.get("properties", {}))
+                node["additionalProperties"] = False
+            for child in node.values():
+                visit(child)
+        elif isinstance(node, list):
+            for child in node:
+                visit(child)
+    visit(result)
+    return result
+
+
+def validate_schema(value, schema, where="$"):
+    """The small, strict JSON Schema subset used by our checked-in verdicts."""
+    kind = schema.get("type")
+    types = {"object": dict, "array": list, "string": str, "integer": int, "boolean": bool, "null": type(None)}
+    if kind and (not isinstance(value, types[kind]) or (kind == "integer" and isinstance(value, bool))):
+        raise ValueError(f"{where}: expected {kind}")
+    if "enum" in schema and value not in schema["enum"]:
+        raise ValueError(f"{where}: invalid enum")
+    if isinstance(value, dict):
+        for key in schema.get("required", []):
+            if key not in value:
+                raise ValueError(f"{where}: missing {key}")
+        props = schema.get("properties", {})
+        if schema.get("additionalProperties") is False and value.keys() - props.keys():
+            raise ValueError(f"{where}: unexpected fields")
+        for key, child in value.items():
+            if key in props:
+                validate_schema(child, props[key], f"{where}.{key}")
+    if isinstance(value, list):
+        if len(value) < schema.get("minItems", 0):
+            raise ValueError(f"{where}: too few items")
+        if len(value) > schema.get("maxItems", len(value)):
+            raise ValueError(f"{where}: too many items")
+        for index, child in enumerate(value):
+            validate_schema(child, schema.get("items", {}), f"{where}[{index}]")

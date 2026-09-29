@@ -264,7 +264,7 @@ class ReportCaptureTest(unittest.TestCase):
                 snapshot = {"revision": revision, "files": {"greet.py": sha("same contents")}}
                 with mock.patch.object(live_trial, "Bundle", return_value=mock.Mock(dir=folder)), \
                         mock.patch.object(live_trial, "make_workspace", return_value=folder), \
-                        mock.patch.object(live_trial.support, "snapshot", return_value=snapshot), \
+                        mock.patch.object(live_trial.util, "snapshot", return_value=snapshot), \
                         mock.patch.object(live_trial, "drive", return_value={"state": {"status": "TASK_COMPLETE"}}), \
                         mock.patch.object(live_trial, "judge", return_value=live_scenarios.OracleResult("PASS", "fixture", [])), \
                         mock.patch.object(live_trial, "source_revision", return_value={}), mock.patch("sys.stdout"):
@@ -280,14 +280,14 @@ class ReportCaptureTest(unittest.TestCase):
             snapshot = {"revision": sha("commit"), "files": {"file": sha("content")}}
             with mock.patch.object(live_trial, "Bundle", return_value=mock.Mock(dir=folder)), \
                     mock.patch.object(live_trial, "make_workspace", return_value=folder), \
-                    mock.patch.object(live_trial.support, "snapshot", return_value=snapshot), \
+                    mock.patch.object(live_trial.util, "snapshot", return_value=snapshot), \
                     mock.patch.object(live_trial, "drive", side_effect=live_trial.TrialError("setup failed")), \
                     mock.patch.object(live_trial, "_discover_run_dir", return_value=None), \
                     mock.patch.object(live_trial, "source_revision", return_value={}), mock.patch("sys.stderr"):
                 self.assertEqual(1, live_trial.main(["LIVE-01", "--workspace", str(folder)]))
             report = json.loads((folder / "live-trial.json").read_text())
             self.assertEqual("ERROR", report["verdict"])
-            self.assertEqual(live_trial.support.digest(snapshot["files"]), report["measurement"]["baseline_content_sha256"])
+            self.assertEqual(live_trial.util.digest(snapshot["files"]), report["measurement"]["baseline_content_sha256"])
             self.assertIsNone(report["measurement"]["usage"]["estimated_api_equivalent_usd"])
 
     def test_report_embeds_usage_without_reading_or_mutating_workspace(self):

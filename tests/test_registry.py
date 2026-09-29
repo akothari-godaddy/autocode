@@ -183,7 +183,7 @@ class RegistryTests(unittest.TestCase):
         registry.register_run(workspace, run, state)
         before = registry.registry_path().read_bytes()
         second_workspace, second_run, second_state = self.fixture("second-workspace")
-        with patch.object(registry.support, "atomic_json", side_effect=OSError("fixture interruption")):
+        with patch.object(registry.util, "atomic_json", side_effect=OSError("fixture interruption")):
             with self.assertRaisesRegex(registry.RegistryError, "update failed"):
                 registry.register_run(second_workspace, second_run, second_state)
         self.assertEqual(before, registry.registry_path().read_bytes())
@@ -206,11 +206,11 @@ import json, os, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
 import autocode_registry as registry
-old = registry.support.atomic_json
+old = registry.util.atomic_json
 def interrupted(path, value):
     old(path, value)
     os._exit(75)
-registry.support.atomic_json = interrupted
+registry.util.atomic_json = interrupted
 state = json.loads((Path(sys.argv[3]) / 'state.json').read_text())
 registry.register_run(Path(sys.argv[2]), Path(sys.argv[3]), state)
 """

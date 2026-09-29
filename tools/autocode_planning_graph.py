@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 
 try:
-    from . import autocode_support as support
+    from . import autocode_util as util
 except ImportError:
-    import autocode_support as support
+    import autocode_util as util
 
 
 GRAPH_PATH = "planning/graph.json"
@@ -120,7 +120,7 @@ def consume(state, run_dir):
     if graph_identity.get("path") != GRAPH_PATH:
         return {"status": "tampered", "reason": "Graph identity does not use the canonical path"}
     path = Path(run_dir) / GRAPH_PATH
-    if not path.is_file() or support.file_hash(path) != graph_identity.get("sha256"):
+    if not path.is_file() or util.file_hash(path) != graph_identity.get("sha256"):
         return {"status": "tampered", "reason": "Graph bytes do not match the finalized identity"}
     try:
         payload = json.loads(path.read_text())
