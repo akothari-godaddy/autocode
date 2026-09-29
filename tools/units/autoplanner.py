@@ -6,6 +6,7 @@ import json
 import os
 from pathlib import Path
 import re
+import uuid
 
 try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
@@ -65,7 +66,9 @@ full output as evidence in the run's own directory under .autocode/, which the r
 never a deliverable, never an affected path and needs no permission. A fail-first criterion is met in the
 workspace itself: add the regression test, capture it failing against the unmodified code, make the fix,
 capture it passing. Do not plan scratch copies outside the workspace, and do not treat capture as a
-missing prerequisite or ask the user to authorize it.
+missing prerequisite or ask the user to authorize it. Running the project's tests also creates files
+(__pycache__/, *.pyc, caches) and the runner keeps its own files under .autocode/: never cite these as
+evidence, and any check of which files changed must ignore them.
 """
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
@@ -310,10 +313,29 @@ def set_review_call_limit(state, limit):
         "stage": state["next_stage"], "contract_token": goals.token(state["goal_contract"])})
 
 
+def refund_unreported(state, planning):
+    """Only a review that returned a report counts against the allowance (user decision, 2026-09-29).
+
+    A call is charged at admission, before anyone knows how it ends. An attempt that timed out or whose
+    provider failed returned no review, so its call is given back here, before the next admission. The
+    repeated-failure limit, not this allowance, stops a review that keeps failing. planning["review_charges"]
+    holds the charge IDs of this planning cycle's ordinarily admitted calls (a recovery grant is never
+    refunded), so a restarted cycle never refunds an earlier cycle's attempts.
+    """
+    charges = planning.get("review_charges") or []
+    for row in state.get("stages", []):
+        if (row.get("planning_review_charge") in charges
+                and (row.get("timed_out") or (type(row.get("exit_code")) is int and row["exit_code"] != 0))):
+            charges.remove(row["planning_review_charge"])
+            planning["astra_calls"] -= 1
+            row["planning_review_refunded"] = True
+
+
 def charge(state, stage, record=None, workspace=None):
     if stage not in ("astra_challenge", "astra_finalize", "plan_review", "plan_finalize"):
         return
     planning = state["planning"]
+    refund_unreported(state, planning)
     limit = review_call_limit(state)
     if limit and planning["astra_calls"] >= limit:
         if planning.get('recovery_review_grants'):
@@ -338,11 +360,17 @@ def charge(state, stage, record=None, workspace=None):
                        "Retained requirements and review evidence are unchanged; no approval is implied. "
                        "User feedback is needed only if the plan or requirements must change.")
     planning["astra_calls"] += 1
+    if record is not None:
+        record["planning_review_charge"] = uuid.uuid4().hex
+        planning.setdefault("review_charges", []).append(record["planning_review_charge"])
 
 
 def _coverage(rows, concerns):
-    ids = [row["concern_id"] for row in rows]
-    if len(ids) != len(set(ids)) or set(ids) != {c["id"] for c in concerns}:
+    # A row for something that is not a concern (a question ID, say) answers nothing and is not an
+    # error; every concern still needs exactly one row.
+    concern_ids = {c["id"] for c in concerns}
+    ids = [row["concern_id"] for row in rows if row["concern_id"] in concern_ids]
+    if len(ids) != len(set(ids)) or set(ids) != concern_ids:
         raise ValueError("Every plan-review concern needs exactly one response/decision using its ID")
     for row in rows:
         if any(isinstance(value, str) and not value.strip() for value in row.values()):
@@ -544,6 +572,38 @@ blocking concern citing the obligation id. At final review, any obligation still
 asked as a decision question under its id, and initial_task.kind must be "none". Otherwise use
 [] for remediation_records and obligation_decisions.
 """
+
+
+def split_code_ref(root, ref):
+    """(path, line citation) of a cited source entry. A line citation follows a colon ("path:12",
+    "path:12-20 why"). Prose after an existing path ("path — why", "path: why") is the model's explanation,
+    not a malformed citation: the runner checks the file, so the entry is not rejected for it."""
+    token = ref.split(maxsplit=1)[0] if ref.strip() else ref
+    if token != ref and ":" not in token and (Path(root) / token).is_file():
+        return token, ""
+    head, _, rest = ref.partition(":")
+    if rest[:1].isspace() and (Path(root) / head).is_file():
+        return head, ""
+    return head, rest
+
+
+# Paths the runner or the tools own: a plan may not cite them as evidence. They are transient (a run's
+# active-processes.json is gone when the run ends), so a plan built on one breaks when the citation is
+# re-read (VALIDATION.md, 2026-09-26: a bugfix plan cited .autocode/active-processes.json).
+RUNNER_OWNED_PARTS = (".autocode", ".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
+
+
+def cited_file(root, path, field, ref):
+    """The workspace file a citation names, or ValueError: it must exist inside the workspace and must not
+    be one the runner or a tool owns or generates."""
+    root = Path(root).resolve()
+    target = (root / path).resolve()
+    if not target.is_relative_to(root) or not target.is_file():
+        raise ValueError(f"{field} entry {ref} is not a file in the workspace")
+    if target.suffix == ".pyc" or any(part in RUNNER_OWNED_PARTS for part in target.relative_to(root).parts):
+        raise ValueError(f"{field} entry {ref} is a file the runner or a tool owns (.autocode/, .git/, "
+                         "__pycache__/ and caches): cite source files, which outlive the run")
+    return target
 
 
 def workspace_inventory(workspace, task, limit=40, scan_limit=5000):

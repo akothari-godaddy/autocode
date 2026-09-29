@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import run  # noqa: E402
 from harness import baseline, catalog, compare, oracle, routing, stats, verdict  # noqa: E402
-from harness.driver import metrics, split_by_turn, turn_state  # noqa: E402
+from harness.driver import leaves_for_person, metrics, split_by_turn, turn_state  # noqa: E402
 
 
 class CatalogTests(unittest.TestCase):
@@ -181,6 +181,17 @@ class TurnTests(unittest.TestCase):
         self.assertEqual(["complete"], turn_state({"done": True, "needs": {"kind": "none"}}))
         self.assertEqual(["stop", "needs:answer"], turn_state({"done": False, "needs": {"kind": "answer"}}))
 
+    def test_the_driver_leaves_an_autoresolver_escalation_for_a_person(self):
+        # A run that reached its token cap asks a person, not a requirements
+        # question; answering it with a default turned an honest pause into an ERROR.
+        question = {"kind": "answer", "questions": [{"id": "q1", "proposed_default": "yes"}]}
+        for scope in ("operational_exhaustion", "blocker"):
+            self.assertTrue(leaves_for_person({**question, "resolver_token": "t", "resolver_scope": scope}))
+        self.assertTrue(leaves_for_person({"kind": "resume", "reason": "paused"}))
+        for need in (question, {**question, "resolver_token": "t", "resolver_scope": "clarification"},
+                     {"kind": "approve_plan", "token": "g"}):
+            self.assertFalse(leaves_for_person(need))
+
     def test_stages_are_split_at_the_moment_each_follow_up_was_said(self):
         state = {"stages": [{"stage": "review_change", "finished_at": "2026-09-28T10:00:01+00:00"},
                             {"stage": "orchestrator", "started_at": None, "finished_at": "2026-09-28T10:05:00+00:00"},
@@ -290,10 +301,16 @@ class FakeRunTests(unittest.TestCase):
         # Issue #15: small jobs already take many model calls. These are today's counts
         # with the scripted model; lower them when a step is trimmed, never raise them
         # without deciding that the extra step is worth its time.
-        for scenario, ceiling in (("greenfield-greeting-cli", 9), ("bugfix-trivial", 5)):
+        # bugfix-trivial was 5 with the short path for small fixes; it is 9 while that path
+        # is off (2026-09-29), and fails only its proportionality checks (scenario.toml).
+        for scenario, ceiling in (("greenfield-greeting-cli", 9), ("bugfix-trivial", 9)):
             with self.subTest(scenario=scenario):
                 result = self.run_fake("reference", scenario)
-                self.assertEqual(verdict.PASS, result["verdict"], result["summary"])
+                if catalog.load(scenario).known_failure:
+                    failing = {check["name"] for check in result["checks"] if not check["ok"]}
+                    self.assertEqual({"no_plan_review_rounds", "stage_budget"}, failing, result["summary"])
+                else:
+                    self.assertEqual(verdict.PASS, result["verdict"], result["summary"])
                 self.assertLessEqual(result["metrics"]["model_stages"], ceiling,
                                      result["metrics"]["model_stage_names"])
                 self.assertGreater(result["wall_seconds"], 0)

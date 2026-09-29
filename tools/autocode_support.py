@@ -296,8 +296,8 @@ def enforce_reported_token_limit(state):
 def terminal_failure_reason(path):
     """Expose recognized transport failures without interpreting model prose."""
     for row in events(path):
-        error = row.get("error")
-        if row.get("type") == "turn.failed" and isinstance(error, dict) and error.get("code") == "output_token_limit":
+        error = row.get("error") if row.get("type") == "turn.failed" else None
+        if isinstance(error, dict) and error.get("code") in ("output_token_limit", "incomplete_turn"):
             return error.get("message")
     return None
 
