@@ -66,5 +66,15 @@ tokens) is sent every time. A ten-stage run cost about $3.
   to pass with the fix.
 - Discovery took two report repairs (Sonnet left out required contract fields).
 
-One run of one scenario shows the workflow can get through on these models, not that it reliably does. The
-harness approves plans itself, so the delivery was not approved by a person.
+## Second trial, after guard cases (2026-09-29, `bugfix-trivial`, one run)
+
+- The run reached `TASK_COMPLETE` in 4.7 minutes of wall time, with no question to the user, for about $2.10.
+- The Investigator wrote six cases: four `regression` and two `guard` (an exact multiple, empty input). The
+  runner's proof passed, matching each case to its test, and the fix was correct (`-(-total // size)`).
+- The Validator's first report was rejected once ("Check command/result differs from receipt") and repaired.
+- The harness labels the run `FALSE_COMPLETE` only because `bugfix-trivial` is a known failure while every job
+  takes the full planning path: `no_plan_review_rounds` and `stage_budget` fail (10 model stages, not 5). All eight
+  correctness checks pass.
+
+Two runs of one scenario show the workflow can get through on these models, not that it reliably does. The
+harness approves plans itself, so the deliveries were not approved by a person.
