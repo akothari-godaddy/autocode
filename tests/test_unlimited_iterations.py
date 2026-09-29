@@ -5,6 +5,10 @@ import unittest
 from unittest.mock import patch
 from . import test_goals, test_autocode, test_subprocess
 import autocode as runner
+import autocode_configure
+import autocode_milestones as milestones
+import autocode_planning as planning
+import autopilot
 import autocode_support as s
 from goal_fixtures import assert_operational_wait
 
@@ -21,7 +25,7 @@ class UnlimitedTests(unittest.TestCase):
                                          'no_progress_batches':3,'stage_timeout_seconds':900,
                                          'idle_timeout_seconds':75,'tool_timeout_seconds':1200}
         original=copy.deepcopy(self.state)
-        result=runner.configure(self.args(unlimited_iterations=True),self.state)
+        result=autocode_configure.configure(self.args(unlimited_iterations=True),self.state, planning=planning, milestones=milestones, autopilot=autopilot)
         expected=copy.deepcopy(original['settings']);expected['limits']['iteration_ceiling']=None
         expected['report_repair']={'max_attempts':2}
         expected['provider']='opencode'
@@ -35,7 +39,7 @@ class UnlimitedTests(unittest.TestCase):
 
     def test_omitted_flag_preserves_unlimited_on_resume(self):
         self.state['settings']['limits']={'iteration_ceiling':None}
-        self.assertIsNone(runner.configure(self.args(),self.state)['limits']['iteration_ceiling'])
+        self.assertIsNone(autocode_configure.configure(self.args(),self.state, planning=planning, milestones=milestones, autopilot=autopilot)['limits']['iteration_ceiling'])
 
     def test_new_run_defaults_to_unlimited_iterations(self):
         state={key:value for key,value in self.state.items() if key!='settings'}
@@ -44,13 +48,13 @@ class UnlimitedTests(unittest.TestCase):
             legacy_iteration_ceiling=None,max_iterations=None,max_seconds=None,max_reported_tokens=None,
             no_progress_limit=None)
         with patch.object(s,'local_settings',return_value={}):
-            settings=runner.configure(args,state)
+            settings=autocode_configure.configure(args,state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertIsNone(settings['limits']['iteration_ceiling'])
         self.assertEqual('runner_default',settings['budget_origins']['iteration_ceiling'])
 
     def test_explicit_ceiling_restores_cap(self):
         self.state['settings']['limits']={'iteration_ceiling':None}
-        self.assertEqual(30,runner.configure(self.args(max_iterations=30),self.state)['limits']['iteration_ceiling'])
+        self.assertEqual(30,autocode_configure.configure(self.args(max_iterations=30),self.state, planning=planning, milestones=milestones, autopilot=autopilot)['limits']['iteration_ceiling'])
 
     def test_boundary_and_validation(self):
         self.assertFalse(runner.iteration_limit_reached(1000000,None))

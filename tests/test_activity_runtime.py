@@ -14,9 +14,12 @@ from unittest.mock import patch
 from . import test_goals
 import autocode as runner
 import autocode_completion as completion_gate
+import autocode_configure
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as milestones
+import autocode_planning as planning
+import autopilot
 import autocode_support as support
 from goal_fixtures import assert_operational_wait, envelope
 
@@ -54,7 +57,7 @@ class ActivityRuntimeTests(unittest.TestCase):
     def test_new_run_limits_separate_idle_and_tool_from_the_stage_cap(self):
         fresh = {'workspace': str(self.root), 'iteration': 1}
         with patch.object(support, 'local_settings', return_value=self.local):
-            configured = runner.configure(self.args(), fresh)
+            configured = autocode_configure.configure(self.args(), fresh, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual(3600, configured['limits']['stage_timeout_seconds'])
         self.assertEqual(300, configured['limits']['idle_timeout_seconds'])
         self.assertEqual(1800, configured['limits']['tool_timeout_seconds'])
@@ -64,7 +67,7 @@ class ActivityRuntimeTests(unittest.TestCase):
             with self.subTest(saved_cap=saved_cap):
                 self.state['settings']['limits']['stage_timeout_seconds'] = saved_cap
                 original = copy.deepcopy(self.state)
-                configured = runner.configure(self.args(), self.state)
+                configured = autocode_configure.configure(self.args(), self.state, planning=planning, milestones=milestones, autopilot=autopilot)
                 self.assertEqual(saved_cap, configured['limits']['stage_timeout_seconds'])
                 self.assertEqual(300, configured['limits']['idle_timeout_seconds'])
                 self.assertEqual(1800, configured['limits']['tool_timeout_seconds'])
@@ -77,7 +80,7 @@ class ActivityRuntimeTests(unittest.TestCase):
         self.state['settings']['limits'].update(stage_timeout_seconds=4200,
                                                idle_timeout_seconds=600,
                                                tool_timeout_seconds=2400)
-        configured = runner.configure(self.args(), self.state)
+        configured = autocode_configure.configure(self.args(), self.state, planning=planning, milestones=milestones, autopilot=autopilot)
         for key in ('stage_timeout_seconds', 'idle_timeout_seconds', 'tool_timeout_seconds'):
             self.assertEqual(self.state['settings']['limits'][key], configured['limits'][key])
 
@@ -85,8 +88,8 @@ class ActivityRuntimeTests(unittest.TestCase):
         self.state['settings']['limits'].update(stage_timeout_seconds=300,
                                                idle_timeout_seconds=300,
                                                tool_timeout_seconds=1800)
-        configured = runner.configure(self.args(max_stage_seconds=0, max_idle_seconds=90,
-                                               max_tool_seconds=0), self.state)
+        configured = autocode_configure.configure(self.args(max_stage_seconds=0, max_idle_seconds=90,
+                                               max_tool_seconds=0), self.state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual(0, configured['limits']['stage_timeout_seconds'])
         self.assertEqual(90, configured['limits']['idle_timeout_seconds'])
         self.assertEqual(0, configured['limits']['tool_timeout_seconds'])

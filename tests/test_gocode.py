@@ -14,7 +14,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
+import autocode_configure
 import autocode_gocode as gocode
+import autocode_milestones as milestones
+import autocode_planning as planning
+import autopilot
 
 
 class GoCodeTransportTests(unittest.TestCase):
@@ -102,7 +106,7 @@ class GoCodeTransportTests(unittest.TestCase):
             glm_reasoning_effort="xhigh",
         )
         with patch.object(gocode, "local_settings", return_value={"engine": "gocode"}):
-            settings = runner.configure(args, {"workspace": "/fixture", "iteration": 0})
+            settings = autocode_configure.configure(args, {"workspace": "/fixture", "iteration": 0}, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertTrue(settings["joint_planning"])
         self.assertEqual({"gocode"}, {role["engine"] for role in settings["roles"].values()})
         self.assertEqual("gocode-openai/astra", settings["roles"]["astra"]["model"])

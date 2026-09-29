@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 import autocode_ui as ui, autocode_figma as figma, autocode as runner, autocode_support as support
+import autocode_configure, autocode_milestones as milestones, autocode_planning as planning, autopilot
 from . import test_planning, test_subprocess
 import autocode_resolver_human as human
 
@@ -333,13 +334,13 @@ class FigmaWorkflow(unittest.TestCase):
         args = test_planning.PlanningTests().configure_args(engine='codex', figma_file=URL)
         state = {'workspace': str(self.root), 'iteration': 0}
         with patch.object(support, 'local_settings', return_value={'auth_mode': 'ChatGPT', 'model_provider': 'ZAI'}):
-            settings = runner.configure(args, state)
+            settings = autocode_configure.configure(args, state, planning=planning, milestones=milestones, autopilot=autopilot)
         self.assertEqual({'openai'}, {role['provider'] for role in settings['roles'].values()})
         self.assertEqual('automatic', settings['figma_review'])
         for invalid in ({'auth_mode': 'unknown'}, {'auth_mode': 'ChatGPT', 'environment_auth_present': True},
                         {'auth_mode': 'ChatGPT', 'environment_base_url_present': True}):
             with patch.object(support, 'local_settings', return_value=invalid), self.assertRaisesRegex(ValueError, 'ChatGPT login'):
-                runner.configure(args, state)
+                autocode_configure.configure(args, state, planning=planning, milestones=milestones, autopilot=autopilot)
 
     def test_unborn_build_project_does_not_start_design(self):
         ui.workspaces.git(self.root, 'init', '-q')
