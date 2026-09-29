@@ -120,6 +120,15 @@ handoff, not cumulative history. A permission already incorporated into that rev
 retain its approved text, cite the saved authorization in the summary, and omit it from contract_changes.
 If no protected item changes against the current revision, return contract_changes=[].
 """
+# A live review-then-fix plan (2026-09-29) marked "the diff touches only the two fixes" for human
+# review although its own verification method was "Validator reads git diff"; the run then
+# stopped for an approval nobody needed.
+HUMAN_REVIEW_NOTE = ("true only when nothing the Validator can run or read settles the criterion: a visual, "
+                     "audible or subjective judgement that needs a person. A criterion checked from the diff, "
+                     "tests, command receipts or files is false. Every true criterion stops the run for the "
+                     "user's approval before it can complete.")
+
+
 CONTRACT_FIELDS_RULE = """
 CONTRACT LISTS: when open_blocking_questions is empty, the runner refuses a contract whose deliverables,
 required_behaviors or permission_boundaries is an empty list, and the report is sent back for repair. Give each at
@@ -127,7 +136,7 @@ least one entry: deliverables are the files or artifacts produced; required_beha
 do; permission_boundaries is what it may and may not touch (for example "Edit only pager/ and tests/; no network; no
 writes outside the workspace"). important_failure_cases, scope_exclusions and constraints may be empty when there is
 nothing to say: do not invent entries. While open_blocking_questions is non-empty, empty lists are allowed.
-"""
+HUMAN REVIEW: an acceptance criterion's human_review is """ + HUMAN_REVIEW_NOTE + "\n"
 # Planner reports were sent back for repair with "Planner dropped requirements with no trace" in
 # several live runs (Claude models, 2026-09-29): the report's requirement_trace was [] although the
 # handoff listed R1..Rn, buried in requirements_handoff. The stages that must trace them get the
@@ -261,6 +270,8 @@ def _described(body):
     body = copy.deepcopy(body)
     for key, note in CONTRACT_FIELD_NOTES.items():
         body["properties"][key] = {**body["properties"][key], "description": note}
+    criteria = body["properties"]["acceptance_criteria"]["items"]["properties"]
+    criteria["human_review"] = {**criteria["human_review"], "description": HUMAN_REVIEW_NOTE}
     return body
 
 
