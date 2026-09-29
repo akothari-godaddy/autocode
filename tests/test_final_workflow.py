@@ -4,6 +4,7 @@ import json
 import unittest
 from . import test_workflow
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_support as s
 import autocode_workflow as w
 from goal_fixtures import envelope
@@ -55,7 +56,7 @@ class FinalWorkflowTests(unittest.TestCase):
         self.enable();self.implement(self.implementation('REQUEST_FINAL_AUDIT'))
         self.assertEqual('astra_checkpoint',self.state['next_stage'])
         self.assertNotIn('validation',self.state)
-        self.assertFalse(s.completion_ready(self.state,self.report()['decision'],s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state,self.report()['decision'],s.snapshot(self.root)))
         self.assertFalse(self.state['final_audit_request']['independent'])
         self.apply()
         self.assertEqual('TASK_COMPLETE',self.state['status'])

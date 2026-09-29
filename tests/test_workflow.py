@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from . import test_autocode, test_subprocess
 import autocode as runner
+import autocode_stage_context as stage_context
 import autocode_support as s
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
@@ -148,7 +149,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_context_contains_approved_policy_actual_diff_and_exact_contract(self):
         self.enable();self.state['diff_ref']='exact.diff'
-        prompt,_=s.context_packet(self.state,'astra_checkpoint',self.run/'state.json')
+        prompt,_=stage_context.context_packet(self.state,'astra_checkpoint',self.run/'state.json')
         data=json.loads(prompt.split('CURRENT HANDOFF DATA\n',1)[1])
         self.assertEqual('exact.diff',data['diff_ref'])
         self.assertEqual(self.state['goal_contract'],data['goal_contract'])

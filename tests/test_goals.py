@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
+import autocode_stage_context as stage_context
+import autocode_completion as completion_gate
 import autocode_interventions as interventions
 import autocode_support as s
 import autocode_goals as g
@@ -142,7 +144,7 @@ class GoalTests(unittest.TestCase):
         self.draft(questions=True)
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
         self.assertEqual("CLI", self.state["answers"]["Q1"]["text"])
-        prompt, _ = s.context_packet(self.state, "astra_discovery", self.run / "state.json")
+        prompt, _ = stage_context.context_packet(self.state, "astra_discovery", self.run / "state.json")
         self.assertIn('"Q1"', prompt)
         self.assertIn('"text": "CLI"', prompt)
         with self.assertRaisesRegex(ValueError, "already answered"):
@@ -385,20 +387,20 @@ class GoalTests(unittest.TestCase):
         val.update(verdict="BLOCKED", unverified_criteria=["C1 human acceptance pending"])
         val["criterion_results"][0]["status"] = "NOT_VERIFIED"
         decision = self.decision("TASK_COMPLETE")
-        self.assertFalse(s.completion_ready(self.state, decision, current))
+        self.assertFalse(completion_gate.completion_ready(self.state, decision, current))
         self.assertFalse(milestones.evidence_ready(self.state, current))
-        self.assertTrue(s.completion_ready(self.state, decision, current, require_human_reviews=False))
+        self.assertTrue(completion_gate.completion_ready(self.state, decision, current, require_human_reviews=False))
         runner.apply_result(self.state, "astra_review", decision, {"output": "review"}, self.root, self.run)
         lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual("human_review", lifecycle.human.current(self.state)["scope"])
         lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
-        self.assertTrue(s.completion_ready(self.state, decision, current))
+        self.assertTrue(completion_gate.completion_ready(self.state, decision, current))
         self.assertTrue(milestones.evidence_ready(self.state, current))
         val = self.state["validation"]
         val["criterion_results"][1]["status"] = "FAIL"
-        self.assertFalse(s.completion_ready(self.state, decision, current))
+        self.assertFalse(completion_gate.completion_ready(self.state, decision, current))
         self.assertFalse(milestones.evidence_ready(self.state, current))
         val["criterion_results"][1]["status"] = "PASS"
         self.assertEqual("BLOCKED", val["verdict"], "Do not rewrite the independent report")
@@ -433,7 +435,7 @@ class GoalTests(unittest.TestCase):
         val.update(verdict="BLOCKED", unverified_criteria=["C1 human acceptance pending",
                                                            "C2 human acceptance pending"])
         decision = self.decision("TASK_COMPLETE")
-        self.assertTrue(s.completion_ready(self.state, decision, current, require_human_reviews=False),
+        self.assertTrue(completion_gate.completion_ready(self.state, decision, current, require_human_reviews=False),
                         "a two-human contract reaches the artifact review like a one-human contract")
         runner.apply_result(self.state, "astra_review", decision, {"output": "review"}, self.root, self.run)
         lifecycle.human.evaluate(self.state)
@@ -441,10 +443,10 @@ class GoalTests(unittest.TestCase):
         self.assertEqual("human_review", lifecycle.human.current(self.state)["scope"])
         lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
-        self.assertFalse(s.completion_ready(self.state, decision, current),
+        self.assertFalse(completion_gate.completion_ready(self.state, decision, current),
                          "one of two human acceptances is still missing")
         g.approve_review(self.state, "C2", g.review_token(self.state), current)
-        self.assertTrue(s.completion_ready(self.state, decision, current))
+        self.assertTrue(completion_gate.completion_ready(self.state, decision, current))
         runner.apply_result(self.state, "astra_review", decision, {"output": "complete"}, self.root, self.run)
         self.assertEqual("TASK_COMPLETE", self.state["status"])
 
@@ -488,7 +490,7 @@ class GoalTests(unittest.TestCase):
         lifecycle.wait_for_user(self.state, request)
         lifecycle.human.evaluate(self.state)
         lifecycle.assign_task(self.state, self.decision(), s.snapshot(self.root))
-        prompt, _ = s.context_packet(self.state, "terra", self.run / "state.json")
+        prompt, _ = stage_context.context_packet(self.state, "terra", self.run / "state.json")
         self.assertIn('bounded test, parser, or harness repair', prompt)
         self.assertNotIn('before planning, implementation or validation', prompt)
         self.assertIn('"permission_reuse_context"', prompt)
@@ -518,7 +520,7 @@ class GoalTests(unittest.TestCase):
             lifecycle.present(self.state)
             with self.assertRaises(ValueError):
                 g.approve_review(self.state, "C1", g.review_token(self.state), current)
-            self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current,
+            self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current,
                                                 require_human_reviews=False))
 
     def test_answer_is_never_approval_and_resume_does_not_bypass_remaining_question(self):
@@ -641,7 +643,7 @@ class GoalTests(unittest.TestCase):
         runner.apply_result(self.state, "astra_review", self.decision(), {"output": "extra"}, self.root, self.run)
         self.assertEqual(("RUNNING", "astra_review"), (self.state["status"], self.state["next_stage"]))
         self.assertIn("Return TASK_COMPLETE", self.state["stop_reason"])
-        prompt, _ = s.context_packet(self.state, "astra_review", self.run / "state.json")
+        prompt, _ = stage_context.context_packet(self.state, "astra_review", self.run / "state.json")
         self.assertIn(json.dumps(self.state["stop_reason"]), prompt)
         # CONTINUE again for the same artifact: the user decides.
         runner.apply_result(self.state, "astra_review", self.decision(), {"output": "extra"}, self.root, self.run)
@@ -659,20 +661,20 @@ class GoalTests(unittest.TestCase):
     def test_completion_requires_current_artifact_all_evidence_and_actual_human_approval(self):
         self.approve(human=True)
         current = self.validation()
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         self.publish_review()
         lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
-        self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertTrue(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         for status in ["FAIL", "UNVERIFIED", "SKIPPED", "AWAITING_USER"]:
             saved = copy.deepcopy(self.state)
             self.state["validation"]["criterion_results"][0]["status"] = status
-            self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+            self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
             self.state = saved
         (self.root / "greet.py").write_text("changed")
         with self.assertRaises(ValueError):
             g.approve_review(self.state, "C1", g.review_token(self.state), s.snapshot(self.root))
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), s.snapshot(self.root)))
 
     def test_accept_completion_probe_carries_the_current_task_identity(self):
         """F7: --accept-completion was unreachable whenever a task was assigned."""
@@ -702,29 +704,29 @@ class GoalTests(unittest.TestCase):
         lifecycle.human.evaluate(self.state)
         lifecycle.present(self.state)
         selected = g.review_token(self.state)
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         g.approve_review(self.state, "C1", selected, current)
-        self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertTrue(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         self.state["human_reviews"].clear()
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         self.state["validation"]["unverified_criteria"] = ["C2 — unrelated failure"]
         self.assertFalse(g.human_only_pending_validation(self.state, self.state["validation"], "C1"))
 
     def test_medium_blocking_finding_blocks_even_with_tests_passing(self):
         self.approve(); current = self.validation()
         self.state["validation"]["findings"] = [{"severity": "medium", "blocking": True, "finding": "Required behavior missing"}]
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
 
     def test_nonblocking_preference_finding_does_not_prevent_completion(self):
         self.approve(); current = self.validation()
         self.state["validation"]["findings"] = [{"severity": "low", "blocking": False,
                                                     "finding": "Consider renaming this class"}]
-        self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertTrue(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
 
     def test_missing_criterion_cannot_hide_behind_green_suite(self):
         self.approve(); current = self.validation()
         self.state["validation"]["criterion_results"] = []
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
 
     def test_criterion_cannot_cite_a_fabricated_event_beside_a_real_passing_check(self):
         self.approve(); self.validation()
@@ -1067,7 +1069,7 @@ class GoalTests(unittest.TestCase):
         self.assertEqual("astra_discovery", self.state["next_stage"])
         self.assertFalse(g.approved(self.state))
         with self.assertRaises(ValueError): lifecycle.approve(self.state, old)
-        prompt, _ = s.context_packet(self.state, "astra_discovery", self.run / "state.json")
+        prompt, _ = stage_context.context_packet(self.state, "astra_discovery", self.run / "state.json")
         self.assertIn("Keep Unicode names", prompt)
         event = self.state["brief_feedback"][0]
         draft = body()
@@ -1331,7 +1333,7 @@ class GoalTests(unittest.TestCase):
             "addressed_requirements": assigned["requirements"], "recommended_checks": ["Invalid input"]}
         self.validation()
         for stage in ("terra", "sol", "astra_review"):
-            prompt, _ = s.context_packet(self.state, stage, self.run / "state.json")
+            prompt, _ = stage_context.context_packet(self.state, stage, self.run / "state.json")
             data = json.loads(prompt.split("CURRENT HANDOFF DATA\n", 1)[1])
             self.assertEqual(self.state["goal_contract"], data["goal_contract"])
             self.assertEqual(assigned, data["current_task"])
@@ -1411,7 +1413,7 @@ class GoalTests(unittest.TestCase):
         for flow in ({}, {"status": "NOT_VERIFIED", "summary": "Not checked", "evidence_refs": []},
                      {"status": "PASS", "summary": "Claim only", "evidence_refs": []}):
             self.state["validation"]["end_to_end_result"] = flow
-            self.assertFalse(s.completion_ready(self.state, self.decision("COMPLETE"), current))
+            self.assertFalse(completion_gate.completion_ready(self.state, self.decision("COMPLETE"), current))
 
     def test_end_to_end_evidence_cannot_cite_fabricated_events(self):
         self.approve(); self.validation()
@@ -1432,9 +1434,9 @@ class GoalTests(unittest.TestCase):
         self.approve()
         runner.apply_result(self.state, "astra_plan", self.decision(), {"output": "plan"}, self.root, self.run)
         current = self.validation()
-        self.assertTrue(s.completion_ready(self.state, self.decision("COMPLETE"), current))
+        self.assertTrue(completion_gate.completion_ready(self.state, self.decision("COMPLETE"), current))
         self.state["validation"]["task_id"] = "previous-task"
-        self.assertFalse(s.completion_ready(self.state, self.decision("COMPLETE"), current))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("COMPLETE"), current))
 
 
 if __name__ == "__main__":

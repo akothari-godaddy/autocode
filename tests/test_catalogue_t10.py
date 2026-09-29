@@ -14,6 +14,7 @@ import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_dispatch as dispatch
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
@@ -163,7 +164,7 @@ class ParallelScenarios(ParallelCase):
                    current["revision"] != integrated_revision)
         complete = super().decision("COMPLETE")
         self.check_false("individual_acceptance_cannot_complete",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         self.check("fresh_review_required", "astra_review", self.state["next_stage"])
         self.finish(summary="READY_REVIEW: integrated manifest requires its own review")
 

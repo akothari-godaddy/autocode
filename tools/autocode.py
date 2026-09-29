@@ -23,13 +23,13 @@ from typing import Any
 import copy
 import uuid
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
+    from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
     from . import autocode_dependency as dependency, autocode_status_command as status_command
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
 except ImportError:
     import autocode_dependency as dependency, autocode_status_command as status_command
-    import autocode_regression as regression, autocode_support as support, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
+    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
     import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
@@ -2507,7 +2507,7 @@ def accept_completion(state: dict[str, Any], workspace: Path) -> None:
              "task_id": (state.get("current_task") or {}).get("id", ""),
              "acceptance_criteria": [{**c, "status": "verified", "evidence": "Current Validator criterion evidence"}
                                      for c in state["acceptance_criteria"]]}
-    if not support.completion_ready(state, probe, current):
+    if not completion_gate.completion_ready(state, probe, current):
         raise ValueError("Completion acceptance requires current passing independent evidence for every criterion")
     if goals.missing_human_reviews(state):
         raise ValueError("Completion acceptance requires every required human review to be recorded")
@@ -2525,7 +2525,7 @@ def accept_completion(state: dict[str, Any], workspace: Path) -> None:
 def recheck_completion(state, workspace):
     if state.get("status") != "TASK_COMPLETE":
         return
-    if support.completion_ready(state, state.get("final_decision", {}), support.snapshot(workspace)):
+    if completion_gate.completion_ready(state, state.get("final_decision", {}), support.snapshot(workspace)):
         return
     state.setdefault("completion_archive", []).append({
         "completed_at": state.pop("completed_at", None), "decision": state.pop("final_decision", None)})

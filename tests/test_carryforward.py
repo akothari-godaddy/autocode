@@ -10,6 +10,7 @@ import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as m
 import autocode_support as s
+import autocode_completion as completion_gate
 
 
 class CarryForwardTests(unittest.TestCase):
@@ -249,14 +250,14 @@ class CarryForwardTests(unittest.TestCase):
         decision['acceptance_criteria'] = [{**c, 'status': 'verified', 'evidence': 'event:check'}
                                            for c in self.state['acceptance_criteria']]
         self.state['validation'] = copy.deepcopy(old['accepted_validation'])
-        self.assertFalse(s.completion_ready(self.state, decision, s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, decision, s.snapshot(self.root)))
         self.state.pop('validation')
         self.assign('M2')
         self.validate({'C1': 'PASS', 'C2': 'PASS', 'C3': 'PASS'}, flow_status='NOT_VERIFIED')
         decision.update(task_id=self.state['current_task']['id'])
-        self.assertFalse(s.completion_ready(self.state, decision, s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, decision, s.snapshot(self.root)))
         self.validate({'C1': 'PASS', 'C2': 'PASS', 'C3': 'PASS'}, flow_status='PASS')
-        self.assertTrue(s.completion_ready(self.state, decision, s.snapshot(self.root)))
+        self.assertTrue(completion_gate.completion_ready(self.state, decision, s.snapshot(self.root)))
 
     def test_joint_initial_task_cannot_replay_carried_implementation(self):
         self.start(); self.accept_fixture()

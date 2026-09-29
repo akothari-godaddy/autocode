@@ -10,12 +10,14 @@ import uuid
 
 try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
+    from .. import autocode_stage_context as stage_context
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
 except ImportError:
     import autocode_test_cases as test_cases
     import autocode_goals as goals
     import autocode_planning_artifacts as artifacts
     import autocode_support as s
+    import autocode_stage_context as stage_context
     import autocode_bug_job as bug_job
     import autocode_workflows as workflows
 
@@ -743,7 +745,7 @@ def workspace_inventory(workspace, task, limit=40, scan_limit=5000):
 
 
 def capture_command():
-    """The command execution stages are given (autocode_support.context_packet), shown to planning too."""
+    """The command execution stages are given (autocode_stage_context.context_packet), shown to planning too."""
     import shlex
     import sys
     return shlex.join([sys.executable, str(Path(s.__file__).with_name("autocode.py")), "capture"])
@@ -869,7 +871,7 @@ def prepare(state, stage, state_path, schema_dir):
     joint = is_planning(state, stage)
     state["phase"] = "PLANNING" if joint else "DISCOVERING"
     try:
-        prompt, metrics = context(state, stage, state_path) if joint else s.context_packet(state, stage, state_path)
+        prompt, metrics = context(state, stage, state_path) if joint else stage_context.context_packet(state, stage, state_path)
     except ValueError as error:
         if stage in V2_STAGES:
             raise s.Paused("PAUSED_INVALID_PREDECESSOR", str(error)) from error

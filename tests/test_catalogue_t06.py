@@ -20,6 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
@@ -198,7 +199,7 @@ class UnitEvidenceCase(kit.CatalogueCase):
         support.verify_checks([missing], self.root, events)
         self.check("normalization_preserves_actual_failure", 1, missing["exit_code"])
         self.check("failed_check_blocks_completion", False,
-                   support.completion_ready({"validation": {"checks": [{"exit_code": 1}]}},
+                   completion_gate.completion_ready({"validation": {"checks": [{"exit_code": 1}]}},
                                             {"status": "TASK_COMPLETE", "acceptance_criteria": []},
                                             {"revision": "r"}) is True)
         self.finish(summary="CHECK_FAILED: contradictory or missing exits never become success")
@@ -328,21 +329,21 @@ class CompletionEvidenceCase(SolControllerCase):
         current = support.snapshot(self.root)
         complete = self.decision("COMPLETE")
         self.check_true("intact_pins_allow_completion",
-                        support.completion_ready(self.state, complete, current))
+                        completion_gate.completion_ready(self.state, complete, current))
         shot.write_text("tampered capture bytes")
         self.check_false("changed_bytes_rejected",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         shot.write_text("fixture capture bytes")
         self.check_true("restored_hash_accepted_again",
-                        support.completion_ready(self.state, complete, current))
+                        completion_gate.completion_ready(self.state, complete, current))
         shot.unlink()
         self.check_false("deleted_artifact_rejected",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         other = self.run / "decoy.png"
         other.write_text("different bytes entirely")
         shot.symlink_to(other)
         self.check_false("symlink_retarget_rejected",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         self.finish(summary="REVIEW_PENDING: pinned evidence is content-checked, not existence-checked")
 
     def test_evd10_source_drift_variants_change_candidate_identity(self):
@@ -360,21 +361,21 @@ class CompletionEvidenceCase(SolControllerCase):
         self.pinned_validation()  # candidate identity pinned with the link present
         complete = self.decision("COMPLETE")
         self.check_true("symlinked_candidate_accepted",
-                        support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                        completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         link.unlink()
         link.symlink_to(target_b)  # same link name, different target
         self.check_false("symlink_retarget_changes_identity",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         link.unlink()
 
         tracked.write_text("value = 2\n")  # dirty tracked edit, same HEAD
         self.check_false("tracked_dirty_edit_rejected",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         subprocess.run(["git", "-C", str(self.root), "checkout", "--", "app.py"], check=True)
 
         tracked.unlink()  # deletion
         self.check_false("deleted_tracked_file_rejected",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         tracked.write_text("value = 1\n")
         self.finish(summary="REVIEW_PENDING: dirty, deleted and retargeted source all change identity")
 
@@ -383,10 +384,10 @@ class CompletionEvidenceCase(SolControllerCase):
         shot = self.pinned_validation()
         complete = self.decision("COMPLETE")
         self.check_true("c1_capture_approves_c1",
-                        support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                        completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         (self.root / "greet.py").write_text("print('v2 with different spacing')\n")
         self.check_false("c1_capture_approves_c2",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         with self.forbid_real_launches(runner):
             self.expect_raises("complete_over_stale_capture_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,
@@ -401,11 +402,11 @@ class CompletionEvidenceCase(SolControllerCase):
         shot = self.pinned_validation(name="reference.txt", content="approved frozen reference")
         complete = self.decision("COMPLETE")
         current = support.snapshot(self.root)
-        self.check_true("frozen_reference_completes", support.completion_ready(self.state, complete, current))
+        self.check_true("frozen_reference_completes", completion_gate.completion_ready(self.state, complete, current))
         # The builder substitutes the reference instead of correcting the application.
         shot.write_text("builder-friendly reference")
         self.check_false("substituted_baseline_rejected",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         with self.forbid_real_launches(runner):
             self.expect_raises("complete_over_substituted_reference_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,
@@ -413,7 +414,7 @@ class CompletionEvidenceCase(SolControllerCase):
         # Recovery: restore the frozen reference and re-pin fresh evidence.
         shot.write_text("approved frozen reference")
         self.check_true("restored_reference_completes_again",
-                        support.completion_ready(self.state, complete, current))
+                        completion_gate.completion_ready(self.state, complete, current))
         self.finish(summary="REWORK_OR_SCOPE_PAUSE: reference swaps are detected, never credited")
 
     def test_evd13_criterion_coverage_is_exact(self):
@@ -436,7 +437,7 @@ class CompletionEvidenceCase(SolControllerCase):
         self.apply_sol(missing)
         complete = self.decision("COMPLETE")
         self.check_false("missing_criterion_cannot_complete",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         with self.forbid_real_launches(runner):
             self.expect_raises("complete_with_missing_criterion_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,
@@ -470,7 +471,7 @@ class CompletionEvidenceCase(SolControllerCase):
         self.apply_sol(report)
         complete = self.decision("COMPLETE")
         self.check_false("unverified_criterion_blocks_completion",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         with self.forbid_real_launches(runner):
             self.expect_raises("complete_over_unverified_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,

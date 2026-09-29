@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_jobs as jobs
+    from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_jobs as jobs
     from . import autocode_stuck_job as stuck
     from . import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
@@ -17,7 +17,7 @@ try:
     from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
 except ImportError:
     import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
-    import autocode_support as support, autocode_jobs as jobs
+    import autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs
     import autocode_stuck_job as stuck, autocode_goals as goals, autocode_goal_lifecycle as lifecycle
     import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     import autocode_workflow as workflow
@@ -974,7 +974,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                 raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: the findings ledger still lists "
                                      "open blocking findings; resolve or retract each one with evidence")
             if modern and goals.missing_human_reviews(state):
-                if not support.completion_ready(state, value, current, require_human_reviews=False):
+                if not completion_gate.completion_ready(state, value, current, require_human_reviews=False):
                     raise support.Paused("PAUSED_COMPLETION_GATE", "Artifact review requires current passing independent evidence first")
                 lifecycle.wait_for_user(state,
                     {"kind": "human_review", "criteria": goals.missing_human_reviews(state),
@@ -986,7 +986,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                 goals.record_decision(state, value)
                 save_record(state, record)
                 return
-            if not support.completion_ready(state, value, current):
+            if not completion_gate.completion_ready(state, value, current):
                 if not regression.complete(state, current["revision"]):
                     proof = state.get("regression_proof") or {}
                     reasons = "; ".join((proof.get("failures") or []) + (proof.get("unverified") or [])) or \
@@ -1014,7 +1014,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             if modern and value["status"] == "CONTINUE":
                 completion_probe = {**value, "status": "TASK_COMPLETE"}
                 probe_snapshot = support.snapshot(workspace)
-                if support.completion_ready(state, completion_probe, probe_snapshot):
+                if completion_gate.completion_ready(state, completion_probe, probe_snapshot):
                     state.update(next_stage="astra_review", **unit_module("astra_review").completion_review(state, probe_snapshot))
                     state["iteration"] += 1
                     goals.record_decision(state, value)

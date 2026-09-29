@@ -14,6 +14,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
+import autocode_completion as completion_gate
 import autocode_findings as findings
 import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
@@ -134,7 +135,7 @@ class ReviewCase(t06.SolControllerCase):
                             self.root, self.run)
         complete = self.complete_decision()
         self.check_false("failed_check_cannot_complete",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         with self.forbid_real_launches(runner):
             self.expect_raises("completion_over_failure_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,
@@ -149,7 +150,7 @@ class ReviewCase(t06.SolControllerCase):
         complete = self.complete_decision()
         # Variant 1: review never started (no validation at all).
         self.check_false("missing_review_is_not_pass",
-                         support.completion_ready(self.state, complete, support.snapshot(self.root)))
+                         completion_gate.completion_ready(self.state, complete, support.snapshot(self.root)))
         with self.forbid_real_launches(runner):
             self.expect_raises("completion_without_review_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,
@@ -270,7 +271,7 @@ class ReviewCase(t06.SolControllerCase):
                    self.state.get("human_reviews", {}).get("C1", {}).get("revision") != new_current["revision"]
                    or not goals.missing_human_reviews(self.state) is None)
         self.check_false("stale_acceptance_completes",
-                         support.completion_ready(self.state, self.complete_decision(), new_current))
+                         completion_gate.completion_ready(self.state, self.complete_decision(), new_current))
         self.finish(summary="WAITING_USER: visual approval never carries across changed code")
 
     def test_rev10_source_edit_invalidates_acceptance(self):
@@ -280,7 +281,7 @@ class ReviewCase(t06.SolControllerCase):
         current = support.snapshot(self.root)
         complete = self.complete_decision()
         self.check_false("edited_source_cannot_complete",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         with self.forbid_real_launches(runner):
             self.expect_raises("stale_candidate_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,
@@ -415,7 +416,7 @@ class ReviewCase(t06.SolControllerCase):
         self.check("validation_bound_to_c1_not_c3", c1_validation, self.state["validation"]["source_revision"])
         complete = self.complete_decision()
         self.check_false("mixed_candidate_reports_cannot_complete",
-                         support.completion_ready(self.state, complete, current))
+                         completion_gate.completion_ready(self.state, complete, current))
         with self.forbid_real_launches(runner):
             self.expect_raises("candidate_mismatch_rejected", support.Paused,
                                runner.apply_result, self.state, "astra_review", complete,

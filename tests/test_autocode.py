@@ -15,6 +15,8 @@ from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
+import autocode_stage_context as stage_context
+import autocode_completion as completion_gate
 import autocode_support as s
 import autocode_goals as goals
 import autocode_builder_policy as builder_policy
@@ -309,7 +311,7 @@ class RetrofitTest(unittest.TestCase):
         self.state["history"]=[{"transcript":"PRIVATE_BULK_HISTORY"}]
         self.state["unresolved_findings"]=[{"finding":"specific bug"}]
         self.state["plan"]=["preserve contracts"]
-        text,metrics=s.context_packet(self.state,"terra",self.run/"state.json")
+        text,metrics=stage_context.context_packet(self.state,"terra",self.run/"state.json")
         self.assertNotIn("PRIVATE_BULK_HISTORY",text)
         self.assertIn("specific bug",text)
         self.assertIn("repair the full cohort",text)
@@ -324,7 +326,7 @@ class RetrofitTest(unittest.TestCase):
             "canonicalPath":"/outside/source.pdf", "sha256":"a" * 64,
             "access":"READ_ONLY_PRIVATE_CACHE"
         }]
-        text,_=s.context_packet(self.state,"terra",self.run/"state.json")
+        text,_=stage_context.context_packet(self.state,"terra",self.run/"state.json")
         self.assertIn("fixture-source",text)
         self.assertIn("READ_ONLY_PRIVATE_CACHE",text)
 
@@ -367,18 +369,18 @@ class RetrofitTest(unittest.TestCase):
 
     def test_completion_requires_current_code_criteria_sol_and_evidence(self):
         current=self.valid_completion()
-        self.assertTrue(s.completion_ready(self.state,self.decision("TASK_COMPLETE"),current))
+        self.assertTrue(completion_gate.completion_ready(self.state,self.decision("TASK_COMPLETE"),current))
         for key,value in [("verdict","FAIL"),("source_revision","stale"),("criteria_revision","different"),("evidence_hashes",{}),("checks",[])]:
             st=copy.deepcopy(self.state);st["validation"][key]=value
-            self.assertFalse(s.completion_ready(st,self.decision("TASK_COMPLETE"),current),key)
+            self.assertFalse(completion_gate.completion_ready(st,self.decision("TASK_COMPLETE"),current),key)
         self.evidence.write_text("now failing")
-        self.assertFalse(s.completion_ready(self.state,self.decision("TASK_COMPLETE"),current))
+        self.assertFalse(completion_gate.completion_ready(self.state,self.decision("TASK_COMPLETE"),current))
 
     def test_dirty_untracked_source_invalidates_validation(self):
         current=self.valid_completion()
         (self.root/"untracked.py").write_text("changed")
         self.assertNotEqual(current["revision"],s.snapshot(self.root)["revision"])
-        self.assertFalse(s.completion_ready(self.state,self.decision("TASK_COMPLETE"),s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state,self.decision("TASK_COMPLETE"),s.snapshot(self.root)))
 
     def test_executable_mode_invalidates_validation(self):
         script = self.root / "start.sh"
@@ -387,7 +389,7 @@ class RetrofitTest(unittest.TestCase):
         current = self.valid_completion()
         script.chmod(0o755)
         self.assertNotEqual(current["revision"], s.snapshot(self.root)["revision"])
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), s.snapshot(self.root)))
 
     def test_submodule_edits_invalidate_validation(self):
         source = self.root / ".autocode/module-source"
@@ -401,7 +403,7 @@ class RetrofitTest(unittest.TestCase):
         current = self.valid_completion()
         (self.root / "module/code.py").write_text("value = 2\n")
         self.assertNotEqual(current["revision"], s.snapshot(self.root)["revision"])
-        self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), s.snapshot(self.root)))
+        self.assertFalse(completion_gate.completion_ready(self.state, self.decision("TASK_COMPLETE"), s.snapshot(self.root)))
 
     def test_completion_acceptance_is_an_exclusive_existing_run_action(self):
         for args in (["--accept-completion"], ["--accept-completion", "--show-goal", "--run-dir", str(self.run)]):
