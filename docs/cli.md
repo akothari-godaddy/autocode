@@ -87,7 +87,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 
 | Flag | Meaning |
 | --- | --- |
-| `--engine opencode\|codex` | Engine for the run. OpenCode is the default. |
+| `--engine opencode\|codex\|gocode` | Engine for the run. OpenCode is the default. `gocode` is the GoCode-native route (see the [README](../README.md#runtime-requirements-and-gocode-support)). |
 | `--provider <name>` | External tool registered via TOML (see [Providers](providers.md#add-a-tool)). |
 | `--joint-planning` | Add joint Requirements Planner / Plan Reviewer work. |
 | `--builder-strong-model MODEL` | Stronger model for the Builder's second attempt. |
