@@ -21,6 +21,7 @@ def view(state: dict) -> dict:
     status = state.get("status", "")
     task = state.get("current_task") or {}
     return {
+        "dependency": state.get("dependency_wait"),
         "schema": SCHEMA,
         "status": status,
         "done": status in COMPLETE,
@@ -104,6 +105,9 @@ def needs(state: dict) -> dict | None:
     status = state.get("status", "")
     if status in COMPLETE:
         return None
+    if status == "WAITING_FOR_DEPENDENCY":
+        return {"kind": "dependency", "reason": state.get("stop_reason"),
+                "producer_run": (state.get("dependency_wait") or {}).get("producer_run")}
     questions = state.get("pending_questions") or []
     reviews = [question for question in questions if question.get("review_criteria")]
     if reviews:

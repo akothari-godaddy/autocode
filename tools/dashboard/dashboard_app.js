@@ -380,6 +380,7 @@ function statusInfo(run) {
     stateLabel:group==='running'?'Worker confirmed running':group==='attention'?'Waiting for your decision':group==='complete'?'Complete':group==='stopped'?(tone==='failed'?'Internally blocked':'Stopped at a checkpoint'):label});
   if(run.error||run.state_error)return info('stopped','failed','Unavailable','Inspect issue',run.error||run.state_error);
   if(status==='TASK_COMPLETE')return info('complete','complete','Completed','View result','The runner recorded this task as complete. No reply is needed.','execution');
+  if(status==='WAITING_FOR_DEPENDENCY')return info('stopped','','Waiting for prerequisite','View progress',run.stop_reason||'Waiting for another task to finish and pass review. No action needed from you.','execution');
   if(status==='DRY_RUN')return info('other','','Preview only','View preview','This is a saved dry run. It did not start implementation.','execution');
   if(status==='RESOLVER_PENDING'||(!authorized&&['WAITING_FOR_USER','AWAITING_GOAL_APPROVAL','BLOCKED_HUMAN'].includes(status)))return info('stopped','','Awaiting AutoResolver','Inspect details','No current AutoResolver request is published. Saved drafts and internal questions are available for inspection, not for answers or approval.');
   if(status.startsWith('PAUSED_RESOLVER'))return info('stopped','','AutoResolver paused','Inspect details',run.stop_reason||'AutoResolver is paused. No execution or additional allowance is authorized.');
