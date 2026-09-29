@@ -351,18 +351,10 @@ approval, orchestrator, Builder, Validator and Completion Owner.
     into the plan you approve.
   - **Named tests.** The Builder writes one test per case, named after the case
     id: `test_t1_<what it checks>`.
-  - **Guard cases.** A case has a `kind`: `regression` (the default, and what
-    every saved case is) for a behavior the fix restores, or `guard` for one
-    that already works on today's code and must keep working, such as an exact
-    multiple when the bug is in the remainder. The Investigator must make at
-    least one case a regression case, and a guard is shown as such in the
-    case's text.
-  - **The runner's check.** The regression proof also requires every
-    regression case to have a test with its id in the name, among the tests
-    that fail on the original code and pass after the fix. A guard case needs
-    a test with its id in the name that passes with the change; it cannot fail
-    before it, so it is not required to. A case without its test fails the
-    proof, which names the case. The link is by name, so no model is involved. Names
+  - **The runner's check.** The regression proof also requires every case to
+    have a test with its id in the name, among the tests that fail on the
+    original code and pass after the fix. A case without one fails the proof,
+    which names the case. The link is by name, so no model is involved. Names
     match as whole words, so `T1` matches `test_t1_…` and `TestT1…` but not
     `test_t12_…`.
   - **Without per-test results** (exit codes only), the cases cannot be matched

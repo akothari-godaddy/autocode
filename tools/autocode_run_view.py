@@ -49,7 +49,7 @@ def evidence(state: dict) -> dict:
     findings          the findings ledger: id, status, severity, finding
     regression_proof  for bug fixes, the runner's own fail-before/pass-after proof, else None;
                       case_tests maps each English test case to the tests that prove it
-    test_cases        a reproduced bug's regression tests in plain English (id, given, when, then, kind), else []
+    test_cases        a reproduced bug's regression tests in plain English (id, given, when, then), else []
     check_replay      the current validation's checks as the runner itself re-ran them in a clean copy
                       (autocode_check_replay): verdict, source_revision and one row per command, else None
     """
@@ -79,8 +79,7 @@ def evidence(state: dict) -> dict:
                              ("verdict", "fail_to_pass", "failures", "unverified", "commands", "source_revision",
                               "case_tests")}
                             if isinstance(proof, dict) else None,
-        "test_cases": [{**{key: case.get(key) for key in ("id", "given", "when", "then")},
-                       "kind": case.get("kind") or "regression"}
+        "test_cases": [{key: case.get(key) for key in ("id", "given", "when", "then")}
                        for case in investigation.get("test_cases") or [] if isinstance(case, dict)]
                       if investigation.get("outcome") == "reproduced" else [],
         "check_replay": {"verdict": replay.get("verdict"), "source_revision": replay.get("source_revision"),

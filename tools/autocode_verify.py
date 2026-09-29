@@ -739,8 +739,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
             "framework": framework.to_dict() if framework else None,
             "baseline": ({"health": base_suite["health"], "exit_code": base_suite["receipt"]["exit_code"],
                           "output": base_suite["receipt"]["output"]} if base_suite else None),
-            "fail_to_pass": proof.get("fail_to_pass"), "candidate_passed": proof.get("candidate_passed"),
-            "checks": checks}
+            "fail_to_pass": proof.get("fail_to_pass"), "checks": checks}
 
 
 def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, review_reasons, *, known_failures,
@@ -799,7 +798,6 @@ def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, rev
         # the code it tests) and passes now. A bug fix needs a test that ran and failed.
         flipped = sorted(passed - set(base["passed"])) if new_behavior else sorted(ran_and_failed & passed)
         proof["fail_to_pass"] = flipped
-        proof["candidate_passed"] = sorted(passed)  # a guard case's test need only be among these
         if not flipped and new_behavior:
             fail.append("No new or changed test passes with the change and did not pass without it, "
                         "so the tests do not show the new behavior")
