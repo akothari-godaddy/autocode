@@ -60,9 +60,12 @@ autocode --run-dir RUN --resume-paused --retry-builder M2
 ```
 
 Repeat `--retry-builder` to select additional failed milestones. Successful siblings
-are retained rather than rerun. An explicit retry archives an uncertain stage while
-preserving its edits and logs. Report-only repairs and completed-response recovery
-run automatically through the existing bounded recovery mechanisms. After a revised
+are retained rather than rerun. A Builder that needs the stronger model its batch's
+checkers run does not pause the run and cannot be retried this way: its milestone is
+built serially later (see [Builder retry policy](models.md#builder-retry-policy)).
+An explicit retry archives an uncertain stage while preserving its edits and logs.
+Report-only repairs and completed-response recovery run automatically through the
+existing bounded recovery mechanisms. After a revised
 plan is reapproved, child workers and batches from the previous plan are safely
 archived once stopped, preserving their work and logs.
 Interrupted worktree setup resumes only when its source matches the saved baseline;
@@ -71,9 +74,12 @@ an incomplete or manually modified checkout pauses for inspection without overwr
 The active batch is saved in
 `state.orchestration_batch`, with `id`, `status`, and `workers`; each worker records
 `milestone_id`, `status`, `workspace`, and `run_dir`. Integrated batches move to
-`state.orchestration_history`. The dashboard labels `orchestrator` as runner-owned
-and displays saved batch/worker statuses and worktree/log locations. Those statuses
-are checkpoint reports, not proof that worker processes are currently alive.
+`state.orchestration_history`, and `deferred` lists the members left to a serial build
+(worker status `SERIAL_ESCALATION`). A batch in which every member deferred moves there
+with status `DEFERRED` and nothing integrated. The dashboard labels `orchestrator` as
+runner-owned and displays saved batch/worker statuses and worktree/log locations.
+Those statuses are checkpoint reports, not proof that worker processes are currently
+alive.
 
 ## Report-only repair
 

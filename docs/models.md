@@ -86,8 +86,18 @@ Completion Owner runs the stronger model, it moves to `zai-coding-plan/glm-5.3` 
 rest of that milestone (keeping its effort, or `high` for a climbed `xhigh`/`max`) and
 returns to its route at the next milestone. The decision records the switch as
 `checker_models`. Pinned and custom-provider checkers are never moved; the cross-model
-guard pauses the run instead. A parallel Builder cannot move the checkers that will
-check its batch, so it pauses at this point instead of taking the stronger attempt.
+guard pauses the run instead.
+
+A parallel Builder cannot move the checkers that will check its batch. When its stronger
+attempt would run on the checkers' model, it stops with `SERIAL_ESCALATION` instead
+(decision `defer`) and leaves that attempt to the run. The run integrates the Builders
+that finished, and the unchanged checkers validate them. The deferred milestone is never
+run in parallel again. When it is next assigned, the run makes the stronger attempt
+itself, serially, with the checker switch above and without a human. The retry budget
+carries over from the Builder, so this is still the milestone's last attempt before the
+safety pause. If every Builder in a batch defers, nothing is integrated and the run starts
+on the first of them straight away. A Builder route pinned while the milestone waited is
+not overridden; the run pauses instead.
 
 An implementation attempt with no source changes is no progress, not a build candidate.
 The dashboard's named milestone checkpoints distinguish recorded implementation/tool

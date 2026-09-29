@@ -18,6 +18,7 @@ try:
     from . import autocode_support as s, autocode_goals as goals
     from . import autocode_milestones as milestones, autocode_process as processes
     from . import autocode_interventions as interventions, autocode_worktrees as worktrees
+    from . import autocode_builder_policy as builder_policy
     from .autocode_assignment import contains
 except ImportError:
     import autocode_support as s
@@ -26,6 +27,7 @@ except ImportError:
     import autocode_process as processes
     import autocode_interventions as interventions
     import autocode_worktrees as worktrees
+    import autocode_builder_policy as builder_policy
     from autocode_assignment import contains
 
 
@@ -132,6 +134,7 @@ def select(state):
         return (row["id"] not in accepted and "depends_on" in row
                 and set(row["depends_on"]) <= accepted and row.get("affected_paths")
                 and not previous.get("seconds") and not previous.get("reviews") and not previous.get("replans")
+                and not builder_policy.failed_before(state, row["id"])
                 and all(valid_path(p) for p in row["affected_paths"]))
     if (not primary or not eligible(primary)
             or set(task["acceptance_criteria"]) != set(primary["acceptance_criteria"])
@@ -283,7 +286,7 @@ def run_workers(state, run_dir, batch):
                     mode = "retry"
                 elif row["status"] == "PENDING":
                     mode = "start"
-                elif result.get("status") == "BUILT":
+                elif result.get("status") in ("BUILT", builder_policy.SERIAL):
                     continue
                 elif not row.get("recovery_attempted"):
                     mode = "recover"
@@ -363,10 +366,24 @@ def account_workers(state, run_dir, batch):
     autocode_status.persist(run_dir / "state.json", state)
 
 
+def deferred_worker(batch, row):
+    """A worker that left its stronger attempt to the parent: same assignment, untouched checkout."""
+    child = s.read(Path(row["run_dir"]) / "state.json")
+    if child["goal_contract"]["hash"] != batch["contract_hash"] or child["current_task"] != row["task"]:
+        raise s.Paused("PAUSED_ORCHESTRATOR_WORKER", "Builder changed its assignment or requested a user decision")
+    current = s.snapshot(Path(row["workspace"]))
+    if (current["head"] != batch["base_commit"]
+            or current["files"] != {p: v for p, v in batch["baseline"]["files"].items() if v != "deleted"}):
+        raise s.Paused("PAUSED_ORCHESTRATOR_WORKER", f"Builder {row['milestone_id']} deferred its stronger attempt "
+                       f"but its checkout changed; inspect {row['workspace']}")
+    return child
+
+
 def collect(state, workspace, run_dir, batch):
     account_workers(state, run_dir, batch)
     patches = []
     changed = set()
+    deferred = []
     expected = copy.deepcopy(batch["baseline"])
     tracked = set(git(workspace, "ls-files", "-z", "--cached").decode().split("\0"))
     for row in batch["workers"]:
@@ -377,6 +394,9 @@ def collect(state, workspace, run_dir, batch):
         if not result_path.is_file():
             raise s.Paused("PAUSED_ORCHESTRATOR_WORKER", f"Builder {row['milestone_id']} needs inspection: {directory}")
         result = s.read(result_path)
+        if result.get("status") == builder_policy.SERIAL:
+            deferred.append((row, deferred_worker(batch, row)))
+            continue
         if result.get("status") != "BUILT":
             raise s.Paused("PAUSED_ORCHESTRATOR_WORKER", f"Builder {row['milestone_id']}: {result.get('reason', 'paused')}; {directory}")
         child = s.read(directory / "state.json")
@@ -411,6 +431,19 @@ def collect(state, workspace, run_dir, batch):
         row.update(status="BUILT", result=str(result_path), result_hash=s.file_hash(result_path),
                    commit=commit, changed_files=paths, implementation=child["implementation"],
                    stages=child["stages"])
+    # Deferred members are left out of the patch; the parent builds each one serially later.
+    for row, child in deferred:
+        builder_policy.adopt(state, child)
+        row["status"] = builder_policy.SERIAL
+    batch["deferred"] = [row["milestone_id"] for row, _ in deferred]
+    if len(deferred) == len(batch["workers"]):
+        worktrees.retire_builders(batch, workspace)
+        batch.update(status="DEFERRED", finished_at=s.now())
+        state.setdefault("orchestration_history", []).append(copy.deepcopy(batch))
+        state.pop("orchestration_batch")
+        state["next_stage"] = "terra"
+        autocode_status.persist(run_dir / "state.json", state)
+        return
     expected["revision"] = s.digest({"head": expected["head"], "files": expected["files"]})
     batch.update(expected=expected, changed_files=sorted(changed))
     patch_file = Path(batch["directory"]) / "combined.patch"
@@ -442,7 +475,8 @@ def integrate(state, workspace, run_dir, batch):
         raise s.Paused("PAUSED_ORCHESTRATOR_DRIFT", "Integration does not match saved Builder output; inspect retained patch")
     # Integrated and verified: the workers' patch is saved in the batch, so their worktrees go.
     worktrees.retire_builders(batch, workspace)
-    tasks = [row["task"] for row in batch["workers"]]
+    built = [row for row in batch["workers"] if row["status"] == "BUILT"]
+    tasks = [row["task"] for row in built]
     combined = copy.deepcopy(tasks[0])
     combined.update(id="task-" + batch["id"], milestone_ids=[t["milestone_id"] for t in tasks],
                     objective="Integrate and verify: " + "; ".join(t["objective"] for t in tasks))
@@ -456,7 +490,7 @@ def integrate(state, workspace, run_dir, batch):
     s.atomic_json(snapshot_path, current)
     state["source_snapshot"] = str(snapshot_path)
     state["implementation"] = {"summary": combined["objective"], "source_revision": current["revision"],
-                               "workspace": str(workspace), "builder_reports": [r["result"] for r in batch["workers"]],
+                               "workspace": str(workspace), "builder_reports": [r["result"] for r in built],
                                "task_id": combined["id"], "contract_revision": state["goal_contract"]["revision"],
                                "contract_hash": batch["contract_hash"]}
     goals.invalidate(state, "Parallel Builders integrated; validate the combined artifact")
@@ -492,6 +526,10 @@ def dispatch(state, workspace, run_dir):
         autocode_status.persist(run_dir / "state.json", state)
         batch = None
     if batch is None:
+        # Settle this milestone's Builder routes before workers copy them: a previous
+        # milestone's stronger attempt and checker swap must not carry over. Never while
+        # a batch is open, whose members are checked with the routes they were built under.
+        builder_policy.guard(state)
         selected = select(state)
         if not selected:
             state["next_stage"] = "terra"
@@ -507,12 +545,15 @@ def dispatch(state, workspace, run_dir):
             run_workers(state, run_dir, batch)
             # A saved RUNNING worker is never replayed; collect only terminal evidence.
             collect(state, workspace, run_dir, batch)
-        integrate(state, workspace, run_dir, batch)
+        if batch["status"] != "DEFERRED":
+            integrate(state, workspace, run_dir, batch)
     record = {"stage": "orchestrator", "role": "orchestrator", "iteration": state["iteration"],
               "finished_at": s.now(), "runner_owned": True, "batch_id": batch["id"] if batch else None,
               "engine": "runner",
               "duration_seconds": 0, "metrics": {"provider_tokens": {"input_tokens": 0, "output_tokens": 0}},
-              "summary": "Integrated independent Builders; awaiting validation" if batch else "Dispatched one Builder"}
+              "summary": ("Dispatched one Builder" if not batch
+                          else "Every Builder deferred its stronger attempt; building serially" if batch["status"] == "DEFERRED"
+                          else "Integrated independent Builders; awaiting validation")}
     output = run_dir / "orchestration" / ("dispatch-" + uuid.uuid4().hex[:12] + ".json")
     record["output"] = str(output)
     s.atomic_json(output, record)
@@ -538,8 +579,11 @@ def request_retry(state, run_dir, selected):
         s.assert_no_legacy_process(Path(row["run_dir"]), Path(row["workspace"]))
     for mid in selected:
         result = Path(rows[mid]["run_dir"]) / "result.json"
-        if result.exists() and s.read(result).get("status") == "BUILT":
+        status = s.read(result).get("status") if result.exists() else None
+        if status == "BUILT":
             raise ValueError(f"Builder {mid} already completed; its work will be retained")
+        if status == builder_policy.SERIAL:
+            raise ValueError(f"Builder {mid} left its stronger attempt to a serial build after this batch")
     try:
         from . import autocode_resolver_human as human
     except ImportError:

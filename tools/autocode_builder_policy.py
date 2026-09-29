@@ -13,8 +13,13 @@ DEFAULTS = {'enabled': True, 'ordinary_retries': 1, 'strong_model': 'openai/gpt-
             'strong_reasoning_effort': 'xhigh', 'checker_model': 'zai-coding-plan/glm-5.3'}
 # The roles that check the Builder's work (autocode_dispatch._VERIFIER_PAIRS).
 CHECKERS = ('sol', 'completion')
+# A parallel Builder cannot move the parent's checkers, so when they run its stronger model
+# it stops with this result. The parent integrates the other Builders and makes the stronger
+# attempt itself, serially, where swap_checkers applies (user 2026-09-29).
+SERIAL = 'SERIAL_ESCALATION'
 # Efforts a replacement checker keeps; a climbed xhigh/max rung belongs to the GPT ladder.
 CHECKER_EFFORTS = ('low', 'medium', 'high')
+EXHAUSTED = 'Implementation remains blocked after configured retry/escalation; human decision or replanning required'
 
 
 def _bare(model):
@@ -26,8 +31,8 @@ def enabled(state):
             and not state.get('settings', {}).get('workflow'))
 
 
-def key(state):
-    task = state.get('current_task') or {}
+def key(state, task=None):
+    task = task if task is not None else state.get('current_task') or {}
     members = task.get('milestone_ids') or [task.get('milestone_id') or task.get('id')]
     return s.digest([state.get('goal_contract', {}).get('hash'), sorted(members)])
 
@@ -53,9 +58,50 @@ def guard(state):
     if not enabled(state):
         return
     current = lane(state)
+    if current['action'] == 'defer':
+        if state.get('parent_run'):
+            raise s.Paused(SERIAL, 'This Builder left its stronger attempt to the parent run, which makes it serially')
+        _take_deferred(state, current)
     if current['action'] == 'pause':
         raise s.Paused('PAUSED_BUILDER_RETRY_LIMIT',
                        'Builder retry/escalation exhausted for this approved milestone; replan or change policy explicitly')
+
+
+def failed_before(state, milestone_id):
+    """Whether a Builder already failed this milestone; the rest of its attempts are serial."""
+    current = state.get('builder_retries', {}).get(key(state, {'milestone_id': milestone_id}))
+    return bool(current and current['failures'])
+
+
+def adopt(state, worker):
+    """Carry a parallel worker's deferred retry lane into the parent run.
+
+    Its failures stay counted, so the parent makes only the stronger attempt the worker
+    left to it, and a restart cannot add another. The parent's own lane for the milestone
+    has no failures (select() never parallelizes one that has), so it is replaced.
+    """
+    ident = worker.get('builder_retry_key')
+    deferred = worker.get('builder_retries', {}).get(ident) or {}
+    if deferred.get('action') != 'defer' or ident != key(state, worker.get('current_task')):
+        raise s.Paused('PAUSED_ORCHESTRATOR_WORKER', 'Builder deferred its stronger attempt without a saved retry decision')
+    lanes = state.setdefault('builder_retries', {})
+    if not lanes.get(ident, {}).get('failures'):
+        lanes[ident] = copy.deepcopy(deferred)
+    decisions = state.setdefault('builder_retry_decisions', [])
+    for decision in worker.get('builder_retry_decisions', []):
+        if decision not in decisions:
+            decisions.append(copy.deepcopy(decision))
+
+
+def _take_deferred(state, current):
+    """Make the stronger attempt a parallel worker deferred, now that this run builds serially."""
+    config = state['settings']['builder_retry']
+    route = state['settings']['roles']['terra']
+    # The route to restore after this milestone is the one this run has now, not the worker's copy.
+    current['initial_route'] = copy.deepcopy(route)
+    action, checkers, stop_reason = _escalate(state, current, config, route)
+    _decide(state, current, action, current['failures'][-1],
+            'Stronger attempt deferred by a parallel Builder; making it serially', checkers, stop_reason)
 
 
 def colliding_checkers(state, model):
@@ -87,6 +133,38 @@ def swap_checkers(state, current, config, model):
     return swapped
 
 
+def _escalate(state, current, config, route):
+    """Move the Builder to the strong model, or say why this run cannot: (action, checkers, stop reason)."""
+    model = config['strong_model']
+    if route.get('engine', state['settings'].get('engine')) == 'opencode' and '/' not in model:
+        model = 'openai/' + model
+    # Never undo explicit pins or silently change provider/transport.
+    if route.get('model_pinned') or route.get('provider') not in (None, 'openai'):
+        return 'pause', {}, EXHAUSTED
+    if state.get('parent_run') and colliding_checkers(state, model):
+        # The parent run checks this batch with checkers this worker cannot move; the
+        # strong model would check its own work. The parent makes the attempt serially.
+        return 'defer', {}, (f'Parallel Builder needs the stronger model {model}, which also checks this batch; '
+                             'the parent run makes that attempt serially after integrating the other Builders')
+    route.update(model=model, reasoning_effort=config['strong_reasoning_effort'])
+    return 'escalate', swap_checkers(state, current, config, model), None
+
+
+def _decide(state, current, action, evidence, reason, checkers, stop_reason):
+    route = state['settings']['roles']['terra']
+    current['action'] = action
+    state.setdefault('sessions', {}).pop('terra', None)
+    state.setdefault('builder_retry_decisions', []).append({
+        'at': s.now(), 'owner': 'autoresolver', 'action': action, 'failure': evidence,
+        'reason': reason, 'milestone_key': key(state), 'attempt': len(current['failures']),
+        'selected_model': route['model'], 'selected_effort': route.get('reasoning_effort'),
+        **({'checker_models': checkers} if checkers else {})})
+    if action == 'pause':
+        state.update(status='PAUSED_BUILDER_RETRY_LIMIT', phase='PAUSED_OR_BLOCKED', stop_reason=stop_reason)
+    elif action == 'defer':
+        state.update(status=SERIAL, stop_reason=stop_reason)
+
+
 def failure(state, evidence, reason):
     """One persisted resolver decision per failure; restart cannot add authority."""
     if not enabled(state):
@@ -100,34 +178,10 @@ def failure(state, evidence, reason):
     if evidence in current['failures']:
         return current['action']
     current['failures'].append(evidence)
-    route = state['settings']['roles']['terra']
     n = len(current['failures'])
     action = 'retry' if n <= count else 'escalate' if n == count + 1 else 'pause'
-    checkers = {}
-    stop_reason = 'Implementation remains blocked after configured retry/escalation; human decision or replanning required'
+    checkers, stop_reason = {}, EXHAUSTED
     if action == 'escalate':
-        model = config['strong_model']
-        if route.get('engine', state['settings'].get('engine')) == 'opencode' and '/' not in model:
-            model = 'openai/' + model
-        # Never undo explicit pins or silently change provider/transport.
-        if route.get('model_pinned') or route.get('provider') not in (None, 'openai'):
-            action = 'pause'
-        elif state.get('parent_run') and colliding_checkers(state, model):
-            # A parallel Builder's work is checked by the parent run with its own checkers,
-            # which this worker cannot move; the strong model would check its own work.
-            action = 'pause'
-            stop_reason = (f'Parallel Builder needs the stronger model {model}, which also checks this batch; '
-                           'replan the milestone or change the checker route')
-        else:
-            route.update(model=model, reasoning_effort=config['strong_reasoning_effort'])
-            checkers = swap_checkers(state, current, config, model)
-    current['action'] = action
-    state.setdefault('sessions', {}).pop('terra', None)
-    state.setdefault('builder_retry_decisions', []).append({
-        'at': s.now(), 'owner': 'autoresolver', 'action': action, 'failure': evidence,
-        'reason': reason, 'milestone_key': key(state), 'attempt': n,
-        'selected_model': route['model'], 'selected_effort': route.get('reasoning_effort'),
-        **({'checker_models': checkers} if checkers else {})})
-    if action == 'pause':
-        state.update(status='PAUSED_BUILDER_RETRY_LIMIT', phase='PAUSED_OR_BLOCKED', stop_reason=stop_reason)
+        action, checkers, stop_reason = _escalate(state, current, config, state['settings']['roles']['terra'])
+    _decide(state, current, action, evidence, reason, checkers, stop_reason)
     return action
