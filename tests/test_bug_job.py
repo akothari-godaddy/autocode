@@ -314,6 +314,66 @@ class CaseMatchTests(unittest.TestCase):
         regression.check_cases(proof, [CASE])
         self.assertEqual(("FAIL", [], {"T1": []}), (proof["verdict"], proof["unverified"], proof["case_tests"]))
 
+    def test_a_preserve_case_passes_with_a_test_that_passes_before_and_after(self):
+        import autocode_regression as regression
+        preserve = {"id": "T4", "given": "11 items, page size 5", "when": "page_count(11, 5)",
+                    "then": "returns 2", "kind": "preserve"}
+        proof = {"verdict": "PASS", "failures": [], "unverified": [],
+                 "fail_to_pass": ["tests.test_pager.PagerTests.test_t1_off_by_one"],
+                 "pass_to_pass": ["tests.test_pager.PagerTests.test_t4_exact_multiple"]}
+        regression.check_cases(proof, [CASE, preserve])
+        self.assertEqual(("PASS", []), (proof["verdict"], proof["failures"]))
+        self.assertEqual(["tests.test_pager.PagerTests.test_t4_exact_multiple"], proof["case_tests"]["T4"])
+
+    def test_a_preserve_case_without_a_test_fails(self):
+        import autocode_regression as regression
+        preserve = {"id": "T4", "given": "11 items, page size 5", "when": "page_count(11, 5)",
+                    "then": "returns 2", "kind": "preserve"}
+        proof = {"verdict": "PASS", "failures": [], "unverified": [],
+                 "fail_to_pass": ["tests.test_pager.PagerTests.test_t1_off_by_one"], "pass_to_pass": []}
+        regression.check_cases(proof, [preserve])
+        self.assertEqual("FAIL", proof["verdict"])
+        [failure] = proof["failures"]
+        self.assertIn("Preserve case T4", failure)
+        self.assertIn("passes both with the change and on the original code", failure)
+
+    def test_a_mistagged_preserve_case_fails_with_a_say_so_message(self):
+        import autocode_regression as regression
+        preserve = {"id": "T4", "given": "11 items, page size 5", "when": "page_count(11, 5)",
+                    "then": "returns 2", "kind": "preserve"}
+        proof = {"verdict": "PASS", "failures": [], "unverified": [],
+                 "fail_to_pass": ["tests.test_pager.PagerTests.test_t4_exact_multiple"], "pass_to_pass": []}
+        regression.check_cases(proof, [preserve])
+        self.assertEqual("FAIL", proof["verdict"])
+        [failure] = proof["failures"]
+        self.assertIn("fails on the original code", failure)
+        self.assertIn("tag it restore", failure)
+
+    def test_a_restore_case_whose_test_already_passed_on_the_original_still_fails(self):
+        import autocode_regression as regression
+        proof = {"verdict": "PASS", "failures": [], "unverified": [],
+                 "fail_to_pass": [], "pass_to_pass": ["tests.test_pager.PagerTests.test_t1_off_by_one"]}
+        regression.check_cases(proof, [CASE])
+        self.assertEqual("FAIL", proof["verdict"])
+        [failure] = proof["failures"]
+        self.assertIn("did not pass without it", failure)
+
+    def test_a_case_without_a_kind_is_a_restore_case(self):
+        import autocode_regression as regression
+        proof = {"verdict": "PASS", "failures": [], "unverified": [],
+                 "fail_to_pass": ["tests.test_client.RenewTests.test_t1_one_mutation"],
+                 "pass_to_pass": ["tests.test_client.RenewTests.test_t2_never_retries_twice"]}
+        plain = {"id": "T2", "given": "no timeout", "when": "renew() runs", "then": "1 mutation"}
+        regression.check_cases(proof, [CASE, plain])
+        self.assertEqual("FAIL", proof["verdict"])
+        self.assertIn("T2", proof["failures"][0])
+
+    def test_the_diagnosis_rejects_an_unknown_case_kind(self):
+        bad = {"id": "T9", "given": "a", "when": "b", "then": "c", "kind": "guard"}
+        with self.assertRaisesRegex(ValueError, "restore or preserve"):
+            bug_job.check_cases([bad])
+        bug_job.check_cases([{**bad, "kind": "preserve"}])
+
     def test_runs_without_english_tests_are_unchanged(self):
         import autocode_regression as regression
         proof = {"verdict": "PASS", "failures": [], "unverified": [], "fail_to_pass": ["x.test_a"]}

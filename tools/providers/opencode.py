@@ -173,8 +173,18 @@ def openai_auth(workspace=None):
 
 
 def _openai_auth_modes(workspace):
-    result = subprocess.run(["opencode", "auth", "list"], cwd=workspace,
-                            capture_output=True, text=True, timeout=15)
+    # `opencode auth list` is a full CLI cold start (7-15 s observed inside
+    # containers, worse under load). A single slow start must not read as a
+    # missing OAuth connection, so a transport-level failure retries a couple
+    # of times; a completed check is never retried -- its verdict stands.
+    for attempt in range(3):
+        try:
+            result = subprocess.run(["opencode", "auth", "list"], cwd=workspace,
+                                    capture_output=True, text=True, timeout=15)
+            break
+        except (OSError, subprocess.TimeoutExpired):
+            if attempt == 2:
+                raise
     summary = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout + result.stderr)
     return result.returncode, re.findall(r"^\s*[●•]\s+OpenAI\s+(\S+)\s*$", summary, re.MULTILINE)
 
