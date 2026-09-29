@@ -63,7 +63,10 @@ def apply_job(stage, state, value, record, workspace):
             workspace, Path(record.get("output") or workspace).parent / "answer-probes", command=command,
             timeout=PROBE_TIMEOUT))
     if stage == stuck_job.STAGE:
-        return stuck_job.apply(state, value, record, workspace)
+        # The runner shows the diagnosed cause: the probe runs in a scratch tree holding only the cited files.
+        return stuck_job.apply(state, value, record, workspace, run_probe=lambda command, files: verify.scratch_run(
+            workspace, Path(record.get("output") or workspace).parent / "investigation-probe", command=command,
+            files=files, timeout=PROBE_TIMEOUT))
     # The runner, not the Investigator, shows the bug: its probe must exit 0 on the code as it is.
     bug_job.apply(state, value, record, workspace, run_probe=lambda command: verify.scratch_run(
         workspace, Path(record.get("output") or workspace).parent / "investigation-probe", command=command,
