@@ -15,6 +15,7 @@ import autocode as runner
 import autocode_goals as goals
 import autocode_opencode as oc
 import autocode_planning as planning
+import autopilot
 import autocode_support as support
 from goal_fixtures import assert_operational_wait, body
 from . import test_subprocess
@@ -64,7 +65,7 @@ class PlanningTests(unittest.TestCase):
         bare = body()
         bare["milestones"][0].pop("depends_on")
         with self.assertRaisesRegex(ValueError, "declare depends_on"):
-            planning.apply(state, "astra_discovery", {"contract": bare, "summary": "draft",
+            autopilot.apply_planning(state, "astra_discovery", {"contract": bare, "summary": "draft",
                            "code_refs": [], "alternatives": [], "uncertainties": [],
                            "contract_changes": [], "requirement_trace": []}, {"output": "draft.json"})
 
@@ -135,7 +136,7 @@ class PlanningTests(unittest.TestCase):
             "open_questions": [{"id": "Q1", "question": "CLI or web?", "why": "Interface",
                                 "options": ["CLI", "Web"], "proposed_default": "CLI"}],
             "requirements": [], "ignored_statements": [], "conflicts": []}
-        planning.apply(state, "requirements_gather", requirements, {"output": "/run/requirements_gather-01.json"})
+        autopilot.apply_planning(state, "requirements_gather", requirements, {"output": "/run/requirements_gather-01.json"})
         self.assertEqual("astra_discovery", state["next_stage"])
         self.assertEqual("/run/requirements_gather-01.json", state["requirements_handoff"]["output"])
         self.assertNotIn("milestones", state["requirements_handoff"]["report"])
@@ -151,7 +152,7 @@ class PlanningTests(unittest.TestCase):
         self.assertNotIn("unapproved draft", requirements_prompt)
         draft = body(questions=False)
         with self.assertRaisesRegex(ValueError, "dropped unresolved requirements questions"):
-            planning.apply(state, "astra_discovery", {"contract": draft, "summary": "plan",
+            autopilot.apply_planning(state, "astra_discovery", {"contract": draft, "summary": "plan",
                 "code_refs": [], "alternatives": [], "uncertainties": [],
                 "contract_changes": [], "requirement_trace": []}, {"output": "/run/draft.json"})
         self.assertEqual("astra_discovery", state["next_stage"])
@@ -219,7 +220,7 @@ class PlanningTests(unittest.TestCase):
             "evidence_refs": ["api.py:10"], "requested_change": "Deduplicate submission IDs",
             "acceptance_test": "Retry does not update state twice", "blocking": True}]}
         record = {"output": "challenge.json"}
-        planning.apply(state, "astra_challenge", challenge, record)
+        autopilot.apply_planning(state, "astra_challenge", challenge, record)
         original = copy.deepcopy(state)
         revision = {"summary": "Revised", "contract": body(), "code_refs": [], "responses": [],
                     "contract_changes": [], "requirement_trace": []}

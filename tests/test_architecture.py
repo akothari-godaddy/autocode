@@ -10,21 +10,22 @@ from pathlib import Path
 
 TOOLS = Path(__file__).resolve().parents[1] / "tools"
 
-# Modules caught in one import cycle with autocode.py on 2026-09-26, plus those master
-# brought in with it on 2026-09-28 (d0b0ce9, 332c318), less those that have left it since
-# (2026-09-29: the shared helpers moved to autocode_util). Taking a module out of the
-# cycle is progress (remove it here); adding one fails.
+# Modules in an import cycle: they import, directly or through other modules, a module that
+# imports them back. On 2026-09-26 34 modules were caught in one cycle through autocode.py.
+# 2026-09-29: the shared helpers moved to autocode_util, and autopilot stopped importing the CLI
+# (only its script entry does), which freed autocode.py and the controller. Taking a module out
+# of the cycles is progress (remove it here); adding one fails.
 TANGLED = frozenset({
-    "autocode", "autocode_carryforward", "autocode_dispatch", "autocode_findings", "autocode_goals",
+    "autocode_carryforward", "autocode_dispatch", "autocode_findings", "autocode_goals",
     "autocode_interventions", "autocode_milestones", "autocode_planning", "autocode_planning_artifacts",
     "autocode_planning_graph", "autocode_regression", "autocode_resolver_human", "autocode_resolver_runtime",
-    "autocode_reviewer_fallback", "autocode_status", "autocode_support", "autocode_workflow", "autopilot",
-    "units.autocode", "units.autoplanner", "units.autoresolver", "units.autoreview", "units.common",
+    "autocode_status", "autocode_support", "autocode_workflow", "live_scenarios", "live_token_sampler",
+    "score_autocode_run", "task_scenarios", "units.autoplanner", "units.common",
 })
 
 # Line counts on 2026-09-28, after merging master at 24617cc and moving subcommand dispatch out of
 # autocode.py. Lower these when a module shrinks.
-MAX_LINES = {"autocode.py": 3796, "autocode_goals.py": 1903, "autocode_support.py": 923, "autopilot.py": 1194}
+MAX_LINES = {"autocode.py": 3796, "autocode_goals.py": 1903, "autocode_support.py": 923, "autopilot.py": 1178}
 
 
 def source_modules() -> dict[str, Path]:
@@ -37,14 +38,28 @@ def source_modules() -> dict[str, Path]:
     return modules
 
 
+def script_entry(node: ast.stmt) -> bool:
+    """`if __name__ == "__main__":`, which runs only when the file is executed as a program."""
+    test = node.test if isinstance(node, ast.If) else None
+    return (isinstance(test, ast.Compare) and isinstance(test.left, ast.Name) and test.left.id == "__name__"
+            and len(test.comparators) == 1 and getattr(test.comparators[0], "value", None) == "__main__")
+
+
 def import_graph() -> dict[str, set[str]]:
-    """Internal imports of each module, including imports made inside functions."""
+    """Internal imports each module makes when it is imported, including inside functions.
+
+    A script entry (`if __name__ == "__main__":`) is left out: it runs only when the file is executed,
+    so what it imports is not a dependency of the module."""
     modules = source_modules()
     graph = {}
     for name, path in modules.items():
         package = name.split(".")[:-1]
         targets = set()
-        for node in ast.walk(ast.parse(path.read_text())):
+        tree = ast.parse(path.read_text())
+        entry = {id(node) for block in tree.body if script_entry(block) for node in ast.walk(block)}
+        for node in ast.walk(tree):
+            if id(node) in entry:
+                continue
             if isinstance(node, ast.Import):
                 candidates = [alias.name for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
@@ -58,28 +73,31 @@ def import_graph() -> dict[str, set[str]]:
     return graph
 
 
-def cycle_containing(graph: dict[str, set[str]], start: str) -> set[str]:
-    def reachable(edges, origin):
-        seen, todo = set(), [origin]
-        while todo:
-            node = todo.pop()
-            if node not in seen:
-                seen.add(node)
-                todo.extend(edges.get(node, ()))
-        return seen
-    reverse = {}
-    for node, targets in graph.items():
-        for target in targets:
-            reverse.setdefault(target, set()).add(node)
-    return reachable(graph, start) & reachable(reverse, start)
+def reachable(graph: dict[str, set[str]], origins) -> set[str]:
+    seen, todo = set(), list(origins)
+    while todo:
+        node = todo.pop()
+        if node not in seen:
+            seen.add(node)
+            todo.extend(graph.get(node, ()))
+    return seen
+
+
+def modules_in_cycles(graph: dict[str, set[str]]) -> set[str]:
+    """Every module that imports itself back, directly or through other modules."""
+    return {node for node, targets in graph.items() if node in reachable(graph, targets)}
 
 
 class ArchitectureTests(unittest.TestCase):
-    def test_no_module_joins_the_autocode_import_cycle(self):
-        cycle = cycle_containing(import_graph(), "autocode")
-        self.assertFalse(cycle - TANGLED, "these modules now import, directly or indirectly, a module that imports "
-                         "them back through autocode.py; depend on lower-level modules instead: "
-                         f"{sorted(cycle - TANGLED)}")
+    def test_no_module_joins_an_import_cycle(self):
+        tangled = modules_in_cycles(import_graph())
+        self.assertFalse(tangled - TANGLED, "these modules now import, directly or indirectly, a module that imports "
+                         f"them back; depend on lower-level modules instead: {sorted(tangled - TANGLED)}")
+
+    def test_a_module_that_left_the_cycles_is_taken_off_the_list(self):
+        left = TANGLED - modules_in_cycles(import_graph())
+        self.assertFalse(left, f"progress: these modules are no longer in an import cycle; remove them from TANGLED: "
+                         f"{sorted(left)}")
 
     def test_the_shared_helpers_import_nothing_from_autocode(self):
         # autocode_util is the bottom layer; one AutoCode import would drag its 18 users back into the cycle.

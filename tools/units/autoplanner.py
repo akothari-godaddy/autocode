@@ -360,11 +360,22 @@ PINNED_REVIEWER_MODEL = "openai/gpt-6-sol"
 
 
 def start(state):
+    """Begin (or restart) planning: archive the previous planning record and route to plan review."""
     try:
-        from .. import autopilot
+        from .. import autocode_resolver_human as human
     except ImportError:
-        import autopilot
-    return autopilot.start_planning(state)
+        import autocode_resolver_human as human
+    if state.get("planning"):
+        state.setdefault("planning_history", []).append(copy.deepcopy(state["planning"]))
+    state["planning"] = {"astra_calls": 0, "reports": {}, "final_token": None}
+    saved_review_limit = state.get('settings', {}).get('planning_review_call_limit')
+    if type(saved_review_limit) is int and saved_review_limit == 0:
+        state['planning'].update(review_call_limit=0, review_call_limit_origin='user_explicit')
+    state.pop(human.PRIVATE, None)
+    state.pop(human.PUBLIC, None)
+    state.pop("user_request", None)
+    next_stage = "plan_review" if state.get("settings", {}).get("planning_flow") == "v2" else "astra_challenge"
+    state.update(status="RUNNING", phase="PLANNING", next_stage=next_stage, pending_questions=[])
 
 
 def review_call_limit(state):
@@ -473,15 +484,6 @@ def _coverage(rows, concerns):
     for row in rows:
         if any(isinstance(value, str) and not value.strip() for value in row.values()):
             raise ValueError("Planning responses and decisions must be substantive")
-
-
-def apply(state, stage, value, record, *, run_dir=None):
-    """Compatibility entry; planning transitions belong to Autopilot."""
-    try:
-        from .. import autopilot
-    except ImportError:
-        import autopilot
-    return autopilot.apply_planning(state, stage, value, record, run_dir=run_dir)
 
 
 PROMPTS = {
@@ -873,12 +875,3 @@ def recognize(state, value, record):
     """Save the recognized kind of job; the run then continues with its first real stage."""
     workflows.apply(state, value, record)
     state["phase"] = "DISCOVERING"
-
-
-def apply_result(state, stage, value, record):
-    """Compatibility entry; Autopilot consumes the planner result."""
-    try:
-        from .. import autopilot
-    except ImportError:
-        import autopilot
-    return autopilot.apply_planning_result(state, stage, value, record)

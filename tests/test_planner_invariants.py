@@ -5,6 +5,7 @@ import tempfile
 import unittest
 
 import autocode_planning as planning
+import autopilot
 from . import test_autocode as base
 from goal_fixtures import body
 
@@ -139,16 +140,16 @@ class TraceTests(unittest.TestCase):
                   "proposed_assumptions": [], "open_questions": [], "requirements": [],
                   "ignored_statements": [], "conflicts": []}
         with self.assertRaisesRegex(ValueError, "only whitespace"):
-            planning.apply(current, "requirements_gather", report, {"output": "req.json"})
+            autopilot.apply_planning(current, "requirements_gather", report, {"output": "req.json"})
         report["requirements"] = [{"id": "R1", "text": "Reject whitespace names",
                                    "source_quote": "Reject a name that is only whitespace, exit 2."}]
-        planning.apply(current, "requirements_gather", report, {"output": "req.json"})
+        autopilot.apply_planning(current, "requirements_gather", report, {"output": "req.json"})
         draft = body()
         with self.assertRaisesRegex(ValueError, "no trace"):
-            planning.apply(current, "astra_discovery", {
+            autopilot.apply_planning(current, "astra_discovery", {
                 "contract": draft, "summary": "plan", "code_refs": [], "alternatives": [],
                 "uncertainties": [], "contract_changes": [], "requirement_trace": []}, {"output": "draft.json"})
-        planning.apply(current, "astra_discovery", {
+        autopilot.apply_planning(current, "astra_discovery", {
             "contract": draft, "summary": "plan", "code_refs": [], "alternatives": [], "uncertainties": [],
             "contract_changes": [], "requirement_trace": [
                 {"requirement_id": "R1", "disposition": "covered", "evidence": "C1"}]}, {"output": "draft.json"})
@@ -164,7 +165,7 @@ class TraceTests(unittest.TestCase):
                   "requirements": [
                       {"id": "R1", "text": "Use Redis", "source_quote": "Use Redis."},
                       {"id": "R2", "text": "No extra infrastructure", "source_quote": "Actually no additional infrastructure."}]}
-        planning.apply(current, "requirements_gather", report, {"output": "req.json"})
+        autopilot.apply_planning(current, "requirements_gather", report, {"output": "req.json"})
         draft = body()
         draft["constraints"] = ["Use Redis.", "No additional infrastructure."]
         payload = {"contract": draft, "summary": "plan", "code_refs": [], "alternatives": [],
@@ -172,13 +173,13 @@ class TraceTests(unittest.TestCase):
                        {"requirement_id": "R1", "disposition": "covered", "evidence": draft["required_behaviors"][0]},
                        {"requirement_id": "R2", "disposition": "covered", "evidence": "C1"}]}
         with self.assertRaisesRegex(ValueError, "blocking question"):
-            planning.apply(current, "astra_discovery", payload, {"output": "draft.json"})
+            autopilot.apply_planning(current, "astra_discovery", payload, {"output": "draft.json"})
         asked = copy.deepcopy(payload)
         asked["contract"] = body(questions=True)
         asked["contract"]["milestones"] = []
         asked["contract"]["technical_approach"] = []
         asked["contract"]["constraints"] = draft["constraints"]
-        planning.apply(current, "astra_discovery", asked, {"output": "draft.json"})
+        autopilot.apply_planning(current, "astra_discovery", asked, {"output": "draft.json"})
         self.assertTrue(current["goal_contract"]["body"]["open_blocking_questions"])
 
 
@@ -193,9 +194,9 @@ class PlanEvidenceTests(unittest.TestCase):
             payload = {"contract": draft, "summary": "replatform", "code_refs": [], "alternatives": [],
                        "uncertainties": [], "contract_changes": [], "requirement_trace": []}
             with self.assertRaisesRegex(ValueError, "code_refs"):
-                planning.apply(current, "astra_discovery", payload, {"output": "draft.json"})
+                autopilot.apply_planning(current, "astra_discovery", payload, {"output": "draft.json"})
             payload["code_refs"] = ["api.py:1"]
-            planning.apply(current, "astra_discovery", payload, {"output": "draft.json"})
+            autopilot.apply_planning(current, "astra_discovery", payload, {"output": "draft.json"})
         hidden = body()
         hidden["milestones"] = [
             {"id": "M1", "objective": "Parser", "acceptance_criteria": ["C1"], "depends_on": [], "affected_paths": ["shared.py"]},

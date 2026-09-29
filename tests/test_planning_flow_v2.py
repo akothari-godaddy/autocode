@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
 import autocode_goals as goals
 import autocode_planning as planning
+import autopilot
 import autocode_resolver_human as human
 import autocode_support as support
 from goal_fixtures import body
@@ -31,7 +32,7 @@ class V2FlowTests(unittest.TestCase):
 
     def test_requirements_are_contract_free_and_strict(self):
         state = self.state()
-        planning.apply(state, "requirements", {"requirements": requirements(), "summary": "clear"},
+        autopilot.apply_planning(state, "requirements", {"requirements": requirements(), "summary": "clear"},
                        {"output": "requirements.json", "sha256": "abc"})
         self.assertNotIn("goal_contract", state)
         identity = state["planning_artifacts"]["requirements"]["artifact"]
@@ -113,7 +114,7 @@ class V2FlowTests(unittest.TestCase):
             {"id": "C1", "concern": "issue", "evidence_refs": ["x"], "requested_change": "fix", "acceptance_test": "test", "blocking": True}]}}}}
         revised = body(); revised["initial_task"] = {"objective": "x", "affected_paths": ["x"], "kind": "implement", "milestone_id": "M1", "requirements": ["x"], "acceptance_criteria": ["C1"], "validation_plan": ["x"]}
         revised["milestones"][0]["affected_paths"] = ["x.py"]
-        planning.apply(state, "plan_revise", {"contract": revised, "summary": "fixed", "responses": [
+        autopilot.apply_planning(state, "plan_revise", {"contract": revised, "summary": "fixed", "responses": [
             {"concern_id": "C1", "response": "fixed", "evidence_refs": ["x"], "change": "x", "acceptance_test": "x"}]}, {"output": "revision"})
         self.assertEqual("plan_finalize", state["next_stage"])
 
