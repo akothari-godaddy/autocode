@@ -114,7 +114,8 @@ def transport_drift(current, checkpoint):
                for key, value in checkpoint.get(section, {}).items())
 
 
-def check_models(roles, workspace=None):
+def available_models(workspace=None):
+    """The model IDs ``opencode models`` offers this login."""
     # Slow opencode installations can take well over 30s just to list models
     # (observed ~57s on a free cursor-acp plan with 250+ entries). The call is
     # read-only and infrequent; give it room rather than failing the run before
@@ -126,10 +127,15 @@ def check_models(roles, workspace=None):
         raise RuntimeError("OpenCode model listing timed out; no agent was launched") from error
     if result.returncode:
         raise RuntimeError("Cannot list OpenCode models; check opencode models and opencode auth list")
-    available = set(result.stdout.splitlines())
+    return set(result.stdout.splitlines())
+
+
+def check_models(roles, workspace=None):
+    available = available_models(workspace)
     missing = [entry["model"] for entry in roles.values() if entry["model"] not in available]
     if missing:
-        raise RuntimeError("Models unavailable in OpenCode: " + ", ".join(sorted(set(missing))))
+        raise RuntimeError("Models unavailable in OpenCode: " + ", ".join(sorted(set(missing)))
+                           + "; `autocode models` lists what your plans offer")
 
 
 def check_subscription_routes(roles, workspace=None):
@@ -145,15 +151,32 @@ def check_subscription_routes(roles, workspace=None):
         raise RuntimeError("OpenAI API-key or endpoint environment overrides are present; "
                            "subscription selection will not silently change billing routes")
     try:
-        result = subprocess.run(["opencode", "auth", "list"], cwd=workspace,
-                                capture_output=True, text=True, timeout=15)
+        failed, modes = _openai_auth_modes(workspace)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError("Cannot verify OpenCode's OpenAI OAuth connection; no provider request was launched") from error
-    summary = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout + result.stderr)
-    modes = re.findall(r"^\s*[●•]\s+OpenAI\s+(\S+)\s*$", summary, re.MULTILINE)
-    if result.returncode or modes != ["oauth"]:
+    if failed or modes != ["oauth"]:
         raise RuntimeError("OpenCode OpenAI models require a ChatGPT OAuth connection. Use OpenCode /connect → "
                            "OpenAI → ChatGPT Plus/Pro; API-key fallback is disabled")
+
+
+def openai_auth(workspace=None):
+    """How OpenCode signs in to OpenAI: "oauth" (the ChatGPT login), another mode such as
+    "api", "missing" when OpenAI is not connected, or None when the summary cannot be read.
+    Only "oauth" passes check_subscription_routes."""
+    try:
+        failed, modes = _openai_auth_modes(workspace)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if failed or len(modes) > 1:
+        return None
+    return modes[0] if modes else "missing"
+
+
+def _openai_auth_modes(workspace):
+    result = subprocess.run(["opencode", "auth", "list"], cwd=workspace,
+                            capture_output=True, text=True, timeout=15)
+    summary = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout + result.stderr)
+    return result.returncode, re.findall(r"^\s*[●•]\s+OpenAI\s+(\S+)\s*$", summary, re.MULTILINE)
 
 
 def launch(role, workspace, run_dir, session, model, effort, allow_write, *, planning=False,

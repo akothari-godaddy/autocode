@@ -24,14 +24,14 @@ import copy
 import uuid
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
-    from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock
+    from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
 except ImportError:
     import autocode_regression as regression, autocode_support as support, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
     import autocode_goals as goals, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
-    import autocode_escalation as escalation, autocode_failures as failures
+    import autocode_escalation as escalation, autocode_failures as failures, model_catalogue
 
 try:
     from . import autocode_workspaces as task_workspaces, autocode_figma as figma
@@ -3160,7 +3160,7 @@ def _main_body(unit=None) -> int:
         # A new checkpoint must exist before it is registered, so a failed registry
         # update leaves the same run directory available for an explicit retry.
         if not args.run_dir:
-            state["settings"] = settings
+            state["settings"] = settings = model_catalogue.choose(settings, opencode, workspace, interactive=args.chat)
             if settings.get('planning_flow') == 'v2':
                 if state.get('next_stage') == workflows.STAGE:
                     # Recognition still runs first; v2 only moves where the build pipeline starts.
