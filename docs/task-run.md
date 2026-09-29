@@ -120,11 +120,16 @@ run is waiting for:
 | `kind` | Waiting for | Extra fields | Answer with |
 | --- | --- | --- | --- |
 | `approve_plan` | approval of the plan AutoCode displayed | `token` | Approve the plan |
-| `answer` | answers to clarifying questions or a decision | `questions` (id, question, why, options, proposed_default), `request_kind` | Answer, once per question |
+| `answer` | answers to clarifying questions or a decision | `questions` (id, question, why, options, proposed_default), `request_kind`; for a question AutoResolver published, also `resolver_request_id`, `resolver_token` and `resolver_scope` | Answer, once per question (with `--resolver-token` when given) |
 | `review` | a person to accept specific acceptance criteria | `criteria`, `token`, `question` | Approve a review, per criterion |
 | `planning_budget` | more plan-review calls | `reason` | Plan feedback, or `--planning-review-call-limit N` |
 | `resume` | a person to inspect a pause and resolve its cause | `reason` | Resume a pause, once resolved |
 | `continue` | nothing; the run can simply proceed | | Continue |
+
+A `resolver_scope` of `operational_exhaustion` or `blocker` means AutoResolver
+stopped the run because it could not continue safely (for example, the
+reported-token cap was reached). That question is for a person who has looked at
+the run; a caller must not answer it with a proposed default.
 
 Approving a plan or a review is a real user decision. Automated callers should
 do it only when a person has delegated that decision to them, as the scenario

@@ -93,13 +93,13 @@ This describes the standard code workflow. Saved runs and explicitly selected al
 
 ### Runtime requirements and GoCode support
 
-Requires Python 3.11+ and Git. The legacy OpenCode route remains available for
-existing runs. For a GoCode-native run, GoCode must be in managed mode with its
+Requires Python 3.11+ and Git. The default engine is OpenCode 1.x. `--engine gocode`
+selects the GoCode-native route instead: GoCode must be in managed mode with its
 credential bundle available; the runner launches `gocode exec codex exec` and
 does not launch OpenCode.
 macOS/Linux are supported; Windows needs WSL because the inherited process and lock
 mechanisms use POSIX APIs. The only Python runtime dependency is `psutil`, used for process supervision. Installation does
-not change Codex or OpenCode settings. `--engine codex` still starts a Codex-only run.
+not change Codex or OpenCode settings. `--engine codex` starts a Codex-only run.
 
 The current development priority is **reliable completion of agreed work**. Focus on
 completion, recovery, trustworthy status, and clear requests for human input. New
@@ -112,7 +112,7 @@ Run directly from this checkout:
 
 ```sh
 python3 /path/to/autocode/tools/autocode.py "Build a greeting CLI" \
-  --workspace /path/to/project --engine gocode --reasoning-effort high
+  --workspace /path/to/project --reasoning-effort high
 ```
 
 Install the command once with `pipx` to invoke it from any project:
@@ -129,11 +129,11 @@ python3 -m venv .venv
 .venv/bin/autocode "Build a greeting CLI" --workspace /path/to/project
 ```
 
-New GoCode runs use joint GLM/Astra planning. `--joint-planning` is accepted and
+New runs use joint GLM/Astra planning. `--joint-planning` is accepted and
 redundant. `--engine codex` is the explicit single-CLI loop; it does not use joint planning.
-`--engine opencode` remains the compatibility route for existing OpenCode runs.
+`--engine opencode` is the default engine and needs no flag; `--engine gocode` is the GoCode-native route.
 
-The GoCode-native four-role route is explicit and model-pinned:
+The GoCode-native four-role route (`--engine gocode`) is explicit and model-pinned:
 
 | Role | GoCode model |
 | --- | --- |
@@ -208,8 +208,8 @@ The order below was reviewed against [`63ee862`](https://github.com/charlieanna/
 Why this order:
 
 - Reliability work is still finding real defects on small tasks. See [`docs/bugs/`](docs/bugs/): four reports from September 25–26, two still open.
-- Live evidence is thin. The C#→Go trial passed on a single re-run, the bug-fix trial has not been re-run, and the UI trial has never run because its design fixture is missing. See [live re-trials](audits/autopilot-test-catalogue/LIVE_RERUN.md).
-- Small jobs are not yet small. A greeting CLI took 832 seconds through AutoCode against 38 seconds for a direct agent ([comparison](audits/task-vs-autopilot-2026-09-24.md)), and live trials took 11–24 stages. Hierarchy adds stages; it does not remove them.
+- Live evidence is thin. The C#→Go trial passed on a single re-run, the bug-fix trial has not been re-run, and the UI trial has never run because its design fixture is missing. See the live re-trials (`audits/autopilot-test-catalogue/LIVE_RERUN.md`, archived at tag `archive/pre-restructure-2026-09-26`).
+- Small jobs are not yet small. A greeting CLI took 832 seconds through AutoCode against 38 seconds for a direct agent (comparison: `audits/task-vs-autopilot-2026-09-24.md`, archived at the same tag), and live trials took 11–24 stages. Hierarchy adds stages; it does not remove them.
 - A polished conversation on top of a pipeline that still gets stuck makes the product look more finished than it is. UX work proceeds, but only as a view of existing records.
 
 **Every step needs a measurable exit gate.** For example: a user can follow the to-do trial (LIVE-02) end to end in the dashboard without opening `state.json`, and a fix run of the bug-fix trial (LIVE-03) meets agreed time and stage targets. Fake-provider results and live-model results are reported separately ([#16](https://github.com/charlieanna/autocode/issues/16)).
@@ -278,7 +278,7 @@ Show concise explanations of actions, decisions, and observations—not private 
 | “Discuss these tradeoffs.” | Options, assumptions, consequences, and a decision record—not unsolicited implementation. |
 | “Review or build this UI.” | A design assessment or implementation, with rendered and interaction evidence. |
 
-These are target workflows, not claims that today's CLI automatically classifies and implements every intent. Reuse the same units and approval rules instead of building a different engine for every request. The [task-type scenarios](docs/scenarios.md) freeze one request of each kind with an independent oracle, so a claim that a workflow works can be tested rather than asserted.
+Today's CLI recognizes five kinds of job at the start of a run (`build`, `bugfix`, `review`, `design` and `discuss`, saved as the run's `workflow` with the recognizer's reason), and `--workflow KIND` names one instead. See [workflow details](docs/workflow.md). It does not yet change the kind of job inside one conversation (a review followed by "fix them"; [#51](https://github.com/charlieanna/autocode/issues/51)), and UI requests still choose their pipeline through the task-lane `ui`/`code` mode and the Figma path. Reuse the same units and approval rules instead of building a different engine for every request. The [task-type scenarios](docs/scenarios.md) freeze one request of each kind with an independent oracle, so a claim that a workflow works can be tested rather than asserted.
 
 Start with **fix** and **review** ([#20](https://github.com/charlieanna/autocode/issues/20)).:
 
@@ -383,7 +383,7 @@ python3 -m unittest tests/test_escalation.py tests/test_autocode.py \
   tests/test_process.py
 ```
 
-This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), [audit artifacts](audits/), and [AGENTS.md](AGENTS.md#testing). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
+This is not the entire suite. See [testing](docs/testing.md), [dashboard tests](docs/dashboard.md#dashboard-verification), [recorded validation](VALIDATION.md), historical audit artifacts (archived at tag `archive/pre-restructure-2026-09-26`), and [AGENTS.md](AGENTS.md#testing). Oracle proofs for the task-type scenarios and the program runner's offline coverage run with:
 
 ```sh
 python3 -m unittest tests.test_scenario_oracles tests.test_program tests.test_live_trial

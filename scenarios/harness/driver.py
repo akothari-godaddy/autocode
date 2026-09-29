@@ -5,7 +5,9 @@ The driver only calls the CLI. It decides what to do from the status view that
 afterwards, for evidence and metrics. It never writes state. Gates served:
 clarifying questions (answered with AutoCode's proposed default, and recorded),
 plan approval, human-review acceptance, and planning-budget feedback. A pause
-that needs a person is left for the verdict to judge.
+that needs a person is left for the verdict to judge, and so is an AutoResolver
+escalation that it could not continue safely (``PERSON_ONLY_SCOPES``): answering
+one with a proposed default would hide an honest stop.
 
 A scenario with follow-up turns (issue #51) continues the same run: once it
 reaches the state a turn names, the driver says that turn's message with
@@ -34,6 +36,17 @@ FAKE_FLAGS = ["--engine", "codex", "--joint-planning", "--astra-model", "gpt-6-a
               "--terra-model", "gpt-5.6-terra", "--sol-model", "gpt-5.6-sol",
               "--completion-model", "gpt-6-astra", "--glm-model", "gpt-5.6-sol",
               "--plan-reviewer-model", "gpt-6-astra"]
+
+
+# AutoResolver request scopes that ask a person to look at a stopped run (for
+# example, a reported-token cap was reached), not a question about requirements.
+PERSON_ONLY_SCOPES = ("operational_exhaustion", "blocker")
+
+
+def leaves_for_person(need: dict) -> bool:
+    """Whether this need is an honest stop the driver must not answer for the user."""
+    return need["kind"] == "resume" or (need["kind"] == "answer"
+                                        and need.get("resolver_scope") in PERSON_ONLY_SCOPES)
 
 
 class DriveError(RuntimeError):
@@ -145,7 +158,7 @@ class Driver:
         while True:
             view = self.view()
             need = view["needs"]
-            if view["done"] or need["kind"] == "resume" or say_at == f"needs:{need['kind']}":
+            if view["done"] or leaves_for_person(need) or say_at == f"needs:{need['kind']}":
                 return view
             if need["kind"] == "continue":
                 self.call("resume")

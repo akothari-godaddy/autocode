@@ -297,7 +297,12 @@ def normalized_events(rows):
     if any(not row.get("part", {}).get("id") for row in rows if row.get("type") in phase_types):
         return normalized
     phases = [row for row in parts.values() if row.get("type") in phase_types]
-    if steps and phases[-1].get("type") == "step_finish" and steps[-1].get("reason") in ("stop", "length"):
+    # A stream that ends on a "tool-calls" finish stopped mid-turn: the model asked
+    # for tools and no later step followed (the process exited, for example after
+    # every call was auto-rejected). Like "length", it is a failed turn whose
+    # reported usage is kept, so the reported-token cap stays enforceable.
+    if (steps and phases[-1].get("type") == "step_finish"
+            and steps[-1].get("reason") in ("stop", "length", "tool-calls")):
         def total(field, subfield=None):
             containers = [p.get("tokens") for p in steps]
             values = [tokens.get(field) if isinstance(tokens, dict) else None for tokens in containers]
@@ -320,6 +325,12 @@ def normalized_events(rows):
                 "code": "output_token_limit",
                 "message": "OpenCode exhausted its output token limit (finish reason: length). "
                            "The attempt is incomplete; review saved work before recovery."}})
+        elif steps[-1].get("reason") == "tool-calls":
+            normalized.append({"type": "turn.failed", "usage": usage, "error": {
+                "code": "incomplete_turn",
+                "message": "OpenCode stopped after a step that requested tool calls, before the model "
+                           "finished its turn (finish reason: tool-calls). The attempt is incomplete; "
+                           "review saved work before recovery."}})
         elif not errors:
             normalized.append({"type": "turn.completed", "usage": usage})
     return normalized

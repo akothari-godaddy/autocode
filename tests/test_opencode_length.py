@@ -60,6 +60,34 @@ class OutputLimitTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "no successful terminal step"):
             opencode.final_report(self.log)
 
+    def test_a_stream_ending_on_tool_calls_is_a_failed_turn_with_known_usage(self):
+        # A live Validator mistyped the workspace path; every tool call was
+        # auto-rejected and `opencode run` exited after that step. Unknown usage
+        # made the reported-token cap unenforceable (issue #112, repair 3).
+        tokens = {"input": 10, "output": 5, "reasoning": 7, "cache": {"read": 2, "write": 3}}
+        rows = [event("step_start", id="prt_s1"),
+                event("tool_use", id="prt_tool", tool="read", state={"status": "error", "error": "external_directory"}),
+                event("step_finish", id="prt_f1", reason="tool-calls", tokens=tokens)]
+        self.write_events(rows)
+        failures = [row for row in support.events(self.log) if row["type"] == "turn.failed"]
+        self.assertEqual(["incomplete_turn"], [row["error"]["code"] for row in failures])
+        self.assertIn("tool-calls", support.terminal_failure_reason(self.log))
+        metrics = support.event_metrics(self.log)
+        self.assertEqual({"input_tokens": 15, "cached_input_tokens": 2, "output_tokens": 12,
+                          "reasoning_output_tokens": 7}, metrics["provider_tokens"])
+        self.assertEqual(0, metrics["completed_turns"])
+        self.assertEqual("PAUSED_PROVIDER_UNCERTAIN", support.failure_status(self.log))
+        with self.assertRaisesRegex(RuntimeError, "no successful terminal step"):
+            opencode.final_report(self.log)
+        # A later step (the model continuing after its tools ran) is not terminal
+        # yet, and a finished later step completes the turn as before.
+        self.write_events(rows + [event("step_start", id="prt_s2")])
+        self.assertFalse(any(row["type"] in ("turn.completed", "turn.failed") for row in support.events(self.log)))
+        self.write_events(rows + [event("step_start", id="prt_s2"),
+                                  event("step_finish", id="prt_f2", reason="stop", tokens=tokens)])
+        self.assertEqual(1, support.event_metrics(self.log)["completed_turns"])
+        self.assertIsNone(support.terminal_failure_reason(self.log))
+
     def test_length_usage_includes_prior_unique_steps(self):
         first = event("step_finish", id="prt_first", reason="tool-calls", tokens={
             "input": 10, "output": 5, "reasoning": 7, "cache": {"read": 2, "write": 3}})

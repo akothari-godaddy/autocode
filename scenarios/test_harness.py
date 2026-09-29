@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import run  # noqa: E402
 from harness import baseline, catalog, compare, oracle, routing, stats, verdict  # noqa: E402
-from harness.driver import metrics, split_by_turn, turn_state  # noqa: E402
+from harness.driver import leaves_for_person, metrics, split_by_turn, turn_state  # noqa: E402
 
 
 class CatalogTests(unittest.TestCase):
@@ -180,6 +180,17 @@ class TurnTests(unittest.TestCase):
     def test_turn_state_names_what_a_turn_may_follow(self):
         self.assertEqual(["complete"], turn_state({"done": True, "needs": {"kind": "none"}}))
         self.assertEqual(["stop", "needs:answer"], turn_state({"done": False, "needs": {"kind": "answer"}}))
+
+    def test_the_driver_leaves_an_autoresolver_escalation_for_a_person(self):
+        # A run that reached its token cap asks a person, not a requirements
+        # question; answering it with a default turned an honest pause into an ERROR.
+        question = {"kind": "answer", "questions": [{"id": "q1", "proposed_default": "yes"}]}
+        for scope in ("operational_exhaustion", "blocker"):
+            self.assertTrue(leaves_for_person({**question, "resolver_token": "t", "resolver_scope": scope}))
+        self.assertTrue(leaves_for_person({"kind": "resume", "reason": "paused"}))
+        for need in (question, {**question, "resolver_token": "t", "resolver_scope": "clarification"},
+                     {"kind": "approve_plan", "token": "g"}):
+            self.assertFalse(leaves_for_person(need))
 
     def test_stages_are_split_at_the_moment_each_follow_up_was_said(self):
         state = {"stages": [{"stage": "review_change", "finished_at": "2026-09-28T10:00:01+00:00"},
