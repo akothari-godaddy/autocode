@@ -50,6 +50,7 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--no-chat` | One command per turn (default for non-interactive). |
 | `--answer 'Q1=…'` | Answer a requirements question (repeatable). Requires the current `--resolver-token` shown by AutoResolver. |
 | `--feedback '…'` | Send a correction; returns to discovery and requires fresh approval. |
+| `--follow-up '…'` | Say the next thing to a finished run ("Fix them." after a review): the run recognizes the new job and continues in the same run directory. |
 | `--delegate Q1` | Accept a question's proposed default. Requires the current `--resolver-token` shown by AutoResolver. |
 | `--delegate-all --review-token 'r3:<hash>'` | Delegate every pending question marked `delegable` with a proposed default, on the exact displayed revision. Refuses the whole call if any question lacks a default, is not delegable, has a protected or missing category (cost, quota, permission, external side effect, requested outcome), or asks about a rejected assumption. Never approves; invalidates any existing approval. |
 | `--reject-assumption A1 --review-token 'r3:<hash>'` | Reject a structured assumption from the displayed requirements handoff (repeatable). A stale token, or a handoff refreshed since display, is refused. Never approves; invalidates any existing approval. |
@@ -128,7 +129,7 @@ deferred until the UI runner supports checkpoint recovery; use `autocode ui` sep
 `autocode-unattended` (or `scripts/autocode-unattended` from a checkout) runs AutoCode
 for another agent without letting that agent make the operator's decisions. It takes
 AutoCode's own arguments but refuses every decision or recovery flag (`--answer`,
-`--delegate*`, `--approve-*`, `--resume-paused`, `--retry-*`, `--feedback`,
+`--delegate*`, `--approve-*`, `--resume-paused`, `--retry-*`, `--feedback`, `--follow-up`,
 `--accept-completion`, …, including abbreviations) and the `intervention`, `tasks`,
 `ui`, `program`, `registry`, `capture` and `compare-baseline` subcommands. It forces `--no-chat`
 with no stdin, and when AutoCode stops it prints `--status` and tells the caller to

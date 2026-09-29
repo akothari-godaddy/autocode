@@ -26,15 +26,15 @@ def _errors(*groups):
 
 
 TRANSIENT = ("SERVER_BUSY", "RATE_LIMITED")
-CONNECTION = ("CONNECTION_RESET",)
+SESSION = ("SESSION_LIMIT_EXCEEDED",)
 
 DEFAULT = RetryPolicy(retryable_errors=_errors(TRANSIENT), max_attempts=3)
 
 # Policies for the registries we currently talk to. Anything not listed here
 # gets DEFAULT.
 REGISTRIES = {
-    "com": RetryPolicy(retryable_errors=_errors(TRANSIENT, CONNECTION), max_attempts=4, backoff_seconds=0.5),
-    "net": RetryPolicy(retryable_errors=_errors(TRANSIENT, CONNECTION), max_attempts=4, backoff_seconds=0.5),
+    "com": RetryPolicy(retryable_errors=_errors(TRANSIENT, SESSION), max_attempts=4, backoff_seconds=0.5),
+    "net": RetryPolicy(retryable_errors=_errors(TRANSIENT, SESSION), max_attempts=4, backoff_seconds=0.5),
     "org": RetryPolicy(retryable_errors=_errors(TRANSIENT), max_attempts=3, backoff_seconds=1.0),
 }
 

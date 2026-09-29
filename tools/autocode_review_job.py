@@ -222,6 +222,7 @@ def apply(state: dict, value: dict, record: dict, workspace, run_tests=None) -> 
     target.write_text(json.dumps(report, indent=2) + "\n")
     state["review"] = {**counts, "verdict": value["verdict"], "report_path": REPORT_PATH,
                        "output": record.get("output"), "change_under_review": value["change_under_review"],
+                       "change_patch": value.get("change_patch", ""),
                        "delivered_tests": delivered, "finding_tests": proof["finding_tests"],
                        "proof_command": proof["command"]}
     state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,

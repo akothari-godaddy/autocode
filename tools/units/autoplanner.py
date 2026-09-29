@@ -12,6 +12,7 @@ try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
     from .. import autocode_stage_context as stage_context
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
+    from .. import autocode_follow_up as follow_up
 except ImportError:
     import autocode_test_cases as test_cases
     import autocode_goals as goals
@@ -19,6 +20,7 @@ except ImportError:
     import autocode_support as s
     import autocode_stage_context as stage_context
     import autocode_bug_job as bug_job
+    import autocode_follow_up as follow_up
     import autocode_workflows as workflows
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
@@ -44,6 +46,18 @@ refuses the fix unless every case has such a test that fails on the original cod
 not the symptom, and do not widen the change beyond what the root cause needs. Do not ask the user what the
 fix should achieve; ask only about a genuine choice the diagnosis leaves open.
 Cite the diagnosis in code_refs as exactly its note_path; explanations go in summaries, never inside a path.
+"""
+# A follow-up that acts on an earlier review in the same run (autocode_follow_up) is planned
+# from the review's findings; requirements gathering is skipped.
+REVIEW_FINDINGS_RULE = """
+REVIEW FOLLOW-UP: review_findings in the handoff data are the findings of a review the user asked for earlier
+in this conversation, saved in the repository at report_path. The user's request (task) now asks to act on
+them, and they are the requirements: plan a fix for each blocking finding, with an acceptance criterion and a
+regression test that fails on the reviewed change and passes after the fix. When the reviewed change is a patch
+file (change_patch) that is not applied yet, the plan applies it first and fixes the findings on top of it, so
+the change the user asked to land keeps everything else it does. Leave the advisory findings as they are
+unless the request asks for them. Do not ask the user what the findings mean; ask only about a genuine choice
+they leave open. Cite the review in code_refs as exactly its report_path.
 """
 # Features get the bug-fix proof too: the plan states testable criteria as concrete
 # examples marked "test:", and the runner proves each one at its milestone (autocode_test_cases).
@@ -819,6 +833,9 @@ def context(state, stage, state_path):
     diagnosis = bug_job.large_correction(state)
     if diagnosis:
         packet['bug_diagnosis'] = diagnosis
+    findings = follow_up.review_findings(state)
+    if findings:
+        packet['review_findings'] = findings
     if stage == "requirements_gather":
         packet['previous_requirements_handoff'] = state.get('requirements_handoff')
     if stage in ("requirements_gather", "astra_discovery"):
@@ -846,6 +863,7 @@ def context(state, stage, state_path):
         packet["investigation_request"] = request
         clarification_policy += INVESTIGATION_POLICY
     design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
+    design_rule += REVIEW_FINDINGS_RULE if findings else ""
     if stage != "requirements_gather":
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
     if rows:

@@ -121,8 +121,11 @@ say = "Fix them."
 
 When the run reaches the state `after` names, the driver says the message with
 `autocode --follow-up TEXT` (an action on the existing run, like `--feedback`)
-and keeps driving. Nothing in AutoCode accepts `--follow-up` yet, so
-`review-then-fix` is a known failure until the product side of #51 exists. The
+and keeps driving. AutoCode takes a follow-up only on a finished run
+(`after = "complete"`): it records a new turn, recognizes the kind of job again
+from the message, and, after a review, plans the fix from the review's findings
+(docs/task-run.md). A stopped or waiting run refuses it; answer it or send
+`--feedback` instead. The
 oracle's `run` gets `turns`: one record per turn, with the same keys as `run`
 itself (the view that turn ended with, its stages, answers and CLI calls), so
 `run_checks` can judge each turn on its own. Stages are assigned to a turn by
@@ -210,7 +213,7 @@ live comparison with matched models and a recorded profile.
 | `design-review-sound` | design | The same design with the gaps closed. No blocking concerns. |
 | `discuss-cache-choice` | discuss | In-process vs. shared cache, decided by facts planted in the repository (four shared-nothing workers against a 60/hour upstream limit). Cites sources, weighs both options, writes no code, asks at most three questions. |
 | `investigate-two-caches` | investigate | Explain two caches: scope, TTL and users must match the code; consequence of removing one named; nothing changed. |
-| `review-then-fix` | conversation | Review `pr-184.patch`, then "Fix them." in the same run: the PR lands with both regressions fixed and a test that catches each (the oracle swaps back one unfixed file at a time), the advisory finding is left alone, and the fix turn asks no requirements questions. Known failure until AutoCode accepts `--follow-up` (#51). |
+| `review-then-fix` | conversation | Review `pr-184.patch`, then "Fix them." in the same run: the PR lands with both regressions fixed and a test that catches each (the oracle swaps back one unfixed file at a time), the advisory finding is left alone, and the fix turn asks no requirements questions. |
 
 Planned next: Figma design → implementation, and multi-service systems started
 with `docker compose` and checked end to end.

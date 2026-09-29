@@ -95,6 +95,10 @@ How to decide:
   design document is to be produced or reviewed. "I want the analysis, not code" is discuss.
 - When a request asks for several things, choose the kind of the FIRST thing that must happen. "Review
   this and fix what you find" starts as review; "why does this fail, then fix it" starts as bugfix.
+- A follow-up (follow_up in the handoff data) continues a finished job in the same conversation: task is
+  the user's new message and follow_up says what came before. Judge the new message in that context.
+  Asking to act on a review's findings ("fix them", "land it with those fixed", "apply the fixes") is
+  build: the review already found and located the problems, and they are the task list.
 - Do not guess build when unsure. Build is the most expensive path; the other kinds are cheaper and can
   lead to a build later in the same conversation.
 
@@ -110,12 +114,28 @@ def packet(state: dict, inventory: dict | None = None, engine: str | None = None
     # goal_contract, current_task and saved_answers are empty by definition here (nothing has
     # been planned yet); they and execution_engine are present because every provider reads
     # them from the packet.
-    return {"stage": STAGE, "task": state["task"], "workspace": state.get("workspace"),
+    context = follow_up(state)
+    # A follow-up is recognized from the new message; the earlier turn is context, not the request.
+    return {"stage": STAGE, "task": context["message"] if context else state["task"],
+            **({"follow_up": context} if context else {}), "workspace": state.get("workspace"),
             "execution_engine": engine, "workspace_inventory": inventory or {},
             "goal_contract": None, "current_task": None, "saved_answers": {},
             # A request with a Figma design is still recognized by what the user wants back.
             **({"figma_file": state["settings"]["figma_file"]}
                if (state.get("settings") or {}).get("figma_file") else {})}
+
+
+def follow_up(state: dict) -> dict | None:
+    """The earlier turn, for recognizing a follow-up whose kind is not yet known (autocode_follow_up), else None."""
+    turns = state.get("turns") or []
+    if not turns or kind(state):
+        return None
+    previous = turns[-1]["previous"]
+    review = previous.get("review") or {}
+    return {"message": turns[-1]["say"], "previous_workflow": previous.get("workflow"),
+            "previous_request": previous.get("task", ""),
+            **({"previous_review": {"verdict": review.get("verdict"), "blocking": len(review.get("blocking") or []),
+                                    "advisory": len(review.get("advisory") or [])}} if review else {})}
 
 
 def prompt(state: dict, inventory: dict | None = None, soft_budget_tokens: int = 10000,

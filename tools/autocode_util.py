@@ -60,6 +60,17 @@ def read(path):
     return json.loads(Path(path).read_text())
 
 
+def read_object(path):
+    """A stage's JSON report file, which must hold one object."""
+    try:
+        value = json.loads(Path(path).read_text())
+    except (OSError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"Agent did not produce valid JSON at {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"Expected an object in {path}")
+    return value
+
+
 class Paused(RuntimeError):
     def __init__(self, status, reason):
         super().__init__(reason)

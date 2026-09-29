@@ -32,7 +32,7 @@ class HiddenTests(unittest.TestCase):
 
     def test_the_prs_registry_policies_are_kept(self):
         self.assertEqual(4, policy_for("net").max_attempts)
-        transport, response = send("com", ["error:CONNECTION_RESET", "error:CONNECTION_RESET", "ok"])
+        transport, response = send("com", ["error:SESSION_LIMIT_EXCEEDED", "error:SESSION_LIMIT_EXCEEDED", "ok"])
         self.assertTrue(response.ok)
         waits = []
         send("org", ["error:SERVER_BUSY", "error:SERVER_BUSY", "ok"], waits)

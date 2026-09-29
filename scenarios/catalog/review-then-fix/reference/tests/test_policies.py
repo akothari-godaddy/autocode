@@ -13,7 +13,7 @@ class PolicyTests(unittest.TestCase):
         self.assertIs(DEFAULT, policy_for("xyz"))
 
     def test_retryable_errors_are_deduplicated_and_sorted(self):
-        self.assertEqual(("CONNECTION_RESET", "RATE_LIMITED", "SERVER_BUSY"), policy_for("com").retryable_errors)
+        self.assertEqual(("RATE_LIMITED", "SERVER_BUSY", "SESSION_LIMIT_EXCEEDED"), policy_for("com").retryable_errors)
 
     def test_de_gets_one_attempt_and_retries_nothing(self):
         self.assertEqual((1, ()), (policy_for("de").max_attempts, policy_for("DE").retryable_errors))
