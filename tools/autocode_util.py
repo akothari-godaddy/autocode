@@ -174,3 +174,8 @@ def validate_schema(value, schema, where="$"):
             raise ValueError(f"{where}: too many items")
         for index, child in enumerate(value):
             validate_schema(child, schema.get("items", {}), f"{where}[{index}]")
+
+
+def criteria_definition(criteria):
+    """The id and wording of each acceptance criterion, as stages are shown them."""
+    return [{"id": c["id"], "criterion": c["criterion"]} for c in criteria]

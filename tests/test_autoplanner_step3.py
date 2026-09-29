@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import autocode_goals as goals, autopilot
+import autocode_goal_lifecycle as lifecycle
 from units import autoplanner as planner
 from goal_fixtures import body
 
@@ -75,7 +76,7 @@ class ObligationCase(unittest.TestCase):
         self.apply("astra_discovery", self.discovery(plan([decision_question("Q0")])))
         self.publish()
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
-        goals.present(self.state)
+        lifecycle.present(self.state)
         obligation = goals.reject_assumption(self.state, "A1", goals.token(self.state["goal_contract"]))
         self.apply("requirements_gather", requirements())
         return obligation["id"]
@@ -84,7 +85,7 @@ class ObligationCase(unittest.TestCase):
         """The runner's writer boundary: a queued human request becomes visible
         (status, pending_questions, resolver token) only when AutoResolver publishes it."""
         self.assertEqual("RESOLVER_PENDING", self.state["status"])
-        goals.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
 
     def obligation(self, obligation_id):
         return next(ob for ob in self.state["deferred_obligations"] if ob["id"] == obligation_id)
@@ -144,8 +145,8 @@ class RemediationTransitionTests(ObligationCase):
         # Finalize queues the approval request; AutoResolver publishes it at the
         # writer boundary once final-plan evidence matches the current source.
         self.assertEqual("RESOLVER_PENDING", self.state["status"])
-        self.assertEqual("goal_approval", self.state[goals.human.PRIVATE]["scope"])
-        self.assertEqual("AWAITING_GOAL_APPROVAL", self.state[goals.human.PRIVATE]["status"])
+        self.assertEqual("goal_approval", self.state[lifecycle.human.PRIVATE]["scope"])
+        self.assertEqual("AWAITING_GOAL_APPROVAL", self.state[lifecycle.human.PRIVATE]["status"])
 
     def test_revise_emitted_remediation_must_be_decided_at_finalize(self):
         oid = self.reject()
@@ -260,14 +261,14 @@ class ApprovalGateTests(ObligationCase):
     def test_approval_refuses_while_an_obligation_is_open(self):
         self.state["workspace"] = "/absent-workspace"
         self.state["settings"]["joint_planning"] = False
-        goals.install_draft(self.state, body(), origin="user_cli_edit")
+        lifecycle.install_draft(self.state, body(), origin="user_cli_edit")
         self.publish()
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
         self.assertEqual("goal_approval", self.state["resolver_human_request"]["scope"])
         self.state["deferred_obligations"] = [{"id": "obligation-1", "kind": "remediation", "status": "open"}]
-        goals.present(self.state)
+        lifecycle.present(self.state)
         with self.assertRaisesRegex(ValueError, "unresolved obligations"):
-            goals.approve(self.state, goals.token(self.state["goal_contract"]))
+            lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
 
     def test_legacy_run_without_obligations_is_unaffected(self):
         self.assertEqual([], goals.open_obligations(self.state))

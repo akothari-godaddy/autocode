@@ -16,6 +16,7 @@ import autocode as runner
 import autocode_interventions as interventions
 import autocode_support as s
 import autocode_goals as g
+import autocode_goal_lifecycle as lifecycle
 from goal_fixtures import assert_operational_wait, body, envelope
 
 
@@ -58,16 +59,16 @@ class GoalTests(unittest.TestCase):
             "settings": {"roles": {r: {"model": r, "reasoning_effort": "high"} for r in ("astra", "terra", "sol")},
                 "transport_identity": self.local, "headroom": {"enabled": False}, "context_soft_tokens": 10000,
                 "limits": {"iteration_ceiling": 5, "max_seconds": None, "max_reported_tokens": None, "no_progress_batches": 3}}}
-        g.migrate(self.state)
+        lifecycle.migrate(self.state)
 
     def draft(self, **kwargs):
-        g.install_draft(self.state, body(**kwargs), origin="test")
+        lifecycle.install_draft(self.state, body(**kwargs), origin="test")
 
     def approve(self, **kwargs):
         self.draft(**kwargs)
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, g.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, g.token(self.state["goal_contract"]))
 
     def publish_review(self, criteria=("C1",)):
         """Publish the artifact review the way the Completion Owner requests it."""
@@ -75,8 +76,8 @@ class GoalTests(unittest.TestCase):
                    "decision_needed": "Review " + ", ".join(criteria) + " on the current artifact.",
                    "impact": "Human acceptance is required", "options": ["Approve", "Reject"],
                    "proposed_delta": ""}
-        g.wait_for_user(self.state, request)
-        self.assertEqual("escalate", g.human.evaluate(self.state))
+        lifecycle.wait_for_user(self.state, request)
+        self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
         return request
 
     def decision(self, status="CONTINUE"):
@@ -266,17 +267,17 @@ class GoalTests(unittest.TestCase):
                     s.atomic_json(diagnosis, {"diagnosis": "Relaxing C1 needs the user"})
                     self.state["stages"].append({"stage": "astra_resolve", "output": str(diagnosis),
                                                  "exit_code": 0, "changed_files": []})
-                    g.human.queue(self.state, "blocker", {"stage": "astra_resolve", "output": str(diagnosis)},
+                    lifecycle.human.queue(self.state, "blocker", {"stage": "astra_resolve", "output": str(diagnosis)},
                                   request=request, questions=[question], next_stage="astra_review",
                                   evidence={"diagnosis": "Relaxing C1 needs the user", "output": str(diagnosis)})
-                    self.assertEqual("escalate", g.human.evaluate(self.state))
+                    self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
                     with patch("builtins.input", side_effect=[request["options"][0]]), \
                             contextlib.redirect_stdout(io.StringIO()):
                         self.assertFalse(runner.chat_checkpoint(self.state, None))
                     self.assertTrue(self.state["status"].startswith("PAUSED_"))
                     self.assertNotIn("decision-1", self.state.get("answers", {}))
                     self.assertFalse([e for e in self.state.get("user_events", []) if e.get("kind") == "permission_answer"])
-                    self.assertIsNone(g.human.current(self.state))
+                    self.assertIsNone(lifecycle.human.current(self.state))
                     self.assertEqual(request["options"][0],
                                      self.state["recovery_context"]["human_information"]["text"])
                     self.assertEqual("hold", next(iter(
@@ -296,8 +297,8 @@ class GoalTests(unittest.TestCase):
 
     def answer_permission(self, text="Repair only that test"):
         request = self.permission_request()
-        g.wait_for_user(self.state, request)
-        g.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, request)
+        lifecycle.human.evaluate(self.state)
         qid = self.state["pending_questions"][0]["id"]
         g.resolve_permission(self.state, qid, text)
         return request, qid
@@ -308,8 +309,8 @@ class GoalTests(unittest.TestCase):
                 self.approve()
                 request, qid = self.answer_permission(answer)
                 original_contract = copy.deepcopy(self.state["goal_contract"])
-                g.wait_for_user(self.state, copy.deepcopy(request))
-                g.human.evaluate(self.state)
+                lifecycle.wait_for_user(self.state, copy.deepcopy(request))
+                lifecycle.human.evaluate(self.state)
                 self.assertEqual("RUNNING", self.state["status"])
                 self.assertEqual("astra_review", self.state["next_stage"])
                 self.assertEqual([], self.state["pending_questions"])
@@ -317,8 +318,8 @@ class GoalTests(unittest.TestCase):
                 self.assertEqual(qid, self.state["permission_reuse_context"]["answer_id"])
                 self.assertEqual(original_contract, self.state["goal_contract"])
                 with self.assertRaises(s.Paused) as caught:
-                    g.wait_for_user(self.state, request)
-                    g.human.evaluate(self.state)
+                    lifecycle.wait_for_user(self.state, request)
+                    lifecycle.human.evaluate(self.state)
                 self.assertEqual("PAUSED_PERMISSION_RECONCILIATION", caught.exception.status)
 
     def test_permission_reuse_never_expands_scope_or_trusts_missing_provenance(self):
@@ -335,8 +336,8 @@ class GoalTests(unittest.TestCase):
                     self.state["user_events"].remove(answer)
                 else:
                     answer.pop("request")
-                g.wait_for_user(self.state, request)
-                g.human.evaluate(self.state)
+                lifecycle.wait_for_user(self.state, request)
+                lifecycle.human.evaluate(self.state)
                 self.assertEqual("WAITING_FOR_USER", self.state["status"])
                 self.assertNotEqual(qid, self.state["pending_questions"][0]["id"])
 
@@ -344,26 +345,26 @@ class GoalTests(unittest.TestCase):
         self.approve()
         decision = self.decision()
         current = s.snapshot(self.root)
-        g.assign_task(self.state, decision, current)
+        lifecycle.assign_task(self.state, decision, current)
         self.state["settings"]["limits"].update(tool_timeout_seconds=1800)
         self.state["recovery_context"] = {
             "task_id": self.state["current_task"]["id"], "timeout_kind": "tool",
             "execution_limits": {"tool_timeout_seconds": 1800}}
         unchanged = copy.deepcopy(self.state)
         with self.assertRaisesRegex(ValueError, "changed execution plan"):
-            g.assign_task(self.state, decision, current)
+            lifecycle.assign_task(self.state, decision, current)
         self.assertEqual(unchanged, self.state)
         self.state["settings"]["limits"]["stage_timeout_seconds"] = 7200
         with self.assertRaisesRegex(ValueError, "changed execution plan"):
-            g.assign_task(self.state, decision, current)
+            lifecycle.assign_task(self.state, decision, current)
         self.state = copy.deepcopy(unchanged)
         revised = copy.deepcopy(decision)
         revised["next_task"]["validation_plan"] = ["Reuse the pinned CLI result; run remaining invalid-name check separately"]
-        g.assign_task(self.state, revised, current)
+        lifecycle.assign_task(self.state, revised, current)
         self.assertNotEqual(unchanged["current_task"]["id"], self.state["current_task"]["id"])
         self.state = unchanged
         self.state["settings"]["limits"]["tool_timeout_seconds"] = 3600
-        g.assign_task(self.state, decision, current)
+        lifecycle.assign_task(self.state, decision, current)
 
     def test_human_only_pending_review_can_be_presented_accepted_and_completed(self):
         import autocode_milestones as milestones
@@ -371,14 +372,14 @@ class GoalTests(unittest.TestCase):
         draft["acceptance_criteria"].append({"id": "C2", "criterion": "Automated checks pass",
             "verification_method": "Execute CLI cases", "human_review": False})
         draft["milestones"][0]["acceptance_criteria"].append("C2")
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
         next_task = self.decision()
         next_task["next_task"]["acceptance_criteria"].append("C2")
-        g.assign_task(self.state, next_task, s.snapshot(self.root))
+        lifecycle.assign_task(self.state, next_task, s.snapshot(self.root))
         current = self.validation()
         val = self.state["validation"]
         val.update(verdict="BLOCKED", unverified_criteria=["C1 human acceptance pending"])
@@ -388,10 +389,10 @@ class GoalTests(unittest.TestCase):
         self.assertFalse(milestones.evidence_ready(self.state, current))
         self.assertTrue(s.completion_ready(self.state, decision, current, require_human_reviews=False))
         runner.apply_result(self.state, "astra_review", decision, {"output": "review"}, self.root, self.run)
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
-        self.assertEqual("human_review", g.human.current(self.state)["scope"])
-        g.present(self.state)
+        self.assertEqual("human_review", lifecycle.human.current(self.state)["scope"])
+        lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertTrue(s.completion_ready(self.state, decision, current))
         self.assertTrue(milestones.evidence_ready(self.state, current))
@@ -414,14 +415,14 @@ class GoalTests(unittest.TestCase):
         draft["acceptance_criteria"].append({"id": "C3", "criterion": "Automated checks pass",
             "verification_method": "Execute CLI cases", "human_review": False})
         draft["milestones"][0]["acceptance_criteria"] += ["C2", "C3"]
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
         next_task = self.decision()
         next_task["next_task"]["acceptance_criteria"] += ["C2", "C3"]
-        g.assign_task(self.state, next_task, s.snapshot(self.root))
+        lifecycle.assign_task(self.state, next_task, s.snapshot(self.root))
         current = self.validation()
         val = self.state["validation"]
         # The Validator's report: both human criteria pending, the technical one passes.
@@ -435,10 +436,10 @@ class GoalTests(unittest.TestCase):
         self.assertTrue(s.completion_ready(self.state, decision, current, require_human_reviews=False),
                         "a two-human contract reaches the artifact review like a one-human contract")
         runner.apply_result(self.state, "astra_review", decision, {"output": "review"}, self.root, self.run)
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
-        self.assertEqual("human_review", g.human.current(self.state)["scope"])
-        g.present(self.state)
+        self.assertEqual("human_review", lifecycle.human.current(self.state)["scope"])
+        lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertFalse(s.completion_ready(self.state, decision, current),
                          "one of two human acceptances is still missing")
@@ -455,19 +456,19 @@ class GoalTests(unittest.TestCase):
             "verification_method": "Execute handler checks", "human_review": False})
         draft["milestones"].append({"id": "M2", "objective": "server", "acceptance_criteria": ["C2"],
                                     "depends_on": ["M1"], "affected_paths": ["server/"]})
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
-        g.assign_task(self.state, self.decision(), s.snapshot(self.root))  # M1 assigned
+        lifecycle.assign_task(self.state, self.decision(), s.snapshot(self.root))  # M1 assigned
         current = self.validation()  # M1's independent validation passes
         stray = self.decision()
         stray["next_task"] = {"kind": "implement", "milestone_id": "M2", "requirements": ["server"],
                               "acceptance_criteria": ["C2"], "validation_plan": ["run"],
                               "findings": []}
         stray["affected_paths"] = ["greet.py"]  # M1's path, not M2's server/
-        g.assign_task(self.state, stray, s.snapshot(self.root))
+        lifecycle.assign_task(self.state, stray, s.snapshot(self.root))
         task = self.state["current_task"]
         # The milestone's contract ownership is merged in, so the builder's
         # contract-legal server work is within the assignment (LIVE-06 fix).
@@ -484,9 +485,9 @@ class GoalTests(unittest.TestCase):
         self.approve()
         self.state["settings"]["figma_file"] = "https://www.figma.com/design/Example123/Task"
         request, qid = self.answer_permission()
-        g.wait_for_user(self.state, request)
-        g.human.evaluate(self.state)
-        g.assign_task(self.state, self.decision(), s.snapshot(self.root))
+        lifecycle.wait_for_user(self.state, request)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.assign_task(self.state, self.decision(), s.snapshot(self.root))
         prompt, _ = s.context_packet(self.state, "terra", self.run / "state.json")
         self.assertIn('bounded test, parser, or harness repair', prompt)
         self.assertNotIn('before planning, implementation or validation', prompt)
@@ -513,8 +514,8 @@ class GoalTests(unittest.TestCase):
         for mutate in mutations:
             self.state = copy.deepcopy(original)
             mutate(self.state["validation"])
-            g.human.evaluate(self.state)
-            g.present(self.state)
+            lifecycle.human.evaluate(self.state)
+            lifecycle.present(self.state)
             with self.assertRaises(ValueError):
                 g.approve_review(self.state, "C1", g.review_token(self.state), current)
             self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current,
@@ -523,7 +524,7 @@ class GoalTests(unittest.TestCase):
     def test_answer_is_never_approval_and_resume_does_not_bypass_remaining_question(self):
         draft = body(questions=True)
         draft["open_blocking_questions"].append({**draft["open_blocking_questions"][0], "id": "Q2"})
-        g.install_draft(self.state, draft, origin="test")
+        lifecycle.install_draft(self.state, draft, origin="test")
         self.invoke("--answer", "Q1=CLI")
         self.assertFalse(g.approved(self.state))
         self.assertEqual(2, self.invoke("--resume-paused"))
@@ -532,31 +533,31 @@ class GoalTests(unittest.TestCase):
     def test_approval_requires_displayed_exact_revision(self):
         self.draft()
         selected = g.token(self.state["goal_contract"])
-        with self.assertRaises(ValueError): g.approve(self.state, selected)
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, selected)
+        with self.assertRaises(ValueError): lifecycle.approve(self.state, selected)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, selected)
         self.assertTrue(g.approved(self.state))
         self.draft()
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        with self.assertRaises(ValueError): g.approve(self.state, selected)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        with self.assertRaises(ValueError): lifecycle.approve(self.state, selected)
         self.assertFalse(g.approved(self.state))
 
     def test_edit_invalidates_approval_validation_and_human_review(self):
         self.approve(human=True)
         current = self.validation()
         self.publish_review()
-        g.present(self.state)
+        lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         old_token = g.token(self.state["goal_contract"])
         revised = body(human=True); revised["required_behaviors"].append("Support Unicode names")
-        g.install_draft(self.state, revised, origin="user_edit")
+        lifecycle.install_draft(self.state, revised, origin="user_edit")
         self.assertNotEqual(old_token, g.token(self.state["goal_contract"]))
         self.assertNotIn("validation", self.state)
         self.assertEqual({}, self.state["human_reviews"])
         self.assertTrue(self.state["validation_archive"])
-        self.assertIn("Support Unicode names", g.render(self.state))
+        self.assertIn("Support Unicode names", lifecycle.render(self.state))
         with self.assertRaises(s.Paused): g.execution_guard(self.state)
 
     def test_in_place_tampering_and_model_approval_claim_do_not_authorize_execution(self):
@@ -572,7 +573,7 @@ class GoalTests(unittest.TestCase):
             with self.subTest(kind=kind):
                 self.setUp()
                 self.approve()
-                g.assign_task(self.state, self.decision(), s.snapshot(self.root))
+                lifecycle.assign_task(self.state, self.decision(), s.snapshot(self.root))
                 value = {**envelope(self.state), "summary": "Useful partial work", "user_request": {
                     "kind": kind, "discovered": "Need an external service", "impact": "Current scope prohibits it",
                     "decision_needed": "Choose local storage or authorize the service", "options": ["Local: no service", "Service: credentials needed"],
@@ -590,9 +591,9 @@ class GoalTests(unittest.TestCase):
                 self.assertEqual("Useful partial work", self.state["implementation"]["summary"])
                 if kind in ("permission", "goal_change"):
                     # A material decision is published to the user at the writer boundary.
-                    self.assertEqual("escalate", g.human.evaluate(self.state))
+                    self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
                     self.assertEqual("WAITING_FOR_USER", self.state["phase"])
-                    self.assertEqual(kind, g.human.current(self.state)["scope"])
+                    self.assertEqual(kind, lifecycle.human.current(self.state)["scope"])
                     self.assertEqual(2, self.invoke("--resume-paused"))
                     self.assertEqual("WAITING_FOR_USER", self.state["status"])
                 else:
@@ -601,7 +602,7 @@ class GoalTests(unittest.TestCase):
                     runner.normalize_human_boundary(self.state, self.run)
                     self.assertEqual("RESOLVING", self.state["phase"])
                     self.assertEqual("astra_resolve", self.state["next_stage"])
-                    self.assertIsNone(g.human.current(self.state))
+                    self.assertIsNone(lifecycle.human.current(self.state))
                     launched = []
                     def diagnose(**kwargs):
                         launched.append(kwargs)
@@ -615,15 +616,15 @@ class GoalTests(unittest.TestCase):
     def test_goal_change_answer_requires_new_revision_and_approval(self):
         self.approve()
         before = g.token(self.state["goal_contract"])
-        g.wait_for_user(self.state, {"kind": "goal_change", "decision_needed": "Allow Unicode?", "impact": "Changes scope",
+        lifecycle.wait_for_user(self.state, {"kind": "goal_change", "decision_needed": "Allow Unicode?", "impact": "Changes scope",
                                    "discovered": "Names include non-ASCII", "options": ["Yes", "No"], "proposed_delta": "Accept Unicode"})
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         g.answer(self.state, self.state["pending_questions"][0]["id"], "Yes")
         self.assertFalse(g.approved(self.state))
         revised = body(); revised["required_behaviors"].append("Accept Unicode")
-        g.install_draft(self.state, revised, origin="astra_discovery")
+        lifecycle.install_draft(self.state, revised, origin="astra_discovery")
         self.assertNotEqual(before, g.token(self.state["goal_contract"]))
-        with self.assertRaises(ValueError): g.approve(self.state, before)
+        with self.assertRaises(ValueError): lifecycle.approve(self.state, before)
 
     def test_optional_backlog_does_not_block_completion(self):
         self.approve()
@@ -660,7 +661,7 @@ class GoalTests(unittest.TestCase):
         current = self.validation()
         self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         self.publish_review()
-        g.present(self.state)
+        lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertTrue(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         for status in ["FAIL", "UNVERIFIED", "SKIPPED", "AWAITING_USER"]:
@@ -676,7 +677,7 @@ class GoalTests(unittest.TestCase):
     def test_accept_completion_probe_carries_the_current_task_identity(self):
         """F7: --accept-completion was unreachable whenever a task was assigned."""
         self.approve()
-        g.assign_task(self.state, self.decision(), s.snapshot(self.root))
+        lifecycle.assign_task(self.state, self.decision(), s.snapshot(self.root))
         self.validation()
         self.assertEqual([], g.missing_human_reviews(self.state))
         task_id = (self.state.get("current_task") or {}).get("id", "")
@@ -694,12 +695,12 @@ class GoalTests(unittest.TestCase):
         validation["criterion_results"][0]["status"] = "NOT_VERIFIED"
         validation["unverified_criteria"] = ["C1 — awaiting explicit human review"]
         # A review is requested and published (the AutoResolver human protocol) before it can be approved.
-        g.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1"],
+        lifecycle.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1"],
                                      "decision_needed": "Review C1 on the current artifact.",
                                      "impact": "C1 needs human acceptance", "options": ["Approve", "Reject"],
                                      "proposed_delta": ""})
-        g.human.evaluate(self.state)
-        g.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         selected = g.review_token(self.state)
         self.assertFalse(s.completion_ready(self.state, self.decision("TASK_COMPLETE"), current))
         g.approve_review(self.state, "C1", selected, current)
@@ -736,8 +737,8 @@ class GoalTests(unittest.TestCase):
 
     def test_changed_evidence_blocks_human_review(self):
         self.approve(human=True); current = self.validation()
-        g.human.evaluate(self.state)
-        g.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         selected = g.review_token(self.state)
         (self.run / "sol.jsonl").write_text("changed")
         with self.assertRaises(ValueError): g.approve_review(self.state, "C1", selected, current)
@@ -797,20 +798,20 @@ class GoalTests(unittest.TestCase):
     def test_user_decisions_cannot_be_invented(self):
         proposed = body()
         proposed["delegated_decisions"] = [{"text": "Use web", "basis": "delegated", "answer_id": "invented"}]
-        with self.assertRaises(ValueError): g.install_draft(self.state, proposed, origin="agent")
+        with self.assertRaises(ValueError): lifecycle.install_draft(self.state, proposed, origin="agent")
         self.draft(questions=True)
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         g.answer(self.state, "Q1", "accept default", delegated=True)
         proposed["delegated_decisions"][0]["answer_id"] = "Q1"
-        g.install_draft(self.state, proposed, origin="agent")
+        lifecycle.install_draft(self.state, proposed, origin="agent")
         self.assertFalse(g.approved(self.state))
 
     def test_inferred_assumption_must_not_cite_an_answer_id(self):
         proposed = body()
         proposed["accepted_assumptions"] = [{"text": "Plan is the baseline", "basis": "original_request", "answer_id": "original-request"}]
-        with self.assertRaises(ValueError): g.install_draft(self.state, proposed, origin="agent")
+        with self.assertRaises(ValueError): lifecycle.install_draft(self.state, proposed, origin="agent")
         proposed["accepted_assumptions"][0]["answer_id"] = ""
-        g.install_draft(self.state, proposed, origin="agent")
+        lifecycle.install_draft(self.state, proposed, origin="agent")
         self.assertFalse(g.approved(self.state))
 
     def test_migration_retains_work_sessions_limits_and_does_not_approve(self):
@@ -820,7 +821,7 @@ class GoalTests(unittest.TestCase):
         legacy["validation"] = {"verdict": "PASS"}
         legacy["stages"] = [{"output": "saved-terra.json"}]
         legacy["answers"] = {"saved-question": {"text": "Known answer", "kind": "answer"}}
-        g.migrate(legacy)
+        lifecycle.migrate(legacy)
         self.assertEqual("existing-session", legacy["sessions"]["terra"])
         self.assertEqual("completed batch", legacy["implementation"]["summary"])
         self.assertEqual(4, legacy["iteration"])
@@ -835,7 +836,7 @@ class GoalTests(unittest.TestCase):
         for field in ["active_stage", "uncertain_artifacts"]:
             legacy = {**self.state, "version": 2, field: "still pending"}
             before = copy.deepcopy(legacy)
-            with self.assertRaises(s.Paused): g.migrate(legacy)
+            with self.assertRaises(s.Paused): lifecycle.migrate(legacy)
             self.assertEqual(before, legacy)
 
     def test_limits_pause_and_cannot_complete(self):
@@ -987,30 +988,30 @@ class GoalTests(unittest.TestCase):
         for field in ("active_stage", "uncertain_artifacts", "pending_report_repair"):
             with self.subTest(field=field):
                 self.draft()
-                g.human.evaluate(self.state)
-                g.present(self.state)
+                lifecycle.human.evaluate(self.state)
+                lifecycle.present(self.state)
                 selected = g.token(self.state["goal_contract"])
                 self.state.update(status="PAUSED_GOAL_UNAPPROVED", **{field: {"pending": True}})
                 with self.assertRaises(ValueError):
-                    g.approve(self.state, selected)
+                    lifecycle.approve(self.state, selected)
                 self.state.pop(field)
         self.draft()
-        g.human.evaluate(self.state)
-        g.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         self.state.update(status="PAUSED_GOAL_UNAPPROVED")
         with self.assertRaises(ValueError):
-            g.approve(self.state, "stale-token")
+            lifecycle.approve(self.state, "stale-token")
 
     def test_runner_guard_rejects_unapproved_stage_before_subprocess(self):
         self.draft()
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.state.update(next_stage="terra", status="RUNNING", phase="EXECUTING")
         self.assertEqual(2, self.invoke("--resume-paused"))
         # The guard's PAUSED_GOAL_UNAPPROVED pause is reconciled at the writer boundary
         # into a published request to approve the exact draft; nothing was launched.
         self.assertEqual("Current goal revision has no valid explicit approval", self.state["stop_reason"])
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
-        self.assertEqual("goal_approval", g.human.current(self.state)["scope"])
+        self.assertEqual("goal_approval", lifecycle.human.current(self.state)["scope"])
         self.assertFalse(g.approved(self.state))
         self.assertFalse([row for row in self.state["stages"] if row.get("stage") == "terra"])
 
@@ -1022,11 +1023,11 @@ class GoalTests(unittest.TestCase):
         for field in g.BRIEF_FIELDS:
             draft = body(); draft[field] = []
             with self.subTest(field=field), self.assertRaises(ValueError):
-                g.install_draft(self.state, draft, origin="test")
+                lifecycle.install_draft(self.state, draft, origin="test")
         draft = body(); draft["milestones"][0]["acceptance_criteria"] = ["invented"]
-        with self.assertRaises(ValueError): g.install_draft(self.state, draft, origin="test")
+        with self.assertRaises(ValueError): lifecycle.install_draft(self.state, draft, origin="test")
         draft = body(); draft["acceptance_criteria"].append({**draft["acceptance_criteria"][0], "id": "C2"})
-        with self.assertRaises(ValueError): g.install_draft(self.state, draft, origin="test")
+        with self.assertRaises(ValueError): lifecycle.install_draft(self.state, draft, origin="test")
 
     def test_existing_v3_brief_can_be_approved_without_rewriting_its_contract(self):
         self.draft()
@@ -1035,9 +1036,9 @@ class GoalTests(unittest.TestCase):
             del contract["body"][field]
         contract["hash"] = s.digest({k: contract[k] for k in ("task_id", "revision", "body")})
         original = copy.deepcopy(contract["body"])
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, g.token(contract))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, g.token(contract))
         self.assertTrue(g.approved(self.state))
         self.assertEqual(original, contract["body"])
 
@@ -1053,26 +1054,26 @@ class GoalTests(unittest.TestCase):
         self.assertEqual(draft, self.state["goal_contract"]["body"])
         # The draft is queued; the runner's writer boundary publishes the approval request.
         self.assertEqual("RESOLVER_PENDING", self.state["status"])
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
         self.assertFalse(g.approved(self.state))
 
     def test_brief_feedback_is_saved_as_input_and_requires_a_new_approval(self):
         self.draft()
-        g.human.evaluate(self.state)
-        g.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         old = g.token(self.state["goal_contract"])
         self.assertEqual(0, self.invoke("--feedback", "Keep Unicode names in the first milestone"))
         self.assertEqual("astra_discovery", self.state["next_stage"])
         self.assertFalse(g.approved(self.state))
-        with self.assertRaises(ValueError): g.approve(self.state, old)
+        with self.assertRaises(ValueError): lifecycle.approve(self.state, old)
         prompt, _ = s.context_packet(self.state, "astra_discovery", self.run / "state.json")
         self.assertIn("Keep Unicode names", prompt)
         event = self.state["brief_feedback"][0]
         draft = body()
         draft["accepted_assumptions"].append({"text": event["text"], "basis": "user_feedback", "answer_id": event["id"]})
-        g.install_draft(self.state, draft, origin="astra_discovery")
-        g.human.evaluate(self.state)
+        lifecycle.install_draft(self.state, draft, origin="astra_discovery")
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("AWAITING_GOAL_APPROVAL", self.state["status"])
         self.assertNotEqual(old, g.token(self.state["goal_contract"]))
 
@@ -1094,7 +1095,7 @@ class GoalTests(unittest.TestCase):
     def test_chat_interruption_preserves_prior_answers_and_never_approves(self):
         draft = body(questions=True)
         draft["open_blocking_questions"].append({**draft["open_blocking_questions"][0], "id": "Q2"})
-        g.install_draft(self.state, draft, origin="test")
+        lifecycle.install_draft(self.state, draft, origin="test")
         with patch("builtins.input", side_effect=["CLI", KeyboardInterrupt]), contextlib.redirect_stdout(io.StringIO()):
             self.assertFalse(runner.chat_checkpoint(self.state))
         self.assertEqual("CLI", self.state["answers"]["Q1"]["text"])
@@ -1130,11 +1131,11 @@ class GoalTests(unittest.TestCase):
                    "decision_needed": "Review C1 on the current artifact.",
                    "impact": "C1 needs human acceptance", "options": ["Approve", "Reject"],
                    "proposed_delta": ""}
-        g.wait_for_user(self.state, request)
-        g.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, request)
+        lifecycle.human.evaluate(self.state)
         question = copy.deepcopy(self.state["pending_questions"][0])
-        g.human.evaluate(self.state)
-        g.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         selected = g.review_token(self.state)
         self.assertEqual(["C1"], question["review_criteria"])
         self.assertEqual(selected, question["review_token"])
@@ -1178,15 +1179,15 @@ class GoalTests(unittest.TestCase):
         s.atomic_json(diagnosis, {"diagnosis": "Only the user's saved acceptance can be reconciled"})
         self.state["stages"].append({"stage": "astra_resolve", "output": str(diagnosis),
                                      "exit_code": 0, "changed_files": []})
-        g.human.queue(self.state, "blocker", {"stage": "astra_resolve", "output": str(diagnosis)},
+        lifecycle.human.queue(self.state, "blocker", {"stage": "astra_resolve", "output": str(diagnosis)},
                       request=request,
                       questions=[{"id": "runner-reconcile", "question": request["decision_needed"]}],
                       evidence={"diagnosis": "Only the user's saved acceptance can be reconciled",
                                 "output": str(diagnosis)},
                       next_stage="astra_review")
-        self.assertEqual("escalate", g.human.evaluate(self.state))
+        self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
-        g.present(self.state)
+        lifecycle.present(self.state)
         return current, original_id
 
     def test_legacy_review_reconciliation_preserves_the_original_user_event(self):
@@ -1230,15 +1231,15 @@ class GoalTests(unittest.TestCase):
         request = {"kind": "permission", "decision_needed": "Approve or reject C1 based on the current M5V evidence.",
                    "impact": "M5V cannot advance without human review.",
                    "options": ["Approve C1", "Reject C1"], "proposed_delta": ""}
-        g.wait_for_user(self.state, request)
+        lifecycle.wait_for_user(self.state, request)
         # This is how the SQL question was saved before review bindings existed.
-        question = self.state[g.human.PRIVATE]["questions"][0]
+        question = self.state[lifecycle.human.PRIVATE]["questions"][0]
         question.pop("review_criteria")
         question.pop("review_token")
-        self.assertEqual("escalate", g.human.evaluate(self.state))
+        self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
         question = self.state["pending_questions"][0]
         self.assertNotIn("review_token", question)
-        g.present(self.state)
+        lifecycle.present(self.state)
         selected = g.review_token(self.state)
         g.approve_review(self.state, "C1", selected, current)
         self.assertEqual([], self.state["pending_questions"])
@@ -1254,15 +1255,15 @@ class GoalTests(unittest.TestCase):
                    "decision_needed": "Review C1 on the current artifact.",
                    "impact": "C1 needs human acceptance", "options": ["Approve", "Reject"],
                    "proposed_delta": ""}
-        g.wait_for_user(self.state, request)
+        lifecycle.wait_for_user(self.state, request)
         unrelated = {"id": "other", "question": "Choose a project name", "why": "Needed later",
                      "options": [], "proposed_default": ""}
         # A run publishes one request at a time; the unrelated question travels in the
         # same queued request, so publication shows both questions together.
-        self.state[g.human.PRIVATE]["questions"].append(unrelated)
-        self.assertEqual("escalate", g.human.evaluate(self.state))
+        self.state[lifecycle.human.PRIVATE]["questions"].append(unrelated)
+        self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
         self.assertEqual(2, len(self.state["pending_questions"]))
-        g.present(self.state)
+        lifecycle.present(self.state)
         selected = g.review_token(self.state)
         with self.assertRaises(ValueError):
             g.approve_review(self.state, "C1", "stale", current)
@@ -1276,17 +1277,17 @@ class GoalTests(unittest.TestCase):
         draft["acceptance_criteria"].append({"id": "C2", "criterion": "Review a second flow",
             "verification_method": "Inspect the saved flow", "human_review": True})
         draft["milestones"][0]["acceptance_criteria"].append("C2")
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         current = self.validation()
-        g.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1", "C2"],
+        lifecycle.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1", "C2"],
             "decision_needed": "Review both criteria.", "impact": "Both need human acceptance",
             "options": ["Approve", "Reject"], "proposed_delta": ""})
-        g.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         question_id = self.state["pending_questions"][0]["id"]
-        g.present(self.state)
+        lifecycle.present(self.state)
         g.approve_review(self.state, "C1", g.review_token(self.state), current)
         self.assertEqual([], self.state["pending_questions"])
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
@@ -1299,11 +1300,11 @@ class GoalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as registry_home, patch.dict(os.environ, {"AUTOCODE_HOME": registry_home}):
             self.approve(human=True)
             self.validation()
-            g.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1"],
+            lifecycle.wait_for_user(self.state, {"kind": "human_review", "criteria": ["C1"],
                 "decision_needed": "Review C1 on the current artifact.", "impact": "Approval required",
                 "options": ["Approve", "Reject"], "proposed_delta": ""})
-            g.human.evaluate(self.state)
-            g.present(self.state)
+            lifecycle.human.evaluate(self.state)
+            lifecycle.present(self.state)
             selected = g.review_token(self.state)
             question_id = self.state["pending_questions"][0]["id"]
             self.assertEqual(0, self.invoke("--approve-review", "C1", "--review-token", selected))

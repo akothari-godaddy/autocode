@@ -4,6 +4,7 @@ import tempfile
 import unittest
 
 import autocode_goals as goals, autopilot
+import autocode_goal_lifecycle as lifecycle
 from units import autoplanner as planner
 from goal_fixtures import body
 from .test_planner_invariants import state
@@ -34,7 +35,7 @@ class PlannerIntentTests(unittest.TestCase):
         autopilot.apply_planning(current, "astra_discovery", value, {"output": "questions.json"})
         # The question is queued; the runner's writer boundary publishes it to the user.
         self.assertEqual("RESOLVER_PENDING", current["status"])
-        goals.human.evaluate(current)
+        lifecycle.human.evaluate(current)
         self.assertEqual("WAITING_FOR_USER", current["status"])
         self.assertEqual([], current["goal_contract"]["body"]["milestones"])
         goals.answer(current, "Q1", "CLI")
@@ -45,14 +46,14 @@ class PlannerIntentTests(unittest.TestCase):
 
     def test_late_reviewer_question_is_not_erased_by_revision_routing(self):
         current = state()
-        goals.install_draft(current, body(), origin="glm_draft")
+        lifecycle.install_draft(current, body(), origin="glm_draft")
         current["planning"]["reports"]["astra_challenge"] = {"report": {"concerns": []}}
         draft = body(questions=True)
         value = {"contract": draft, "summary": "Need a decision", "code_refs": [],
                  "responses": [], "contract_changes": [], "requirement_trace": []}
         autopilot.apply_planning(current, "glm_revise", value, {"output": "revision.json"})
         self.assertEqual("RESOLVER_PENDING", current["status"])
-        goals.human.evaluate(current)
+        lifecycle.human.evaluate(current)
         self.assertEqual("WAITING_FOR_USER", current["status"])
         self.assertEqual("Q1", current["pending_questions"][0]["id"])
         self.assertNotEqual("astra_finalize", current["next_stage"])
@@ -60,10 +61,10 @@ class PlannerIntentTests(unittest.TestCase):
     def test_saved_correction_supersedes_old_requirement_and_invalidates_approval(self):
         current = state("Monitoring only; no controls")
         current["settings"]["joint_planning"] = False
-        goals.install_draft(current, body(), origin="fixture")
-        goals.human.evaluate(current)
-        goals.present(current)
-        goals.approve(current, goals.token(current["goal_contract"]))
+        lifecycle.install_draft(current, body(), origin="fixture")
+        lifecycle.human.evaluate(current)
+        lifecycle.present(current)
+        lifecycle.approve(current, goals.token(current["goal_contract"]))
         self.assertTrue(goals.approved(current))
         current["settings"]["joint_planning"] = True
         # Return to the conversation checkpoint, then apply changed user intent.

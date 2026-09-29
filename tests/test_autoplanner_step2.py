@@ -7,6 +7,7 @@ import tempfile
 import unittest
 
 import autocode_goals as goals, autopilot
+import autocode_goal_lifecycle as lifecycle
 from units import autoplanner as planner
 from goal_fixtures import body
 
@@ -150,7 +151,7 @@ class InvestigationPassTests(EpisodeCase):
 
     def test_glm_revise_pass_keeps_the_contract_and_review_concerns(self):
         self.state["workspace"] = "/absent-workspace"
-        goals.install_draft(self.state, body(), origin="glm_draft")
+        lifecycle.install_draft(self.state, body(), origin="glm_draft")
         concerns = [{"id": "P1", "concern": "c", "evidence_refs": ["x"], "requested_change": "r",
                      "acceptance_test": "t", "blocking": True}]
         self.state["planning"]["reports"]["astra_challenge"] = {"report": {"concerns": concerns}}
@@ -167,7 +168,7 @@ class InvestigationPassTests(EpisodeCase):
 
     def test_final_reviewer_question_labelled_discoverable_reaches_the_user_as_a_decision(self):
         self.state["workspace"] = "/absent-workspace"
-        goals.install_draft(self.state, body(), origin="glm_draft")
+        lifecycle.install_draft(self.state, body(), origin="glm_draft")
         self.state["planning"]["reports"]["astra_challenge"] = {"report": {"concerns": []}}
         final = {**body(), "open_blocking_questions": [question("Q1")],
                  "initial_task": {"objective": "", "affected_paths": [], "kind": "none", "milestone_id": "",
@@ -176,7 +177,7 @@ class InvestigationPassTests(EpisodeCase):
                                       "contract_changes": [], "requirement_trace": []})
         # The question is queued; the runner's writer boundary publishes it to the user.
         self.assertEqual("RESOLVER_PENDING", self.state["status"])
-        goals.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual("clarification", self.state["resolver_human_request"]["scope"])
         self.assertEqual("decision", self.state["pending_questions"][0]["kind"])
@@ -194,8 +195,8 @@ class EpisodeBudgetTests(EpisodeCase):
         self.assertEqual(episode["id"], self.state["clarification_episode"]["id"])
 
     def test_non_delegated_answer_starts_a_new_episode_with_one_new_pass(self):
-        goals.install_draft(self.state, body(questions=True), origin="glm_draft")
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
+        lifecycle.install_draft(self.state, body(questions=True), origin="glm_draft")
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         first = goals.clarification_episode(self.state)
         first["investigation_used"] = True
         goals.answer(self.state, "Q1", "CLI")
@@ -205,8 +206,8 @@ class EpisodeBudgetTests(EpisodeCase):
         self.assertTrue(self.state["answers"]["Q1"]["starts_episode"])
 
     def test_delegation_resumes_without_replenishing_the_pass(self):
-        goals.install_draft(self.state, body(questions=True), origin="glm_draft")
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
+        lifecycle.install_draft(self.state, body(questions=True), origin="glm_draft")
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         episode = goals.clarification_episode(self.state)
         episode["investigation_used"] = True
         goals.answer(self.state, "Q1", "accept default", delegated=True)
@@ -215,14 +216,14 @@ class EpisodeBudgetTests(EpisodeCase):
         self.assertNotIn("starts_episode", self.state["answers"]["Q1"])
 
     def test_feedback_and_edited_goal_start_new_episodes(self):
-        goals.install_draft(self.state, body(questions=True), origin="glm_draft")
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
+        lifecycle.install_draft(self.state, body(questions=True), origin="glm_draft")
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         first = goals.clarification_episode(self.state)["id"]
         goals.feedback(self.state, "Also support a web page")
         second = self.state["clarification_episode"]
         self.assertNotEqual(first, second["id"])
         self.assertEqual(self.state["brief_feedback"][-1]["id"], second["started_by"])
-        goals.install_draft(self.state, body(), origin="user_cli_edit")
+        lifecycle.install_draft(self.state, body(), origin="user_cli_edit")
         self.assertNotEqual(second["id"], self.state["clarification_episode"]["id"])
 
     def test_new_episode_discards_a_pending_pass(self):
@@ -283,11 +284,11 @@ class ContractListTests(EpisodeCase):
         draft = clarification_only([{"id": "Q1", "question": "CLI or web?", "why": "Interface",
                                      "options": ["CLI", "Web"], "proposed_default": "CLI"}])
         draft.update(deliverables=[], required_behaviors=[], permission_boundaries=[])
-        goals.validate_body(self.state, draft)
+        lifecycle.validate_body(self.state, draft)
         ready = body()
         ready["permission_boundaries"] = []
         with self.assertRaisesRegex(ValueError, "missing permission_boundaries"):
-            goals.validate_body(self.state, ready)
+            lifecycle.validate_body(self.state, ready)
 
 
 class RequirementTraceRowsTests(EpisodeCase):

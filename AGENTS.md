@@ -33,10 +33,12 @@ were archived at tag `archive/pre-restructure-2026-09-26`
    `autocode_support.py` and `autopilot.py` have line limits recorded in
    `tests/test_architecture.py`. New behavior goes in a new module with one
    purpose. Lower the recorded limit when you shrink one.
-2. **Do not join an import cycle.** 21 modules are in one (listed in
-   `tests/test_architecture.py`): the domain modules around `autocode_goals`,
-   `autocode_support` and `autocode_milestones`, and two pairs of live-trial
-   tools. `autocode.py` and `autopilot` are no longer in one. A new module
+2. **Do not join an import cycle.** 16 modules are in one (listed in
+   `tests/test_architecture.py`): the domain modules around `autocode_support`,
+   `autocode_milestones` and `autocode_goal_lifecycle`, and two pairs of
+   live-trial tools. `autocode.py`, `autopilot` and `autocode_goals` (the
+   contract; the steps that act on it are in `autocode_goal_lifecycle`) are
+   no longer in one. A new module
    must depend only on lower-level modules, never on `autocode`, `autopilot` or
    anything in a cycle. Pass what you need as arguments instead. The shared
    helpers (clock, hashing, JSON files, locks, snapshots, schemas) are in

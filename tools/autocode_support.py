@@ -16,13 +16,13 @@ import tomllib
 # Re-export shared helpers for existing callers and test patches.
 try:
     from . import autocode_evidence_snapshot as evidence_snapshot
-    from .autocode_util import (Paused, atomic_json, changed_paths, digest, file_hash, model_output_schema, now,
-                                read, run_lock, snapshot, validate_schema, workspace_lock)
+    from .autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
+                                model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
     from . import autocode_receipts as receipts
 except ImportError:
     import autocode_evidence_snapshot as evidence_snapshot
-    from autocode_util import (Paused, atomic_json, changed_paths, digest, file_hash, model_output_schema, now,
-                               read, run_lock, snapshot, validate_schema, workspace_lock)
+    from autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
+                               model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
     import autocode_receipts as receipts
 
 
@@ -201,10 +201,6 @@ def summarize_events(path, destination):
                              "event_id": item.get("id"), "full_log": str(path),
                              "output": compact_output(item.get("aggregated_output", ""))})
     atomic_json(destination, {"commands": commands, "full_log": str(path)})
-
-
-def criteria_definition(criteria):
-    return [{"id": c["id"], "criterion": c["criterion"]} for c in criteria]
 
 
 def implementation_evidence_paths(refs, events_path):

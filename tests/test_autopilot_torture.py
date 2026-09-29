@@ -16,6 +16,7 @@ import autocode as runner
 import autocode_dispatch as dispatch
 import autocode_findings as findings
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 import autopilot
 from goal_fixtures import body, envelope
@@ -37,16 +38,16 @@ class TortureBase(unittest.TestCase):
     def approve(self, **kwargs):
         # The runner's writer boundary publishes the approval request before it is shown.
         self.draft(**kwargs)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
 
     def setUp(self):
         test_goals.GoalTests.setUp(self)
         self.approve()
         self.step = 0
         decision = self.decision("CONTINUE")
-        goals.assign_task(self.state, decision, support.snapshot(self.root))
+        lifecycle.assign_task(self.state, decision, support.snapshot(self.root))
         self.state.update(status="RUNNING", phase="EXECUTING", next_stage="terra")
 
     def fresh(self, name):
@@ -215,7 +216,7 @@ class PlanningTests(TortureBase):
         weakened = body()
         weakened["acceptance_criteria"][0]["criterion"] = "Any output is fine"
         with self.assertRaisesRegex(ValueError, "without a user-backed|cannot be reworded"):
-            goals.install_draft(self.state, weakened, origin="glm_revise")
+            lifecycle.install_draft(self.state, weakened, origin="glm_revise")
         self.assertEqual("Contract holds", self.state["goal_contract"]["body"]["acceptance_criteria"][0]["criterion"])
         self.assertTrue(goals.approved(self.state))
 
@@ -225,15 +226,15 @@ class PlanningTests(TortureBase):
             {"id": "M1", "objective": "Interface", "acceptance_criteria": ["C1"], "depends_on": ["M2"], "affected_paths": ["a.py"]},
             {"id": "M2", "objective": "Caller", "acceptance_criteria": ["C1"], "depends_on": ["M1"], "affected_paths": ["b.py"]}]
         with self.assertRaisesRegex(ValueError, "cycle"):
-            goals.validate_body(self.state, draft)
+            lifecycle.validate_body(self.state, draft)
         missing = body()
         missing["milestones"].append({"id": "M2", "objective": "Next", "acceptance_criteria": ["C1"], "affected_paths": ["b.py"]})
         with self.assertRaisesRegex(ValueError, "depends_on"):
-            goals.validate_body(self.state, missing)
+            lifecycle.validate_body(self.state, missing)
         unknown = body()
         unknown["milestones"][0]["depends_on"] = ["M9"]
         with self.assertRaisesRegex(ValueError, "unknown milestone"):
-            goals.validate_body(self.state, unknown)
+            lifecycle.validate_body(self.state, unknown)
         self.assertTrue(goals.approved(self.state))
         self.assertEqual(["M1"], [row["id"] for row in self.state["goal_contract"]["body"]["milestones"]])
 
@@ -259,7 +260,7 @@ class PlanningTests(TortureBase):
         wider["permission_boundaries"] = ["May write outside the workspace and call external services"]
         before = copy.deepcopy(self.state["goal_contract"])
         with self.assertRaisesRegex(ValueError, "without a user-backed"):
-            goals.install_draft(self.state, wider, origin="glm_revise")
+            lifecycle.install_draft(self.state, wider, origin="glm_revise")
         self.assertEqual(before, self.state["goal_contract"])
 
 
@@ -284,12 +285,12 @@ class StaleAndDisagreementTests(TortureBase):
         old = self.sol()
         replacement = body()
         replacement["required_behaviors"] = ["Print a shorter greeting"]
-        goals.install_draft(self.state, replacement, origin="user_cli_edit")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, replacement, origin="user_cli_edit")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         decision = self.decision("CONTINUE")
-        goals.assign_task(self.state, decision, support.snapshot(self.root))
+        lifecycle.assign_task(self.state, decision, support.snapshot(self.root))
         self.state.update(status="RUNNING", phase="EXECUTING", next_stage="terra")
         current = copy.deepcopy(self.state)
         self.assertFalse(self.attempt(lambda: self.apply("sol", *old)))
@@ -338,7 +339,7 @@ class StaleAndDisagreementTests(TortureBase):
         self.apply("astra_review", value, record)
         # The request is queued by the result and published at the runner's writer boundary.
         self.assertEqual("RESOLVER_PENDING", self.state["status"])
-        self.assertEqual("escalate", goals.human.evaluate(self.state))
+        self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertTrue(any(row["finding"] == "Credentials missing" for row in findings.open_entries(self.state)))
         self.assertNotEqual("TASK_COMPLETE", self.state["status"])
@@ -442,14 +443,14 @@ class FindingsEvidenceAndUnverifiedTests(TortureBase):
             {"id": f"S{i}", "criterion": f"Screen {i} works", "verification_method": "Open the screen",
              "human_review": False} for i in range(1, 22)]
         draft["milestones"][0]["acceptance_criteria"] = [row["id"] for row in draft["acceptance_criteria"]]
-        goals.install_draft(self.state, draft, origin="user_cli_edit")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, draft, origin="user_cli_edit")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         decision = self.decision("CONTINUE")
         decision["next_task"]["acceptance_criteria"] = [row["id"] for row in draft["acceptance_criteria"]]
         decision["acceptance_criteria"] = [{**row, "status": "unverified", "evidence": ""} for row in draft["acceptance_criteria"]]
-        goals.assign_task(self.state, decision, support.snapshot(self.root))
+        lifecycle.assign_task(self.state, decision, support.snapshot(self.root))
         self.state.update(status="RUNNING", phase="EXECUTING", next_stage="sol")
         results = [{"id": f"S{i}", "status": "PASS", "evidence_refs": ["event:check"]} for i in range(1, 21)]
         results.append({"id": "S21", "status": "NOT_VERIFIED", "evidence_refs": []})
@@ -576,29 +577,29 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
         request = {"kind": "permission", "decision_needed": "Repair the fallback test?",
                    "impact": "The exact test is excluded", "options": ["Repair", "Keep excluded"],
                    "discovered": "An assertion races navigation", "proposed_delta": "Only the fallback test"}
-        goals.wait_for_user(self.state, request)
-        goals.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, request)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         question = self.state["pending_questions"][0]["id"]
         goals.resolve_permission(self.state, question, "No, leave it excluded")
         self.assertEqual("No, leave it excluded", self.state["answers"][question]["text"])
-        goals.wait_for_user(self.state, copy.deepcopy(request))
-        goals.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, copy.deepcopy(request))
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("No, leave it excluded", self.state["permission_reuse_context"]["answer"])
         with self.assertRaises(support.Paused):
-            goals.wait_for_user(self.state, request)
-            goals.human.evaluate(self.state)
+            lifecycle.wait_for_user(self.state, request)
+            lifecycle.human.evaluate(self.state)
         wider = copy.deepcopy(request)
         wider["proposed_delta"] = "Also change production navigation"
-        goals.wait_for_user(self.state, wider)
-        goals.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, wider)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         old = goals.token(self.state["goal_contract"])
         replacement = body()
         replacement["required_behaviors"] = ["Print Hello only"]
-        goals.install_draft(self.state, replacement, origin="user_cli_edit")
+        lifecycle.install_draft(self.state, replacement, origin="user_cli_edit")
         with self.assertRaises(Exception):
-            goals.approve(self.state, old)
+            lifecycle.approve(self.state, old)
         self.assertFalse(goals.approved(self.state))
 
     def test_parallel_waves_reject_overlap_and_keep_a_finished_sibling(self):
@@ -610,14 +611,14 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
             {"id": "M1", "objective": "Greeting", "acceptance_criteria": ["C1"], "depends_on": [], "affected_paths": ["src/greeting.py"]},
             {"id": "M2", "objective": "Farewell", "acceptance_criteria": ["C2"], "depends_on": [], "affected_paths": ["src/farewell.py"]},
             {"id": "M3", "objective": "Shared", "acceptance_criteria": ["C2"], "depends_on": ["M1"], "affected_paths": ["src/greeting.py"]}]
-        goals.install_draft(self.state, draft, origin="user_cli_edit")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, draft, origin="user_cli_edit")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         decision = self.decision("CONTINUE")
         decision["affected_paths"] = ["src/greeting.py"]
         decision["next_task"].update(milestone_id="M1", acceptance_criteria=["C1"])
-        goals.assign_task(self.state, decision, support.snapshot(self.root))
+        lifecycle.assign_task(self.state, decision, support.snapshot(self.root))
         self.state["settings"]["orchestration"] = {"enabled": True, "max_parallel": 3}
         self.state["settings"]["milestone_checkpoints"] = {"enabled": True}
         self.state.pop("workflow", None)
@@ -629,16 +630,16 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
         overlapped["milestones"][0]["acceptance_criteria"] = ["C1", "C2"]
         overlapped["milestones"][1]["affected_paths"] = ["src/greeting.py"]
         overlapped["milestones"][1]["acceptance_criteria"] = ["C1"]
-        goals.install_draft(self.state, overlapped, origin="user_cli_edit")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, overlapped, origin="user_cli_edit")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         overlap_decision = self.decision("CONTINUE")
         overlap_decision["affected_paths"] = ["src/greeting.py"]
         overlap_decision["next_task"].update(milestone_id="M1", acceptance_criteria=["C1", "C2"])
         overlap_decision["acceptance_criteria"] = [
             {**row, "status": "unverified", "evidence": ""} for row in self.state["acceptance_criteria"]]
-        goals.assign_task(self.state, overlap_decision, support.snapshot(self.root))
+        lifecycle.assign_task(self.state, overlap_decision, support.snapshot(self.root))
         self.assertEqual([], dispatch.select(self.state))
         batch_dir = self.run / "workers"
         for mid, status in (("M1", "BUILT"), ("M2", "PAUSED")):
@@ -668,16 +669,16 @@ class HumanGateParallelAndUpgradeTests(TortureBase):
         active["active_stage"] = {"stage": "terra"}
         before = copy.deepcopy(active)
         with self.assertRaises(support.Paused):
-            goals.migrate(active)
+            lifecycle.migrate(active)
         self.assertEqual(before, active)
         self.apply("terra", *self.build())
         old_hash = self.state["goal_contract"]["hash"]
         replacement = body()
         replacement["required_behaviors"] = ["Print Hello only"]
-        goals.install_draft(self.state, replacement, origin="user_cli_edit")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, replacement, origin="user_cli_edit")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.assertNotEqual(old_hash, self.state["goal_contract"]["hash"])
         stale, record = self.build(contract_hash=old_hash)
         self.assertFalse(self.attempt(lambda: self.apply("terra", stale, record)))

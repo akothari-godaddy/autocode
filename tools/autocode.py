@@ -23,14 +23,14 @@ from typing import Any
 import copy
 import uuid
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
+    from . import autocode_support as support, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
     from . import autocode_dependency as dependency, autocode_status_command as status_command
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
 except ImportError:
     import autocode_dependency as dependency, autocode_status_command as status_command
     import autocode_regression as regression, autocode_support as support, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
-    import autocode_goals as goals, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
+    import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
     import autocode_escalation as escalation, autocode_failures as failures, model_catalogue
@@ -131,7 +131,7 @@ def normalize_human_boundary(state, run_dir):
             state.get(resolver_human.PRIVATE, {}).get('scope') != 'operational_exhaustion'):
         return
     public = resolver_human.current(state)
-    if public and not (milestones.recover_review_only_request(state, public) or milestones.release_obsolete_gate_request(state, public)):
+    if public and not (milestones.recover_review_only_request(state, public, ask_user=lifecycle.wait_for_user) or milestones.release_obsolete_gate_request(state, public)):
         return
     proposal = state.get(resolver_human.PRIVATE)
     if not proposal and state.get('status') in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL', 'PAUSED_GOAL_UNAPPROVED'):
@@ -226,7 +226,7 @@ def finish_human_action(state, published):
         if (state.get('user_request') or {}).get('kind') == 'human_review':
             request = copy.deepcopy(state['user_request'])
             request['criteria'] = goals.missing_human_reviews(state)
-            goals.wait_for_user(state, request, origin={'stage': 'resolver_response'},
+            lifecycle.wait_for_user(state, request, origin={'stage': 'resolver_response'},
                                 next_stage=state.get('next_stage'))
         elif state.get('pending_questions'):
             resolver_human.queue(state, 'clarification', {'stage': 'resolver_response'},
@@ -2677,7 +2677,7 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
             commit_user_action(state, candidate, run_dir)
             return False
         if state.get("user_request", {}).get("kind") == "human_review":
-            print(goals.present(state))
+            print(lifecycle.present(state))
             for criterion in goals.missing_human_reviews(state):
                 try:
                     reply = input(f"Approve artifact criterion {criterion} after reviewing its evidence? [y/N]: ").strip().lower()
@@ -2692,7 +2692,7 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                        resolver_human.current(state))
             return state["status"] == "RUNNING"
         if not state.get("pending_questions"):
-            print(goals.present(state))
+            print(lifecycle.present(state))
             return False
         if state.get("user_request"):
             print("Decision needed: " + json.dumps(state["user_request"], indent=2))
@@ -2736,7 +2736,7 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
         if not published or published['scope'] != 'goal_approval':
             return False
         print('\nAutoResolver: proposed plan ready for your decision:\n')
-        print(goals.present(state))
+        print(lifecycle.present(state))
         while True:
             try:
                 reply = input("Approve this brief? [y/N], or type planning feedback: ").strip()
@@ -2744,7 +2744,7 @@ def chat_checkpoint(state: dict[str, Any], run_dir=None) -> bool:
                 print("\nChat paused; the brief remains available for approval.")
                 return False
             if reply.lower() in ("y", "yes", "/approve"):
-                action(lambda candidate: goals.approve(candidate, state["displayed_goal"]), published)
+                action(lambda candidate: lifecycle.approve(candidate, state["displayed_goal"]), published)
                 return True
             if reply.lower() in ("", "n", "no", "/pause"):
                 print("Brief not approved. Resume this run when you are ready.")
@@ -3231,7 +3231,7 @@ def _main_body(unit=None) -> int:
                     error = support.Paused('PAUSED_RATE_LIMIT', state['stop_reason'])
                     resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir, error)
                     write_json(state_path, state)
-                    print(goals.render(state))
+                    print(lifecycle.render(state))
                     return 2
             specific_recovery = False
             issued = resolver_human.current(state)
@@ -3287,7 +3287,7 @@ def _main_body(unit=None) -> int:
                 if resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir, error):
                     write_json(state_path, state)
                     if resolver_human.current(state):
-                        print(goals.render(state))
+                        print(lifecycle.render(state))
                         return 2
             if args.resolver_response:
                 candidate = copy.deepcopy(state)
@@ -3320,7 +3320,7 @@ def _main_body(unit=None) -> int:
                 resolver_runtime.record_operational_exhaustion(sys.modules[__name__], state, run_dir,
                     support.Paused(state['status'], state.get('stop_reason', 'Operational recovery exhausted')))
                 write_json(state_path, state)
-                print(goals.render(state))
+                print(lifecycle.render(state))
                 return 2
             if args.abandon_stage is not None:
                 try:
@@ -3407,7 +3407,7 @@ def _main_body(unit=None) -> int:
                 backup = run_dir / "state.pre-v3.json"
                 if not backup.exists():
                     write_json(backup, state)
-                goals.migrate(state, fresh=not args.run_dir)
+                lifecycle.migrate(state, fresh=not args.run_dir)
                 write_json(state_path, state)
             if args.workflow:  # after migration: a new run's recognizer is begun there
                 try:
@@ -3480,7 +3480,7 @@ def _main_body(unit=None) -> int:
                             goals.resolve_permission(candidate, question, response)
                         elif (request.get("kind") == "blocker" and response == (request.get("options") or [None])[0]
                               and response.startswith("Reconcile ")):
-                            goals.resolve_passing_checkpoint(candidate, question, response)
+                            lifecycle.resolve_passing_checkpoint(candidate, question, response)
                         else:
                             goals.answer(candidate, question, response)
                     for question in args.delegate:
@@ -3492,10 +3492,10 @@ def _main_body(unit=None) -> int:
                     if args.feedback is not None:
                         goals.feedback(candidate, args.feedback)
                     if args.edit_goal:
-                        goals.install_draft(candidate, read_json(args.edit_goal), origin="user_cli_edit")
+                        lifecycle.install_draft(candidate, read_json(args.edit_goal), origin="user_cli_edit")
                         planning_artifacts.prepare_user_cli_edit(candidate, run_dir=run_dir)
                     if args.approve_goal:
-                        goals.approve(candidate, args.approve_goal)
+                        lifecycle.approve(candidate, args.approve_goal)
                     for criterion in args.approve_review:
                         goals.approve_review(candidate, criterion, args.review_token, support.snapshot(workspace))
                     if args.reconcile_review:
@@ -3512,7 +3512,7 @@ def _main_body(unit=None) -> int:
                     print(f"Input rejected: {error}", file=sys.stderr)
                     return 2
                 normalize_human_boundary(candidate, run_dir)
-                rendered = goals.present(candidate)
+                rendered = lifecycle.present(candidate)
                 autopilot.publish_handoffs(candidate, run_dir)
                 commit_user_action(state, candidate, run_dir)
                 print(rendered)
@@ -3532,7 +3532,7 @@ def _main_body(unit=None) -> int:
                         return 2
                     write_json(state_path, state)
                 else:
-                    rendered = goals.present(state)
+                    rendered = lifecycle.present(state)
                     write_json(state_path, state)
                     print(rendered)
                     return 2
@@ -3738,7 +3738,7 @@ def _main_body(unit=None) -> int:
                 if state["status"] == "TASK_COMPLETE":
                     print(jobs.render(state, goals.render_completion) + worktrees.deliver(state, workspace))
                     return 0
-            rendered = goals.present(state)
+            rendered = lifecycle.present(state)
             write_json(state_path, state)
             print(rendered)
         return 0 if state["status"] == "TASK_COMPLETE" else 2

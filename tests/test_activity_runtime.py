@@ -14,6 +14,7 @@ from unittest.mock import patch
 from . import test_goals
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as milestones
 import autocode_support as support
 from goal_fixtures import assert_operational_wait, envelope
@@ -37,7 +38,7 @@ class ActivityRuntimeTests(unittest.TestCase):
     def start_task(self):
         self.approve()
         self.state['settings']['milestone_checkpoints'] = copy.deepcopy(milestones.DEFAULTS)
-        goals.assign_task(self.state, self.decision(), support.snapshot(self.root))
+        lifecycle.assign_task(self.state, self.decision(), support.snapshot(self.root))
         self.state.update(next_stage='terra', status='RUNNING', phase='EXECUTING')
 
     def invoke(self, *args):

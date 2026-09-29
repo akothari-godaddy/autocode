@@ -49,10 +49,16 @@ def envelope(state):
 
 
 def approve_fixture(state, goals):
-    goals.migrate(state)
-    goals.install_draft(state, body(), origin="fixture")
+    # The lifecycle and Resolver modules are imported the way `goals` was (plain, tools. or
+    # autocode_cli.), so the fixture acts on the same module instances as the caller.
+    import importlib
+    prefix = goals.__name__[:-len("autocode_goals")]
+    lifecycle = importlib.import_module(prefix + "autocode_goal_lifecycle")
+    human = importlib.import_module(prefix + "autocode_resolver_human")
+    lifecycle.migrate(state)
+    lifecycle.install_draft(state, body(), origin="fixture")
     # The fixture simulates the writer boundary, never a presentation-side grant.
-    goals.human.evaluate(state)
-    goals.present(state)
-    goals.approve(state, goals.token(state["goal_contract"]))
+    human.evaluate(state)
+    lifecycle.present(state)
+    lifecycle.approve(state, goals.token(state["goal_contract"]))
     state.update(next_stage="terra", phase="EXECUTING")

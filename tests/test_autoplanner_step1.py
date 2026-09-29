@@ -6,6 +6,7 @@ validator and CLI-mutator layer (no obligation-discharge gating yet)."""
 import unittest
 
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 from goal_fixtures import body
 from .test_planner_invariants import state
 
@@ -117,8 +118,8 @@ class RequirementPreservationTests(unittest.TestCase):
 
 def shown(state):
     """The runner's writer boundary publishes the queued request, then the user sees the goal."""
-    goals.human.evaluate(state)
-    goals.present(state)
+    lifecycle.human.evaluate(state)
+    lifecycle.present(state)
     return goals.token(state["goal_contract"])
 
 
@@ -135,12 +136,12 @@ def ask(current, questions):
     """A clarification stop: the draft declares the questions and the runner queues them."""
     current["goal_contract"] = _contract(**{**current.get("goal_contract", {}),
                                             "body": {"open_blocking_questions": list(questions)}})
-    goals.human.queue(current, "clarification", {"stage": "astra_discovery"}, questions=questions)
+    lifecycle.human.queue(current, "clarification", {"stage": "astra_discovery"}, questions=questions)
 
 
 def ask_permission(current):
     """A post-approval WAITING_FOR_USER stop: the runner queues a scoped permission request."""
-    goals.human.queue(current, "permission", {"stage": "terra"}, request={
+    lifecycle.human.queue(current, "permission", {"stage": "terra"}, request={
         "kind": "permission", "discovered": "A write outside the workspace is needed",
         "impact": "The build cannot finish without it", "decision_needed": "Allow the write?",
         "options": ["Allow", "Deny"], "proposed_delta": ""})
@@ -149,7 +150,7 @@ def ask_permission(current):
 def await_approval(current):
     """The goal-approval stop (non-joint planning, so no final-plan evidence is required)."""
     current["settings"]["joint_planning"] = False
-    goals.human.queue(current, "goal_approval", {"stage": "astra_discovery"}, status="AWAITING_GOAL_APPROVAL")
+    lifecycle.human.queue(current, "goal_approval", {"stage": "astra_discovery"}, status="AWAITING_GOAL_APPROVAL")
 
 
 class DelegateAllTests(unittest.TestCase):

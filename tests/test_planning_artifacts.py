@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_planning as planning
 import autopilot
 import autocode_planning_artifacts as artifacts
@@ -126,7 +127,7 @@ class PlanningArtifactTests(unittest.TestCase):
         self.assertEqual(final["final_token"], payload["final_token"])
         self.assertFalse(payload["automatic_execution"])
         self.assertEqual("not-approved", planning_graph.consume(self.state, self.run)["status"])
-        self.assertIn("[C1] accepted", goals.render(self.state))
+        self.assertIn("[C1] accepted", lifecycle.render(self.state))
 
         graph_path = self.run / "planning/graph.json"
         original = graph_path.read_bytes()
@@ -144,9 +145,9 @@ class PlanningArtifactTests(unittest.TestCase):
         self.state["stages"] = [{"stage": "plan_finalize", "output": "plan_finalize.json",
                                   "source_revision": "fixture", "rejected": False}]
         with patch.object(support, "snapshot", return_value={"revision": "fixture"}):
-            self.assertEqual("escalate", goals.human.evaluate(self.state))
-            goals.present(self.state)
-            goals.approve(self.state, final["final_token"])
+            self.assertEqual("escalate", lifecycle.human.evaluate(self.state))
+            lifecycle.present(self.state)
+            lifecycle.approve(self.state, final["final_token"])
         self.assertEqual("ready", planning_graph.consume(self.state, self.run)["status"])
 
     def test_verify_predecessor_rejects_missing_altered_unrecorded_and_planted_files(self):
@@ -232,7 +233,7 @@ class PlanningArtifactTests(unittest.TestCase):
         candidate = copy.deepcopy(self.state)
         edited = plan_body()
         edited["required_behaviors"].append("Document the command")
-        goals.install_draft(candidate, edited, origin="user_cli_edit")
+        lifecycle.install_draft(candidate, edited, origin="user_cli_edit")
         artifacts.prepare_user_cli_edit(candidate, run_dir=self.run)
         artifacts.commit_pending(candidate, self.run, lambda value: support.atomic_json(self.run / "state.json", value))
         self.state.clear(); self.state.update(candidate)
@@ -248,7 +249,7 @@ class PlanningArtifactTests(unittest.TestCase):
         before_files = {str(path.relative_to(self.run)): path.read_bytes() for path in self.run.glob("planning/*.json")}
         candidate = copy.deepcopy(self.state)
         with self.assertRaisesRegex(ValueError, "prior plan artifact hash"):
-            goals.install_draft(candidate, edited, origin="user_cli_edit")
+            lifecycle.install_draft(candidate, edited, origin="user_cli_edit")
             artifacts.prepare_user_cli_edit(candidate, run_dir=self.run)
         self.assertEqual(before_state, json.dumps(self.state, sort_keys=True))
         self.assertEqual(before_files, {str(path.relative_to(self.run)): path.read_bytes()
@@ -264,7 +265,7 @@ class PlanningArtifactTests(unittest.TestCase):
         candidate = copy.deepcopy(self.state)
         edited = plan_body()
         edited["required_behaviors"].append("Document the command")
-        goals.install_draft(candidate, edited, origin="user_cli_edit")
+        lifecycle.install_draft(candidate, edited, origin="user_cli_edit")
         artifacts.prepare_user_cli_edit(candidate, run_dir=self.run)
 
         with self.assertRaisesRegex(OSError, "state persistence failed"):

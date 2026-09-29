@@ -12,6 +12,7 @@ from . import test_goals
 import autocode as runner
 import autocode_dispatch as d
 import autocode_goals as g
+import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as m
 import autocode_support as s
 from goal_fixtures import body, envelope
@@ -57,10 +58,10 @@ class AssignmentScenarios(unittest.TestCase):
         draft["acceptance_criteria"] = criteria
         draft["milestones"] = milestones
         draft["scope_exclusions"] = ["tests/", "config/", "notes/unrelated.txt"]
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         self.state["settings"].update(
             orchestration=copy.deepcopy(d.DEFAULTS), milestone_checkpoints=copy.deepcopy(m.DEFAULTS),
             engine="codex", report_repair={"max_attempts": 2},
@@ -74,7 +75,7 @@ class AssignmentScenarios(unittest.TestCase):
                                   "requirements": [criteria[0]["criterion"]],
                                   "acceptance_criteria": first["acceptance_criteria"],
                                   "validation_plan": [criteria[0]["verification_method"]]}}
-        g.assign_task(self.state, decision, s.snapshot(self.root))
+        lifecycle.assign_task(self.state, decision, s.snapshot(self.root))
         self.state["next_stage"] = "orchestrator"
         self.state["affected_paths"] = decision["affected_paths"]
 

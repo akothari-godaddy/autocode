@@ -7,6 +7,7 @@ from pathlib import Path
 from . import test_milestone_checkpoints as fixtures
 import autocode_carryforward as cf
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as m
 import autocode_support as s
 
@@ -51,22 +52,22 @@ class CarryForwardTests(unittest.TestCase):
         draft['milestones'].reverse()
         if edit:
             edit(draft)
-        goals.install_draft(self.state, draft, origin='test')
+        lifecycle.install_draft(self.state, draft, origin='test')
         self.assertEqual(set(), m.accepted_ids(self.state))
         self.assertEqual([], cf.carry(self.state, s.snapshot(self.root)))
         if approve:
-            goals.human.evaluate(self.state)
-            goals.present(self.state)
-            goals.approve(self.state, self.state['displayed_goal'])
+            lifecycle.human.evaluate(self.state)
+            lifecycle.present(self.state)
+            lifecycle.approve(self.state, self.state['displayed_goal'])
 
     def test_reorder_carries_only_after_approval_with_original_lineage_and_restart(self):
         self.start()
         old = self.accept_fixture()
         self.revise(approve=False)
         self.assertNotIn('validation', self.state)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, self.state['displayed_goal'])
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state['displayed_goal'])
         self.assertEqual({'M1'}, m.accepted_ids(self.state))
         new = self.state['milestone_progress'][self.state['goal_contract']['hash'] + ':M1']
         self.assertEqual(old, self.state['milestone_progress'][old['contract_hash'] + ':M1'])
@@ -224,8 +225,8 @@ class CarryForwardTests(unittest.TestCase):
         # Make the dependency part of an actually approved source contract.
         draft = copy.deepcopy(self.state['goal_contract']['body'])
         draft['milestones'][1]['depends_on'] = ['M1']
-        goals.install_draft(self.state, draft, origin='test'); goals.human.evaluate(self.state); goals.present(self.state)
-        goals.approve(self.state, self.state['displayed_goal']); self.assign()
+        lifecycle.install_draft(self.state, draft, origin='test'); lifecycle.human.evaluate(self.state); lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state['displayed_goal']); self.assign()
         self.accept_fixture(); self.assign('M2'); self.accept_fixture('M2')
         baseline = copy.deepcopy(self.state)
         self.revise()
@@ -271,10 +272,10 @@ class CarryForwardTests(unittest.TestCase):
                                      'source_revision': s.snapshot(self.root)['revision']})
         self.state['planning'] = {'astra_calls': 0, 'final_token': goals.token(self.state['goal_contract']),
                                   'reports': {'astra_finalize': {'output': str(final)}}}
-        self.assertEqual('escalate', goals.human.evaluate(self.state))
-        goals.present(self.state)
+        self.assertEqual('escalate', lifecycle.human.evaluate(self.state))
+        lifecycle.present(self.state)
         self.assertEqual(self.state['planning']['final_token'], self.state['displayed_goal'])
-        goals.approve(self.state, self.state['displayed_goal'])
+        lifecycle.approve(self.state, self.state['displayed_goal'])
         self.assertEqual({'M1'}, m.accepted_ids(self.state))
         self.assertEqual('astra_review', self.state['next_stage'])
         self.assertNotIn('current_task', self.state)

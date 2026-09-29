@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from . import test_catalogue_t01 as t01
 from goal_fixtures import approve_fixture, body
@@ -75,7 +76,7 @@ class CompatCase(t01.ApprovalCase):
 class CompatScenarios(CompatCase):
 
     def test_cfg01_supported_historical_checkpoints_resume(self):
-        """CFG-01. Existing: v1->v2 migrate_v1 and v2->v3 goals.migrate tests."""
+        """CFG-01. Existing: v1->v2 migrate_v1 and v2->v3 lifecycle.migrate tests."""
         ok_legacy = rerun("tests.test_autocode.RetrofitTest.test_legacy_resume_after_terra_does_not_replay_it")
         ok_modern = rerun("tests.test_goals.GoalTests.test_migration_retains_work_sessions_limits_and_does_not_approve")
         self.check("legacy_checkpoint_resume_passes", True, ok_legacy)
@@ -259,7 +260,7 @@ class CompatScenarios(CompatCase):
         try:
             self.approve_now()
             decision = self.decision()
-            goals.assign_task(self.state, decision, support.snapshot(self.root))
+            lifecycle.assign_task(self.state, decision, support.snapshot(self.root))
             packet, _ = support.context_packet(self.state, "terra", self.run / "state.json")
             flowed = "Greet" in packet or bool(self.state.get("current_task"))
         finally:

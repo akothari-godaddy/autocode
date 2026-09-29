@@ -16,6 +16,7 @@ import autopilot_testkit as kit
 import autocode as runner
 import autocode_findings as findings
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from . import test_catalogue_t06 as t06
 from goal_fixtures import body, envelope
@@ -39,16 +40,17 @@ class ReviewCase(t06.SolControllerCase):
         support.atomic_json(self.run / "state.json", self.state)
         self.state = support.read(self.run / "state.json")
         import autocode_goals as goals
+        import autocode_goal_lifecycle as lifecycle
         from goal_fixtures import body as fixture_body
-        goals.install_draft(self.state, fixture_body(human=True), origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, fixture_body(human=True), origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         first = self.decision("CONTINUE")
         first["next_task"] = {"kind": "implement", "milestone_id": "M1", "requirements": ["Greet names"],
                               "acceptance_criteria": ["C1"], "validation_plan": ["Run both cases"], "findings": []}
         first["next_objective"] = "Implement greeting"
-        goals.assign_task(self.state, first, support.snapshot(self.root))
+        lifecycle.assign_task(self.state, first, support.snapshot(self.root))
 
     def apply_terra(self):
         (self.root / "greet.py").write_text("print('hello')\n")
@@ -229,14 +231,14 @@ class ReviewCase(t06.SolControllerCase):
             runner.apply_result(self.state, "astra_review", complete,
                                 {"output": str(self.run / "complete.json")}, self.root, self.run)
         # The runner's writer boundary publishes the queued review request.
-        goals.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.check("waiting_for_human", "WAITING_FOR_USER", self.state["status"])
         self.check("acceptance_request_names_criteria", ["C1"],
                    self.state["user_request"].get("criteria", []))
         # Recovery: the supported human action completes the run.
         current = support.snapshot(self.root)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         goals.approve_review(self.state, "C1", goals.review_token(self.state), current)
         support.atomic_json(self.run / "complete-2.json", complete)
         with self.forbid_real_launches(runner):
@@ -257,8 +259,8 @@ class ReviewCase(t06.SolControllerCase):
             runner.apply_result(self.state, "astra_review", complete,
                                 {"output": str(self.run / "complete.json")}, self.root, self.run)
         current = support.snapshot(self.root)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         goals.approve_review(self.state, "C1", goals.review_token(self.state), current)
         (self.root / "greet.py").write_text("print('v2')\n")  # C2
         new_current = support.snapshot(self.root)

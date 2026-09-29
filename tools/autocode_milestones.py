@@ -101,16 +101,16 @@ def route_review_only_request(state, request, origin):
             "proposed_delta": ""}
 
 
-def recover_review_only_request(state, public):
-    """Retire an authenticated review-only permission and re-enter the real gate."""
+def recover_review_only_request(state, public, *, ask_user):
+    """Retire an authenticated review-only permission and re-enter the real gate.
+
+    ask_user is autocode_goal_lifecycle.wait_for_user, passed in because that module imports this one."""
     if not public or public.get("scope") != "permission":
         return False
     try:
         from . import autocode_resolver_human as human
-        from . import autocode_goals as goals
     except ImportError:
         import autocode_resolver_human as human
-        import autocode_goals as goals
     entry = state.get("resolver", {}).get("human_escalations", {}).get(public["request_id"], {})
     origin = entry.get("identity", {}).get("proposal", {}).get("origin", {})
     request = public.get("request", {})
@@ -123,7 +123,7 @@ def recover_review_only_request(state, public):
     state.pop(human.PUBLIC, None)
     state.pop("user_request", None)
     state["pending_questions"] = []
-    goals.wait_for_user(state, request, origin=origin, next_stage="astra_review")
+    ask_user(state, request, origin=origin, next_stage="astra_review")
     state.setdefault("user_events", []).append({"kind": "review_request_rerouted", "actor": "runner",
         "at": s.now(), "old_request_id": public["request_id"], "milestone_id": scope(state)["id"]})
     return True
@@ -462,8 +462,10 @@ def dispatch_guard(state, stage):
             raise s.Paused("PAUSED_MILESTONE_REPLAN", "The Plan Reviewer must reassess repeated failed checks before another writer attempt")
 
 
-def handle_gate(state, error, current, *, origin=None):
-    """Keep a rejected advancement in the review loop; never replay the Builder."""
+def handle_gate(state, error, current, *, ask_user, origin=None):
+    """Keep a rejected advancement in the review loop; never replay the Builder.
+
+    ask_user is autocode_goal_lifecycle.wait_for_user, passed in because that module imports this one."""
     if error.status in ("PAUSED_MILESTONE_STALLED", "PAUSED_MILESTONE_BUDGET"):
         state.update(status=error.status, phase="PAUSED_OR_BLOCKED", next_stage="astra_review", stop_reason=str(error))
         return
@@ -476,7 +478,7 @@ def handle_gate(state, error, current, *, origin=None):
         except ImportError:
             import autocode_goals as goals
         required = set(scope(state)["acceptance_criteria"])
-        goals.wait_for_user(state,
+        ask_user(state,
             {"kind": "human_review", "criteria": sorted(required.intersection(goals.missing_human_reviews(state))),
              "decision_needed": "Review the current milestone artifact before advancing",
              "impact": "Advancement requires the declared human acceptance of this validated milestone",

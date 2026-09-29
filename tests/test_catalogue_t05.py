@@ -23,6 +23,7 @@ import autopilot_testkit as kit
 import autocode as runner
 import autocode_findings as findings
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from . import test_autocode as base
 from goal_fixtures import approve_fixture, body, envelope
@@ -363,7 +364,7 @@ class ControllerFindingCases(FindingCase):
         first["next_task"] = {"kind": "implement", "milestone_id": "M1", "requirements": ["Greet names"],
                               "acceptance_criteria": ["C1"], "validation_plan": ["Run both cases"], "findings": []}
         first["next_objective"] = "Implement greeting"
-        runner.goals.assign_task(self.state, first, support.snapshot(self.root))
+        runner.lifecycle.assign_task(self.state, first, support.snapshot(self.root))
 
     def test_fnd03_blocked_review_still_records_findings(self):
         """FND-03. Existing: test_findings_controller.test_blocked_user_request_records_the_finding_before_pausing."""
@@ -384,7 +385,7 @@ class ControllerFindingCases(FindingCase):
                   "source_revision": support.snapshot(self.root)["revision"]}
         with self.forbid_real_launches(runner):
             runner.apply_result(self.state, "astra_review", blocked, record, self.root, self.run)
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.check("paused_waiting_for_user", "WAITING_FOR_USER", self.state["status"])
         open_astra = [row["finding"] for row in findings.open_entries(self.state, "astra")]
         self.check("new_finding_recorded", True, "Missing authorization check" in open_astra)
@@ -503,20 +504,20 @@ class ControllerFindingCases(FindingCase):
         b_state = {"version": 2, "workspace": str(self.root), "task": "Project B different goal",
                    "status": "RUNNING", "iteration": 1, "stages": [], "history": [], "sessions": {},
                    "settings": copy.deepcopy(self.settings)}
-        goals.migrate(b_state)
+        lifecycle.migrate(b_state)
         other = body()
         other["intended_outcome"] = "Provide a different fixture CLI for project B"
-        goals.install_draft(b_state, other, origin="fixture")
-        goals.human.evaluate(b_state)
-        goals.present(b_state)
-        goals.approve(b_state, goals.token(b_state["goal_contract"]))
+        lifecycle.install_draft(b_state, other, origin="fixture")
+        lifecycle.human.evaluate(b_state)
+        lifecycle.present(b_state)
+        lifecycle.approve(b_state, goals.token(b_state["goal_contract"]))
         b_state.update(next_stage="terra", phase="EXECUTING")
         first_b = self.decision("CONTINUE")
         first_b.update(**envelope(b_state))
         first_b.update(next_objective="Implement project B work")
         first_b["next_task"] = {"kind": "implement", "milestone_id": "M1", "requirements": ["Other work"],
                                 "acceptance_criteria": ["C1"], "validation_plan": ["Run checks"], "findings": []}
-        runner.goals.assign_task(b_state, first_b, support.snapshot(self.root))
+        runner.lifecycle.assign_task(b_state, first_b, support.snapshot(self.root))
         # Both projects raise a finding with the same visible wording.
         report_a = self.decision("REWORK", "Missing authorization check")
         findings.record_decision(self.state, report_a, {"output": "astra-a1.json"})

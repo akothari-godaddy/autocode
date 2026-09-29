@@ -13,6 +13,7 @@ from . import test_subprocess
 import autocode as runner
 import autocode_dispatch as d
 import autocode_goals as g
+import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as m
 import autocode_support as s
 from goal_fixtures import assert_operational_wait, body, envelope
@@ -33,16 +34,16 @@ class DispatchTests(unittest.TestCase):
              "affected_paths": (paths or {}).get("M2", ["b.txt"])},
             {"id": "M3", "objective": "Combine outputs", "depends_on": ["M1", "M2"], "acceptance_criteria": ["C3"],
              "affected_paths": ["combined.txt"]}]
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         self.state["settings"].update(orchestration=copy.deepcopy(d.DEFAULTS),
                                       milestone_checkpoints=copy.deepcopy(m.DEFAULTS), engine="codex", report_repair={"max_attempts": 2})
         decision = {"status": "CONTINUE", "next_objective": "First output", "affected_paths": draft["milestones"][0]["affected_paths"],
                     "next_task": {"kind": "implement", "milestone_id": "M1", "requirements": ["Output 1 works"],
                                   "acceptance_criteria": ["C1"], "validation_plan": ["Read output 1"]}}
-        g.assign_task(self.state, decision, s.snapshot(self.root))
+        lifecycle.assign_task(self.state, decision, s.snapshot(self.root))
         self.state["next_stage"] = "orchestrator"
         self.state["affected_paths"] = decision["affected_paths"]
         fixture_bin = self.root / ".autocode/fixture-bin"
@@ -73,7 +74,7 @@ class DispatchTests(unittest.TestCase):
 
     def advance(self, mid="M3"):
         cid = {"M1": "C1", "M2": "C2", "M3": "C3"}[mid]
-        return g.assign_task(self.state, {"status": "CONTINUE", "next_objective": "Finish " + mid,
+        return lifecycle.assign_task(self.state, {"status": "CONTINUE", "next_objective": "Finish " + mid,
               "affected_paths": ["combined.txt"], "next_task": {"kind": "implement", "milestone_id": mid,
               "requirements": ["Keep outputs working"], "acceptance_criteria": [cid], "validation_plan": ["Read output"]}}, s.snapshot(self.root))
 
@@ -244,10 +245,10 @@ class DispatchTests(unittest.TestCase):
         old = d.prepare(self.state, self.root, self.run, d.select(self.state))
         d.run_workers(self.state, self.run, old)
         draft["constraints"].append("Updated requirement")
-        g.install_draft(self.state, draft, origin="test")
-        g.human.evaluate(self.state)
-        g.present(self.state)
-        g.approve(self.state, self.state["displayed_goal"])
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state["displayed_goal"])
         self.advance("M1")
         self.state["current_task"]["affected_paths"] = ["a.txt"]
         self.state["next_stage"] = "orchestrator"

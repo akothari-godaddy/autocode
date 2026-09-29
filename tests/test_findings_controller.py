@@ -20,7 +20,7 @@ class ControllerFindingsTests(unittest.TestCase):
         first["next_task"] = {"kind": "implement", "milestone_id": "M1", "requirements": ["Greet names"],
                               "acceptance_criteria": ["C1"], "validation_plan": ["Run both cases"], "findings": []}
         first["next_objective"] = "Implement greeting"
-        runner.goals.assign_task(self.state, first, support.snapshot(self.root))
+        runner.lifecycle.assign_task(self.state, first, support.snapshot(self.root))
 
     def astra_decision(self, status, *finding_texts, dispositions=(), output=None):
         if output:
@@ -85,12 +85,12 @@ class ControllerFindingsTests(unittest.TestCase):
         body["acceptance_criteria"].append({**body["acceptance_criteria"][0],
                                           "id": "C2", "criterion": "Reject empty names"})
         body["milestones"][0]["acceptance_criteria"].append("C2")
-        runner.goals.install_draft(self.state, body, origin="test")
-        runner.goals.human.evaluate(self.state)
-        runner.goals.present(self.state)
-        runner.goals.approve(self.state, runner.goals.token(self.state["goal_contract"]))
+        runner.lifecycle.install_draft(self.state, body, origin="test")
+        runner.lifecycle.human.evaluate(self.state)
+        runner.lifecycle.present(self.state)
+        runner.lifecycle.approve(self.state, runner.goals.token(self.state["goal_contract"]))
         first = self.astra_decision("REWORK")
-        runner.goals.assign_task(self.state, first, support.snapshot(self.root))
+        runner.lifecycle.assign_task(self.state, first, support.snapshot(self.root))
         review = self.astra_decision("REWORK", "Empty names are accepted", output="review.json")
         record = {"output": str(self.run / "review.json"),
                   "source_revision": support.snapshot(self.root)["revision"]}
@@ -136,7 +136,7 @@ class ControllerFindingsTests(unittest.TestCase):
                                     "decision_needed": "Provide test credentials", "options": [], "proposed_delta": ""}
         record = {"output": str(self.run / "blocked.json"), "source_revision": support.snapshot(self.root)["revision"]}
         runner.apply_result(self.state, "astra_review", decision, record, self.root, self.run)
-        runner.goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
+        runner.lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual(["Missing authorization check"],
                          [row["finding"] for row in findings.open_entries(self.state, "astra")])

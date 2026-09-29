@@ -21,6 +21,7 @@ sys.path.insert(0, str(TOOLS))
 
 import autocode  # noqa: E402
 import autocode_goals as goals  # noqa: E402
+import autocode_goal_lifecycle as lifecycle
 import scenario_references as references  # noqa: E402
 import task_scenarios as scenarios  # noqa: E402
 from tests import test_planning, test_subprocess  # noqa: E402
@@ -63,7 +64,7 @@ class BugfixWorkflow(unittest.TestCase):
         _, approved, final, _ = self.run_to_end(0)
         # The job type is part of the approved contract and shown at approval.
         self.assertEqual("bugfix", approved["goal_contract"]["body"]["task_kind"])
-        self.assertIn("Job type: bug fix", goals.render(approved))
+        self.assertIn("Job type: bug fix", lifecycle.render(approved))
         self.assertEqual("TASK_COMPLETE", final["status"])
         stages = [row["stage"] for row in final["stages"]]
         self.assertEqual(PLANNING + EXECUTION, stages)

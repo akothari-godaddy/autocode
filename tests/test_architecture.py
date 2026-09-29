@@ -13,19 +13,19 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 # Modules in an import cycle: they import, directly or through other modules, a module that
 # imports them back. On 2026-09-26 34 modules were caught in one cycle through autocode.py.
 # 2026-09-29: the shared helpers moved to autocode_util, and autopilot stopped importing the CLI
-# (only its script entry does), which freed autocode.py and the controller. Taking a module out
-# of the cycles is progress (remove it here); adding one fails.
+# (only its script entry does), which freed autocode.py and the controller; the goal lifecycle
+# moved out of autocode_goals, which freed goals and five modules that only read a contract.
+# Taking a module out of the cycles is progress (remove it here); adding one fails.
 TANGLED = frozenset({
-    "autocode_carryforward", "autocode_dispatch", "autocode_findings", "autocode_goals",
-    "autocode_interventions", "autocode_milestones", "autocode_planning", "autocode_planning_artifacts",
-    "autocode_planning_graph", "autocode_regression", "autocode_resolver_human", "autocode_resolver_runtime",
-    "autocode_status", "autocode_support", "autocode_workflow", "live_scenarios", "live_token_sampler",
-    "score_autocode_run", "task_scenarios", "units.autoplanner", "units.common",
+    "autocode_dispatch", "autocode_findings", "autocode_goal_lifecycle", "autocode_milestones",
+    "autocode_planning", "autocode_resolver_human", "autocode_resolver_runtime", "autocode_status",
+    "autocode_support", "autocode_workflow", "live_scenarios", "live_token_sampler", "score_autocode_run",
+    "task_scenarios", "units.autoplanner", "units.common",
 })
 
 # Line counts on 2026-09-28, after merging master at 24617cc and moving subcommand dispatch out of
 # autocode.py. Lower these when a module shrinks.
-MAX_LINES = {"autocode.py": 3796, "autocode_goals.py": 1903, "autocode_support.py": 923, "autopilot.py": 1178}
+MAX_LINES = {"autocode.py": 3796, "autocode_goals.py": 1375, "autocode_support.py": 923, "autopilot.py": 1178}
 
 
 def source_modules() -> dict[str, Path]:

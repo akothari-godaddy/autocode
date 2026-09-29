@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_interventions as inbox
 import autocode_support as support
 import autocode_util as util
@@ -179,13 +180,13 @@ class InterventionOrderingTests(unittest.TestCase):
 
     def test_cli_goal_approval_cannot_commit_feedback_accepted_during_validation(self):
         self.fixture.draft()
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        original = goals.approve
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        original = lifecycle.approve
         def approve_then_submit(state, token):
             original(state, token)
             self.submit()
-        with patch.object(goals, 'approve', side_effect=approve_then_submit):
+        with patch.object(lifecycle, 'approve', side_effect=approve_then_submit):
             result = self.fixture.invoke('--approve-goal', self.state['displayed_goal'])
         self.assertEqual(2, result)
         self.assertFalse(goals.approved(self.fixture.state))
@@ -193,7 +194,7 @@ class InterventionOrderingTests(unittest.TestCase):
 
     def test_interactive_approval_does_not_hold_lock_over_input_and_rechecks_after_reply(self):
         self.fixture.draft()
-        goals.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         self.persist()
         def reply(_):
             self.submit()
@@ -205,11 +206,11 @@ class InterventionOrderingTests(unittest.TestCase):
 
     def test_approval_committed_first_allows_later_submission_without_losing_it(self):
         self.fixture.draft()
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         self.persist()
         candidate = copy.deepcopy(self.state)
-        goals.approve(candidate, candidate['displayed_goal'])
+        lifecycle.approve(candidate, candidate['displayed_goal'])
         runner.commit_user_action(self.state, candidate, self.run)
         self.submit()
         self.assertTrue(goals.approved(support.read(self.run / 'state.json')))
@@ -240,8 +241,8 @@ class InterventionOrderingTests(unittest.TestCase):
         self.fixture.approve(human=True)
         self.fixture.validation()
         runner.apply_result(self.state, 'astra_review', self.fixture.decision('COMPLETE'), {'output': 'review'}, self.workspace, self.run)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         self.persist()
         candidate = copy.deepcopy(self.state)
         goals.approve_review(candidate, 'C1', candidate['displayed_review'], support.snapshot(self.workspace))
