@@ -98,6 +98,7 @@ class MechanicalEscalationTests(unittest.TestCase):
         trial.escalate_to_repeat_threshold(self.run_dir, self.bundle)
         saved = json.loads((self.run_dir / "state.json").read_text())
         self.assertEqual(3, saved["failure_history"]["k1"]["count"])
+        self.assertEqual(3, saved["failure_history"]["k1"]["streak"])
         self.assertEqual("PAUSED_REPEATED_FAILURE", saved["status"])
         # The real error text is preserved; escalation only touches the count.
         self.assertEqual("Missing summary field", saved["failure_history"]["k1"]["last_error"])

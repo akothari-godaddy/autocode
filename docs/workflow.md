@@ -138,11 +138,16 @@ read-only `investigate_stuck` stage (`tools/autocode_stuck_job.py`) instead of s
 
 | Pause | After the Investigator |
 | --- | --- |
-| `PAUSED_REPEATED_FAILURE`, `PAUSED_INVALID_OUTPUT` | retry runs the stage once more; its failure history stays, so another failure counts on top (a spent report repair is archived) |
+| `PAUSED_REPEATED_FAILURE`, `PAUSED_INVALID_OUTPUT` | retry runs the stage once more; its failure history stays, so the same failure again extends the run of identical failures and a different one starts a new run (a spent report repair is archived) |
 | `PAUSED_PLANNING_BUDGET` | retry grants one more review round (two calls from the challenge, one from the final review) |
 | `PAUSED_NO_PROGRESS` | retry allows one more implementation batch |
 | `PAUSED_COMPLETION_REVIEW` | retry asks the Completion Owner once more |
 | `PAUSED_REPORT_REPAIR_LIMIT`, `PAUSED_BUILDER_RETRY_LIMIT`, `PAUSED_MILESTONE_STALLED`, `PAUSED_MILESTONE_REPLAN` | diagnosis only; these keep their operator resume flags |
+
+A rejected report pauses as `PAUSED_REPEATED_FAILURE` only after three consecutive attempts of
+the stage, at the same source, failed with the same error and left the same kind of output
+(`tools/autocode_failures.py`). Different problems that happen to share an exception type,
+such as missing responses to different concerns, pause as `PAUSED_INVALID_OUTPUT`.
 
 The Investigator runs at high effort on a model different from the stuck stage's: Claude Opus
 5.5 (`kilo/anthropic/claude-opus-5.5`) in `kilocode` runs; otherwise GPT-6 Sol, or GLM 5.3 when

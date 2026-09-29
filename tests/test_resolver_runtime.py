@@ -35,7 +35,7 @@ class ResolverRuntimeTests(unittest.TestCase):
         """A repeated, report-repair-exhausted Builder failure, paused as such."""
         pending = self.queue()
         entry = self.state['failure_history'][pending['original']['failure_key']]
-        entry['count'] = 3
+        entry['count'] = entry['streak'] = 3
         entry['last_error'] = 'Missing summary'
         self.state.update(status='PAUSED_REPEATED_FAILURE')
         return pending['original']
@@ -71,7 +71,7 @@ class ResolverRuntimeTests(unittest.TestCase):
         self.queue()
         self.boundary()
         entry = next(iter(self.state['failure_history'].values()))
-        entry['count'] = 3
+        entry['count'] = entry['streak'] = 3
         support.atomic_json(self.run / 'state.json', self.state)
         self.state = support.read(self.run / 'state.json')
         with patch.object(runner, 'run_role') as launch, self.assertRaises(support.Paused) as caught:
@@ -296,7 +296,7 @@ class OperationalDiagnosisTests(unittest.TestCase):
         self.queue(role='sol', stage='sol')
         pending = self.state['pending_report_repair']
         entry = self.state['failure_history'][pending['original']['failure_key']]
-        entry['count'] = 3
+        entry['count'] = entry['streak'] = 3
         self.state.update(status='PAUSED_REPEATED_FAILURE')
         with self.assertRaisesRegex(ValueError, 'scoped to a repeated Builder'):
             self.admit()

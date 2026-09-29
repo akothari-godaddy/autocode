@@ -582,9 +582,9 @@ def reject_completed_stage(state, run_dir, record, error):
             raise ReportRepairQueued()
     escalation.advance(state, record.get("route_role", record["role"]),
                        trigger="rejected_output", detail=error)
-    repeated = bool(failure and failure['count'] >= failures.REPEAT_THRESHOLD)
+    repeated = bool(failure and failures.stalled(failure))
     message = (f"Completed {record['stage']} output was rejected ({error}); attempt archived. "
-               + ("The same stage, artifact and error class failed repeatedly; inspect the saved output probe and fix the cause before retrying."
+               + ("Consecutive attempts at this source failed with the same error; inspect the saved output probe and fix the cause before retrying."
                   if repeated else "Resume explicitly with --resume-paused to retry with a fresh request."))
     status = "PAUSED_REPEATED_FAILURE" if repeated else "PAUSED_INVALID_OUTPUT"
     state.update(status=status, phase="PAUSED_OR_BLOCKED", stop_reason=message, paused_at=now())
@@ -1693,8 +1693,8 @@ def prepare_exhausted_execution_report_retry(state, run_dir, workspace=None, *, 
         return False
     repeated = failures.repeated(state, original)
     if repeated and not allow_repeated and (workspace is None or support.snapshot(workspace)['revision'] == original.get('source_revision')):
-        message = ("The same stage, artifact and error class failed "
-                   f"{repeated['count']} times. Inspect failure_history and saved output; "
+        message = ("The same stage failed the same way at this source "
+                   f"{repeated.get('streak', repeated['count'])} consecutive times. Inspect failure_history and saved output; "
                    "change the cause before another execution request.")
         state.update(status='PAUSED_REPEATED_FAILURE', phase='PAUSED_OR_BLOCKED', stop_reason=message, paused_at=now())
         write_json(run_dir / 'state.json', state)
@@ -1902,7 +1902,7 @@ def repeated_failure_resume_guard(state, workspace, *, authorization=None):
             return
         raise support.Paused('PAUSED_REPEATED_FAILURE',
             f"Unchanged {record.get('original_stage') or record['stage']} artifact failed "
-            f"{repeated['count']} times with {repeated['identity']['error_class']}; "
+            f"{repeated.get('streak', repeated['count'])} consecutive times with the same {repeated['identity']['error_class']}; "
             "inspect failure_history and fix the cause before resuming, or authorize "
             "one inspected retry with --retry-failed-stage.")
 

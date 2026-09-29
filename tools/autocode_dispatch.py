@@ -18,6 +18,7 @@ try:
     from . import autocode_support as s, autocode_goals as goals
     from . import autocode_milestones as milestones, autocode_process as processes
     from . import autocode_interventions as interventions, autocode_worktrees as worktrees
+    from .autocode_assignment import contains
 except ImportError:
     import autocode_support as s
     import autocode_goals as goals
@@ -25,6 +26,7 @@ except ImportError:
     import autocode_process as processes
     import autocode_interventions as interventions
     import autocode_worktrees as worktrees
+    from autocode_assignment import contains
 
 
 DEFAULTS = {"enabled": True, "max_parallel": 2}
@@ -106,10 +108,6 @@ def valid_path(path):
             and not any(c in path for c in "*?[]\\\x00\n")
             and all(p not in ("", ".", "..", ".git", ".autocode", ".autocode-ui")
                     for p in path.rstrip("/").split("/")))
-
-
-def contains(root, path):
-    return path == root.rstrip("/") or path.startswith(root.rstrip("/") + "/")
 
 
 def disjoint(a, b):
