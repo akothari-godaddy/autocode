@@ -10,6 +10,7 @@ import autocode as runner
 import autocode_goals as goals
 import autocode_support as s
 import autocode_milestones as m
+import autocode_findings as findings
 from goal_fixtures import body, envelope
 
 
@@ -17,13 +18,14 @@ class MilestoneCheckpointTests(unittest.TestCase):
     setUp = test_goals.GoalTests.setUp
     invoke = test_goals.GoalTests.invoke
 
-    def start(self, human=False):
+    def start(self, human=False, dependent=False):
         draft = body(human=human)
         draft['acceptance_criteria'] += [
             {'id': 'C2', 'criterion': 'Reject invalid input', 'verification_method': 'Execute empty input', 'human_review': False},
             {'id': 'C3', 'criterion': 'Preserve Unicode', 'verification_method': 'Execute Unicode input', 'human_review': human}]
         draft['milestones'][0]['acceptance_criteria'] = ['C1', 'C2']
-        draft['milestones'].append({'id': 'M2', 'objective': 'Unicode flow', 'acceptance_criteria': ['C3'], 'depends_on': []})
+        draft['milestones'].append({'id': 'M2', 'objective': 'Unicode flow', 'acceptance_criteria': ['C3'],
+                                    'depends_on': ['M1'] if dependent else []})
         goals.install_draft(self.state, draft, origin='test')
         goals.human.evaluate(self.state)
         goals.present(self.state)
@@ -127,6 +129,83 @@ class MilestoneCheckpointTests(unittest.TestCase):
         self.assertEqual('terra', self.state['next_stage'])
         self.assertTrue(self.state['milestone_progress'][old_key]['accepted'])
         self.assertEqual('sol', self.state['milestone_progress'][old_key]['accepted_validation']['reviewer_role'])
+
+    def test_later_milestone_finding_does_not_deadlock_passing_prerequisite(self):
+        self.start(dependent=True)
+        m1_task = self.state['current_task']
+        self.state['current_task'] = {'id': 'future-review', 'milestone_id': 'M2'}
+        findings.record_decision(self.state, {'findings': [{
+            'severity': 'high', 'finding': 'Unicode flow drops composed characters',
+            'evidence': 'review:unicode', 'blocking': True}]}, {'output': 'future-review.json'})
+        self.state['current_task'] = m1_task
+        finding = findings.blocking_entries(self.state)[0]
+        self.assertEqual({'milestone_id': 'M2', 'criteria': ['C3']}, finding['scope'])
+
+        self.validate(flow_status='NOT_VERIFIED')
+        self.assertTrue(m.evidence_ready(self.state, s.snapshot(self.root)))
+        m1_key = m.key(self.state)
+        self.assign('M2')
+        self.assertTrue(self.state['milestone_progress'][m1_key]['accepted'])
+        self.assertEqual('M2', self.state['current_task']['milestone_id'])
+        self.assertEqual([finding['id']], [row['id'] for row in findings.blocking_entries(self.state)])
+
+        self.validate({'C1': 'PASS', 'C2': 'PASS', 'C3': 'PASS'})
+        self.assertFalse(m.evidence_ready(self.state, s.snapshot(self.root)))
+        complete = self.decision(status='COMPLETE')
+        complete['acceptance_criteria'] = [{**c, 'status': 'verified', 'evidence': 'event:check'}
+                                           for c in self.state['acceptance_criteria']]
+        self.assertFalse(s.completion_ready(self.state, complete, s.snapshot(self.root)))
+        no_findings = copy.deepcopy(self.state)
+        no_findings['findings_ledger'] = []
+        self.assertTrue(s.completion_ready(no_findings, complete, s.snapshot(self.root)))
+
+    def test_current_milestone_finding_blocks_with_specific_diagnostics(self):
+        self.start()
+        findings.record_decision(self.state, {'findings': [{
+            'severity': 'high', 'finding': 'Greeting fails on empty input',
+            'evidence': 'review:empty-input', 'blocking': True}]}, {'output': 'm1-review.json'})
+        finding_id = findings.blocking_entries(self.state)[0]['id']
+        self.validate(flow_status='NOT_VERIFIED')
+        self.assign('M2')
+        self.assertEqual('M1', self.state['current_task']['milestone_id'])
+        self.assertIn(finding_id, self.state['milestone_blocker'])
+        self.assertIn('M1: C1, C2', self.state['milestone_blocker'])
+
+    def test_old_gate_permission_request_is_superseded_only_after_fresh_pass(self):
+        self.start(dependent=True)
+        self.validate(flow_status='NOT_VERIFIED')
+        current = s.snapshot(self.root)
+        self.state['milestone_blocker'] = 'Current milestone needs independent passing evidence before advancement'
+        request = {'kind': 'permission',
+                   'decision_needed': 'Authorize an operator/runner-owned registration of M1 as accepted',
+                   'impact': 'M2 cannot start while M1 is unaccepted',
+                   'options': ['Mark M1 accepted'],
+                   'proposed_delta': 'No change to the approved goal; runner-owned milestone-acceptance state: record M1 as accepted'}
+        goals.wait_for_user(self.state, request, origin={
+            'stage': 'astra_review', 'task_id': self.state['current_task']['id'],
+            'source_revision': current['revision']}, next_stage='astra_review')
+        runner.normalize_human_boundary(self.state, self.run)
+        self.assertEqual('RUNNING', self.state['status'])
+        self.assertEqual([], self.state['pending_questions'])
+        self.assertFalse(m.progress(self.state)['accepted'])
+        retired = [row for row in self.state['resolver']['human_escalations'].values()
+                   if row['status'] == 'superseded'
+                   and row['identity']['proposal']['request'] == request]
+        self.assertEqual(1, len(retired))
+        self.assertEqual('runner', self.state['user_events'][-1]['actor'])
+        self.assign('M2')
+        self.assertTrue(self.state['milestone_progress'][f"{self.state['goal_contract']['hash']}:M1"]['accepted'])
+
+    def test_unrelated_permission_request_stays_for_the_human(self):
+        self.start()
+        self.validate(flow_status='NOT_VERIFIED')
+        request = {'kind': 'permission', 'decision_needed': 'Allow deployment to staging?',
+                   'impact': 'Deployment needs account access', 'options': ['Allow', 'Do not allow'],
+                   'proposed_delta': 'Deploy to staging'}
+        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review'}, next_stage='astra_review')
+        runner.normalize_human_boundary(self.state, self.run)
+        self.assertEqual('WAITING_FOR_USER', self.state['status'])
+        self.assertEqual(request, self.state['user_request'])
 
     def test_unverified_whole_flow_cannot_complete_even_when_all_criteria_pass(self):
         self.start()
