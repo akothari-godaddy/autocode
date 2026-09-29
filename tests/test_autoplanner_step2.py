@@ -266,13 +266,18 @@ class ContractListTests(EpisodeCase):
                 with self.subTest(stage=stage, key=key):
                     self.assertIn("At least one", fields[key]["description"])
             self.assertIn("do not invent", fields["scope_exclusions"]["description"])
+            criteria = fields["acceptance_criteria"]["items"]["properties"]
+            self.assertEqual(planner.HUMAN_REVIEW_NOTE, criteria["human_review"]["description"], stage)
         # The shared contract schema itself is unchanged.
         self.assertNotIn("description", goals.BODY_SCHEMA["properties"]["deliverables"])
+        self.assertNotIn("description", goals.BODY_SCHEMA["properties"]["acceptance_criteria"]["items"]
+                         ["properties"]["human_review"])
 
     def test_the_planning_prompts_carry_the_rule_and_the_review_does_not(self):
         for stage in self.STAGES:
             prompt, _ = planner.context(self.state, stage, Path("/tmp/state.json"))
             self.assertIn(planner.CONTRACT_FIELDS_RULE, prompt, stage)
+            self.assertIn("HUMAN REVIEW: an acceptance criterion's human_review is true only when", prompt, stage)
         review, _ = planner.context(self.state, "astra_challenge", Path("/tmp/state.json"))
         self.assertNotIn(planner.CONTRACT_FIELDS_RULE, review)
 
