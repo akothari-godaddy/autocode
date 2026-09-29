@@ -320,6 +320,14 @@ approval, orchestrator, Builder, Validator and Completion Owner.
 
   You can check these without reading test code. They are saved in the
   diagnosis note under `docs/bugs/`.
+  - **"Reproduced" is checked.** A reproduced bug also carries `probe`, a
+    command that exits 0 exactly when the bug is present on today's code, for
+    example `python3 -c "from pager import page_count; assert page_count(5, 2) == 2"`.
+    The runner runs it in a scratch copy and rejects the report if it does
+    not exit 0, so the diagnosis rests on something the runner saw, not on
+    the Investigator's word. A bug no command can show here (a live registry,
+    a race, a device) says why in `untestable` instead. The note records the
+    probe that showed the bug in `proven_by`.
   - **Contract criteria.** Each case becomes an acceptance criterion of the
     small-fix contract. For a large fix, it becomes one the Planner must carry
     into the plan you approve.

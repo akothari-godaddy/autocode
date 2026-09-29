@@ -23,8 +23,16 @@ named ``test_<id>_...``, and the runner's regression proof (autocode_regression)
 checks, with no model, that every case has a test that fails on the original
 code and passes after the fix (autocode_test_cases.match_cases).
 
-Pure module: prompt, schema, transition, rendering. Imports nothing from the
-runner. State key written: ``investigation`` (the report, its note path and output).
+"Reproduced" is checked, not trusted: a reproduced bug carries a ``probe``, a
+command that exits 0 exactly when the bug is present on today's code. The runner
+runs it in a scratch copy (autocode_test_cases.run_probes) and rejects the
+report if it does not exit 0. A bug no command can show here (a live registry, a
+race, a device) says why in ``untestable`` instead; the regression proof at the
+end still applies.
+
+Pure module: prompt, schema, transition, rendering; the unit passes in the
+function that runs the probe. Imports nothing from the runner. State key
+written: ``investigation`` (the report, its note path, output and probe_result).
 """
 from __future__ import annotations
 
@@ -35,10 +43,10 @@ from pathlib import Path
 
 try:
     from . import autocode_workflows as workflows
-    from .autocode_test_cases import case_text, case_test_name, match_cases  # noqa: F401 (used by callers)
+    from .autocode_test_cases import case_text, case_test_name, match_cases, run_probes  # noqa: F401 (used by callers)
 except ImportError:
     import autocode_workflows as workflows
-    from autocode_test_cases import case_text, case_test_name, match_cases  # noqa: F401
+    from autocode_test_cases import case_text, case_test_name, match_cases, run_probes  # noqa: F401
 
 STAGE = workflows.INVESTIGATE_STAGE
 NOTES_PREFIX = "docs/bugs/"
@@ -52,7 +60,7 @@ SCHEMA = {
     "type": "object", "additionalProperties": False,
     "required": ["outcome", "note_path", "observed", "reproduction", "root_cause", "affected_paths",
                  "test_paths", "invariant", "test_cases", "conclusion", "fix_size", "fix_plan", "questions",
-                 "tests_run", "plan_approval_requested"],
+                 "tests_run", "plan_approval_requested", "probe", "untestable"],
     "properties": {
         "outcome": {"type": "string", "enum": list(OUTCOMES)},
         "note_path": TEXT,
@@ -69,6 +77,10 @@ SCHEMA = {
         "questions": TEXTS,
         "tests_run": TEXTS,
         "plan_approval_requested": {"type": "boolean"},
+        # probe: a shell command, run from the repository root, that exits 0 exactly when the bug is
+        # present; untestable: why no command can show it here. A reproduced bug has exactly one.
+        "probe": TEXT,
+        "untestable": TEXT,
     },
 }
 
@@ -99,13 +111,19 @@ What to do:
      large otherwise. A small fix goes straight to a Builder and an independent Validator without a
      planning round, so say large whenever the fix needs design choices or touches several modules.
    - fix_plan: the steps of the fix, and the regression test that fails before it and passes after it.
+   - probe: a shell command, run from the repository root, that exits 0 exactly when the bug is present:
+     it asserts today's WRONG result (for example: python3 -c "from pager import page_count; assert
+     page_count(5, 2) == 2"). The runner runs it in a scratch copy of the code as it is and rejects a
+     reproduced outcome whose probe does not exit 0, so only claim what you have run. When no command
+     can show the bug here (it needs a live registry, a race, a device), leave probe "" and say why in
+     untestable; otherwise untestable is "".
    - plan_approval_requested: true when the request asks to see, review or approve the plan or the fix
      before code changes; the fix is then planned and put to the user whatever its size. Otherwise false.
 4. If it does NOT reproduce (outcome not_reproduced): say so plainly. Do not invent a cause and do not
    propose a "defensive" change to code that works. reproduction says what you tried; conclusion says
    what the code actually does and why the report may differ (old version, different input, upstream data);
    questions lists what you need from the reporter. fix_size is none; fix_plan, affected_paths,
-   test_paths and test_cases are empty.
+   test_paths and test_cases are empty; probe and untestable are "".
 5. conclusion: two or three sentences a person can act on.
 6. note_path: where the runner saves your diagnosis. Use the path the request names if it names one under
    docs/bugs/, otherwise docs/bugs/<short-kebab-name>.json.
@@ -147,8 +165,12 @@ def check(value: dict, changed_files) -> None:
         if unsafe:
             raise ValueError(f"Paths must be relative paths inside the repository: {unsafe}")
         check_cases(value.get("test_cases") or [])
+        probe, untestable = value.get("probe", "").strip(), value.get("untestable", "").strip()
+        if bool(probe) == bool(untestable):
+            raise ValueError("A reproduced bug needs exactly one of probe (a command that exits 0 exactly when "
+                             "the bug is present) or untestable (why no command can show it here)")
     elif (value["affected_paths"] or value["test_paths"] or value["fix_plan"] or value.get("test_cases")
-          or value["fix_size"] != "none"):
+          or value["fix_size"] != "none" or value.get("probe", "").strip() or value.get("untestable", "").strip()):
         raise ValueError("A report that did not reproduce must not propose a fix")
 
 
@@ -180,15 +202,22 @@ def note(value: dict) -> dict:
             "reproduction": value["reproduction"], "root_cause": value["root_cause"],
             "affected_paths": value["affected_paths"], "test_paths": value["test_paths"], "invariant": value["invariant"],
             "test_cases": list(value.get("test_cases") or []), "conclusion": value["conclusion"], "fix_size": value["fix_size"], "fix_plan": value["fix_plan"],
-            "questions": value["questions"], "tests_run": value["tests_run"], "changed": []}
+            "questions": value["questions"], "tests_run": value["tests_run"], "changed": [],
+            "probe": value.get("probe", ""), "untestable": value.get("untestable", "")}
 
 
-def apply(state: dict, value: dict, record: dict, workspace) -> None:
+def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> None:
+    """``run_probe(command)`` runs the probe in a scratch copy (the unit passes autocode_verify.scratch_run);
+    without it a probed reproduction is rejected rather than trusted."""
     check(value, record.get("changed_files"))
+    probe = value.get("probe", "").strip()
+    shown = run_probes([{"id": "the reported bug", "example": value["observed"] or value["reproduction"],
+                         "probe": probe}], run_probe or (lambda command: {"error": "no probe runner was given"}),
+                       what="reproduction claim", key="id") if probe else []
     target = Path(workspace) / value["note_path"]
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(note(value), indent=2) + "\n")
-    state["investigation"] = {**value, "output": record.get("output")}
+    target.write_text(json.dumps({**note(value), "proven_by": probe if shown else ""}, indent=2) + "\n")
+    state["investigation"] = {**value, "output": record.get("output"), "probe_result": shown[0] if shown else None}
     if value["outcome"] == "not_reproduced":
         state.update(status="TASK_COMPLETE", phase="COMPLETE", next_stage=None,
                      completed_at=dt.datetime.now(dt.timezone.utc).isoformat())

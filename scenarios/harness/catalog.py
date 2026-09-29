@@ -28,7 +28,7 @@ CATEGORIES = ("bugfix", "feature", "greenfield", "port", "parallel", "architectu
 EXPECTED = ("complete", "stop", "any")
 KEYS = {"title", "category", "requires", "fake", "run", "turn"}
 RUN_KEYS = {"max_steps", "timeout_minutes", "expected", "known_failure", "requires_stages"}
-FAKE_KEYS = {"check", "flags", "fault", "live_investigator"}
+FAKE_KEYS = {"check", "flags", "fault", "live_investigator", "probe"}
 # A follow-up turn is said to the same run once it reaches the state ``after``
 # names: it completed, it stopped, or it is waiting on a particular need
 # (``needs:answer``), in which case the message is said instead of the driver
@@ -63,6 +63,7 @@ class Scenario:
     fake_flags: tuple[str, ...] = ()
     fake_fault: str = ""
     fake_live_calls: bool = False
+    fake_probe: str = ""  # exits 0 while the seed's bug is present: the runner checks the scripted reproduction
     # Follow-up messages, in order, each said to the same run (issue #51).
     turns: tuple[Turn, ...] = ()
     # Model stages the scenario exists to exercise. A run that never reaches one is
@@ -128,7 +129,7 @@ def load(scenario_id: str) -> Scenario:
         timeout_minutes=run.get("timeout_minutes", 60), expected=run.get("expected", "complete"),
         known_failure=run.get("known_failure", ""), fake_flags=tuple(fake.get("flags", ())),
         fake_fault=fake.get("fault", ""), fake_live_calls=bool(fake.get("live_investigator", False)),
-        turns=tuple(turns), requires_stages=tuple(run.get("requires_stages", ())))
+        fake_probe=fake.get("probe", ""), turns=tuple(turns), requires_stages=tuple(run.get("requires_stages", ())))
 
 
 def load_all() -> list[Scenario]:

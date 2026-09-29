@@ -50,7 +50,8 @@ def fake_setup(scenario, root: Path, solution: Path) -> tuple[list[str], dict]:
     config.write_text(json.dumps({"title": scenario.title, "brief": scenario.brief,
                                   "reference": str(solution), "check": scenario.fake_check,
                                   "paths": overlay_paths(solution), "fault": scenario.fake_fault,
-                                  "turns": [turn.say for turn in scenario.turns]}))
+                                  "turns": [turn.say for turn in scenario.turns],
+                                  "probe": scenario.fake_probe}))
     return [*FAKE_FLAGS, *scenario.fake_flags], {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
                         "SCENARIO_FAKE_CONFIG": str(config)}
 

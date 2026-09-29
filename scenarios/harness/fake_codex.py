@@ -217,7 +217,12 @@ def investigate() -> dict:
             "fix_size": (saved.get("fix_size") or "small") if reproduced else "none",
             "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
             "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"],
-            "plan_approval_requested": bool(saved.get("plan_approval_requested"))}
+            "plan_approval_requested": bool(saved.get("plan_approval_requested")),
+            # The runner checks the reproduction: [fake] probe in scenario.toml exits 0 while the seed's
+            # bug is present; a scenario without one takes the untestable path.
+            "probe": (CONFIG.get("probe") or "") if reproduced else "",
+            "untestable": ("" if CONFIG.get("probe") else "Scripted investigation: this scenario configures "
+                           "no reproduction probe") if reproduced else ""}
 
 
 def scripted_cases() -> list[dict]:
