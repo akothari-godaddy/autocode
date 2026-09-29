@@ -570,7 +570,7 @@ def check_requirement_handoff(state, report):
                                  "not an agent-authored reason")
 
 
-def check_requirement_trace(state, report, contract):
+def check_requirement_trace(state, report, contract, *, coverage=True):
     handoff = (state.get("requirements_handoff") or {}).get("report") or {}
     requirements = handoff.get("requirements") or []
     if not requirements:
@@ -611,7 +611,7 @@ def check_requirement_trace(state, report, contract):
         entry = by_id[row["id"]]
         evidence = str(entry.get("evidence", "")).strip()
         disposition = entry["disposition"]
-        if disposition == "covered" and evidence not in behaviors and evidence not in criteria and not cites_defined_criterion(evidence):
+        if coverage and disposition == "covered" and evidence not in (behaviors | criteria) and not cites_defined_criterion(evidence):
             raise ValueError(f"Requirement {row['id']} is not covered by a behavior or criterion")
         if disposition == "excluded":
             if evidence not in exclusions:

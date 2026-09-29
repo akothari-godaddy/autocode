@@ -109,9 +109,23 @@ handoff. requirement_trace must contain exactly one row for each of those requir
 fewer; an empty requirement_trace is refused. disposition is covered, excluded or superseded. For covered, evidence
 is an acceptance criterion ID of this contract (for example "AC3", or "AC3 checks this"), or a required_behaviors
 entry copied exactly; a paraphrase is refused. For excluded, evidence is a scope_exclusions entry copied exactly and
-backed by a saved user answer; for superseded, it cites the saved answer or feedback event ID.
+backed by a saved user answer; for superseded, it cites the saved answer or feedback event ID. While the draft has
+open_blocking_questions and no criteria yet, a covered row may say what it waits on (for example "pending Q1"); the
+next draft, after the answer, must cite criteria.
 """
 TRACE_STAGES = ("astra_discovery", "glm_revise", "astra_finalize")
+
+
+def traces_coverage(contract):
+    """Whether a planner report's covered trace rows must cite this contract's criteria or behaviors.
+
+    Not while the draft still has open_blocking_questions: such a draft may have no acceptance criteria yet
+    (a clarification-only draft), so "covered" can only mean pending the answer. Every live plan that opened
+    with a question paid a report repair for that (feature-refund-window, 2026-09-29). The trace must still
+    list every requirement exactly once, exclusions and supersessions still need a saved user event, the
+    draft cannot be approved, and the next draft, written after the answer, is checked in full.
+    """
+    return not (contract or {}).get("open_blocking_questions")
 
 
 def trace_rows(state, stage):

@@ -334,3 +334,41 @@ class RequirementTraceRowsTests(EpisodeCase):
         cited = [{"requirement_id": "R1", "disposition": "covered", "evidence": "C1 checks this"},
                  {"requirement_id": "R2", "disposition": "covered", "evidence": "C1"}]
         goals.check_requirement_trace(self.state, {"requirement_trace": cited}, contract)
+
+
+class QuestionDraftTraceTests(EpisodeCase):
+    """A draft that asks first has no criteria yet: its covered rows may say what they wait on
+    (a live feature-refund-window plan paid a report repair for "pending Q1", 2026-09-29)."""
+
+    def setUp(self):
+        super().setUp()
+        self.state["requirements_handoff"] = {"report": {"requirements": RequirementTraceRowsTests.REQUIREMENTS},
+                                              "output": "req.json"}
+
+    QUESTION = {"id": "Q1", "question": "May store_date() be corrected?", "why": "It ignores the store offset",
+                "options": ["Yes", "No"], "proposed_default": "Yes"}
+
+    def bind(self, trace, contract):
+        report = discovery(contract, requirement_trace=trace)
+        autopilot._bind_plan(self.state, report, "glm_draft", {"output": "draft.json"})
+
+    def pending(self, *ids):
+        return [{"requirement_id": rid, "disposition": "covered", "evidence": "pending Q1"} for rid in ids]
+
+    def test_a_draft_with_open_questions_may_leave_coverage_pending(self):
+        self.bind(self.pending("R1", "R2"), clarification_only([self.QUESTION]))
+        self.assertEqual(["Q1"], [q["id"] for q in self.state["goal_contract"]["body"]["open_blocking_questions"]])
+
+    def test_it_must_still_trace_every_requirement_and_justify_an_exclusion(self):
+        with self.assertRaisesRegex(ValueError, "dropped requirements with no trace: R2"):
+            self.bind(self.pending("R1"), clarification_only([self.QUESTION]))
+        excluded = self.pending("R1") + [{"requirement_id": "R2", "disposition": "excluded",
+                                          "evidence": "Web service"}]
+        with self.assertRaisesRegex(ValueError, "without a saved user event"):
+            self.bind(excluded, {**clarification_only([self.QUESTION]), "scope_exclusions": ["Web service"]})
+
+    def test_a_draft_without_questions_still_needs_real_coverage(self):
+        self.assertTrue(planner.traces_coverage(body()))
+        self.assertFalse(planner.traces_coverage(clarification_only([self.QUESTION])))
+        with self.assertRaisesRegex(ValueError, "R1 is not covered"):
+            self.bind(self.pending("R1", "R2"), body())
