@@ -48,6 +48,12 @@ class RoutingTests(unittest.TestCase):
 
 
 class PrepareTests(unittest.TestCase):
+    def test_prompt_distinguishes_test_methods_from_delivered_file_paths(self):
+        text, _ = review_job.prompt(state_for())
+        self.assertIn("test function or method", text)
+        self.assertIn("Naming only the file or class is not enough", text)
+        self.assertIn("not dotted test IDs", text)
+
     def test_reviewer_runs_on_the_validator_route_with_write_access_for_its_scratch_copy(self):
         with tempfile.TemporaryDirectory() as workspace:
             state = state_for(workspace=workspace)
@@ -72,6 +78,20 @@ PATCH = """diff --git a/calc.py b/calc.py
 
 class ProofTests(unittest.TestCase):
     """The runner applies the change in a scratch copy and runs the delivered tests; no model."""
+
+    def test_filename_only_id_is_rejected_with_method_naming_guidance(self):
+        value = report()
+        value["findings"][0]["untestable"] = ""
+        delivered = ["review/tests/test_f1_behavior.py"]
+        test_id = "review.tests.test_f1_behavior.BehaviorTests.test_real_path"
+        with self.assertRaisesRegex(ValueError, "test function or method.*not just the file or class"):
+            review_job.prove(value, delivered, lambda tests, patch: {
+                "results": {"failed": [test_id]}})
+        # Keep the same finding and file; naming the actual method proves the finding.
+        named_test = test_id.replace("test_real_path", "test_f1_real_path")
+        proof = review_job.prove(value, delivered, lambda tests, patch: {
+            "results": {"failed": [named_test]}})
+        self.assertEqual({"F1": [named_test]}, proof["finding_tests"])
 
     def workspace(self, test_body):
         import subprocess

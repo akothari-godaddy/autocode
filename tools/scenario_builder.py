@@ -60,6 +60,10 @@ def act(task):
         return ["src/greeting.py", "notes/unrelated.txt"], "Changed greeting and deleted an unrelated file", "none", False
     if scenario == "no_change":
         return [], "No source changes", "none", False
+    if scenario == "new_file_escape":
+        write("src/new.py", "VALUE = 1\n")
+        write("unrelated.txt", "outside assignment\n")
+        return ["src/new.py", "unrelated.txt"], "New file and an unrelated edit", "none", False
     if scenario == "crash":
         write("src/greeting.py", 'GREETING = "Welcome"\n')
         raise SystemExit(9)

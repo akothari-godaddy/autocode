@@ -1,6 +1,15 @@
 # Bug 002: Answers recorded in state but planner doesn't re-evaluate "NOT READY" assessment
 
 **Severity:** Medium
+**Status:** Fixed and verified (2026-09-28). Closed as #25 via #106; reproduced fixed on a
+fake-provider run at `ffbbfa0` (master through `332c318`): after `--answer "Q1=CLI: local use"`
+with the issued AutoResolver request/token, the saved state has 0 pending questions and 0
+`open_blocking_questions`, status `RUNNING` with the Planner re-planning, and nothing still
+claims "NOT READY".
+**Regression test:** `tests/test_planning.py::JointFlow::test_bug002_regression_recorded_answers_re_evaluate_readiness`
+— answers a question through the real CLI and asserts the re-evaluation: pending questions
+cleared, contract re-sealed with no blocking questions, `discovery_summary` reset, and the
+next resume runs planning to `AWAITING_GOAL_APPROVAL`.
 **Found:** 2026-09-25 stress test on bounded-repair-tasks feature
 **Run:** `20260925-021232-add-bounded-repair-task-generation-from-findings-34320863`
 

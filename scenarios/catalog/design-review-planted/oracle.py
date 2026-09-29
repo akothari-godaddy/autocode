@@ -10,7 +10,13 @@ PLANTED = {
 
 
 def area_of(concern):
-    return next((area for area, groups in PLANTED.items() if mentions(concern, *groups)), None)
+    body = {key: concern.get(key, "") for key in ("summary", "evidence")}
+    declared = [area for area, groups in PLANTED.items()
+                if mentions(concern.get("area", ""), (area, *groups[0]))]
+    # A supported, unambiguous label wins over incidental cross-cutting keywords.
+    if len(declared) == 1 and mentions(body, *PLANTED[declared[0]]):
+        return declared[0]
+    return next((area for area, groups in PLANTED.items() if mentions(body, *groups)), None)
 
 
 def check(project, scenario, run=None):
