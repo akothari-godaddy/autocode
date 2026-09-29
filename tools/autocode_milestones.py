@@ -35,7 +35,9 @@ Report other, unbuilt criteria as NOT_VERIFIED without treating them as mileston
 defects. Before overall COMPLETE, validate every contract criterion and the complete
 approved flow on the current artifact. Never weaken the full-task completion gate.
 The Plan Reviewer may advance only with current independent evidence for the entire milestone,
-no blocking findings and any required human reviews. milestone_checkpoint.current_evidence_ready
+no blocking findings in its approved scope and any required human reviews. Later-milestone
+findings remain open and still block their own milestones and final completion.
+milestone_checkpoint.current_evidence_ready
 is the freshly evaluated evidence gate, not an acceptance decision. The checkpoint's
 blocker and rejected_advances describe historical attempts, not the current gate.
 When current evidence is ready, propose the next eligible milestone; the runner
@@ -158,10 +160,10 @@ def evidence_ready(state, current):
                       and not goals.missing_human_reviews(state))
     try:
         from . import autocode_findings as findings_ledger
-        ledger_blocking = findings_ledger.blocking_entries(state)
+        ledger_blocking = findings_ledger.blocking_for_milestone(state, scope(state))
     except ImportError:
         import autocode_findings as findings_ledger
-        ledger_blocking = findings_ledger.blocking_entries(state)
+        ledger_blocking = findings_ledger.blocking_for_milestone(state, scope(state))
     return bool(required and (val.get("verdict") == "PASS" or human_only_gap) and val.get("checks")
         and all(c["exit_code"] == 0 for c in val["checks"])
         and not any(f.get("blocking", True) or f["severity"] in ("critical", "high") for f in val.get("findings", []))
@@ -170,6 +172,65 @@ def evidence_ready(state, current):
         and all((results.get(cid, {}).get("status") == "PASS" or
                  (human_only_gap and cid == human_ids[0])) and results[cid].get("evidence_refs") for cid in required)
         and flow_ready)
+
+
+def release_obsolete_gate_request(state, published):
+    """Retire a former gate's permission question after the corrected gate passes.
+
+    This does not accept the milestone. The Plan Reviewer must still request
+    advancement, which invokes before_assignment and records normal provenance.
+    """
+    if (not isinstance(published, dict) or published.get("scope") != "permission"
+            or state.get("status") != "WAITING_FOR_USER" or state.get("next_stage") != "astra_review"
+            or state.get("active_stage") or len(state.get("pending_questions") or []) != 1
+            or not str(state.get("milestone_blocker", "")).startswith(
+                "Current milestone needs independent passing evidence before advancement")):
+        return False
+    request = published.get("request") or {}
+    current_scope = scope(state)
+    milestone_id = current_scope.get("id", "")
+    question = state["pending_questions"][0]
+    decision = str(request.get("decision_needed", "")).lower()
+    delta = str(request.get("proposed_delta", "")).lower()
+    if (not milestone_id or milestone_id.startswith("batch:") or request.get("kind") != "permission"
+            or question.get("question") != request.get("decision_needed")
+            or f"registration of {milestone_id.lower()}" not in decision
+            or "operator/runner-owned" not in decision or "accepted" not in decision
+            or "runner-owned milestone-acceptance state" not in delta
+            or f"record {milestone_id.lower()}" not in delta or "as accepted" not in delta):
+        return False
+    entry = state.get("resolver", {}).get("human_escalations", {}).get(published.get("request_id"))
+    origin = ((entry or {}).get("identity") or {}).get("proposal", {}).get("origin", {})
+    task = state.get("current_task") or {}
+    validation = state.get("validation") or {}
+    if (not entry or entry.get("status") != "pending" or origin.get("stage") != "astra_review"
+            or origin.get("task_id") != task.get("id")
+            or origin.get("source_revision") != validation.get("source_revision")):
+        return False
+    try:
+        from . import autocode_goals as goals
+    except ImportError:
+        import autocode_goals as goals
+    if not goals.approved(state):
+        return False
+    try:
+        current = s.snapshot(Path(state["workspace"]))
+    except (KeyError, OSError, RuntimeError, ValueError):
+        return False
+    if (not evidence_ready(state, current)
+            or set(current_scope["acceptance_criteria"]).intersection(goals.missing_human_reviews(state))):
+        return False
+    reason = "The current milestone now has fresh independent passing evidence; runner acceptance needs no permission"
+    entry.update(status="superseded", superseded_at=s.now(), superseded_reason=reason)
+    state.setdefault("user_events", []).append({"kind": "milestone_gate_request_superseded", "actor": "runner",
+        "at": s.now(), "request_id": published["request_id"], "milestone_id": milestone_id,
+        "contract_hash": state["goal_contract"]["hash"], "source_revision": current["revision"]})
+    state.pop("resolver_human_request", None)
+    state.pop("user_request", None)
+    state.pop("milestone_blocker", None)
+    state.pop("stop_reason", None)
+    state.update(status="RUNNING", phase="READY_TO_EXECUTE", pending_questions=[])
+    return True
 
 
 def approach(task):
@@ -215,7 +276,21 @@ def before_assignment(state, decision, current):
         return
     if spec["milestone_id"] not in row.get("milestone_ids", [row["id"]]):
         if not evidence_ready(state, current):
-            raise s.Paused("PAUSED_MILESTONE_EVIDENCE", "Current milestone needs independent passing evidence before advancement")
+            try:
+                from . import autocode_findings as findings_ledger
+            except ImportError:
+                import autocode_findings as findings_ledger
+            blockers = findings_ledger.blocking_for_milestone(state, scope(state))
+            labels = []
+            for item in blockers:
+                saved = item.get('scope')
+                saved = saved if isinstance(saved, dict) else {}
+                criteria = saved.get('criteria')
+                criterion_label = ', '.join(criteria) if isinstance(criteria, list) and all(
+                    isinstance(cid, str) for cid in criteria) else 'unspecified criteria'
+                labels.append(f"{item.get('id', '?')} ({saved.get('milestone_id') or 'unscoped'}: {criterion_label})")
+            detail = "; blocking findings in current scope: " + ", ".join(labels) if labels else ""
+            raise s.Paused("PAUSED_MILESTONE_EVIDENCE", "Current milestone needs independent passing evidence before advancement" + detail)
         try:
             from . import autocode_goals as goals
         except ImportError:

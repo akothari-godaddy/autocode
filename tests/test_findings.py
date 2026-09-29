@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode_findings as findings
+import autocode_finding_scope as finding_scope
 import autocode_goals as goals
 import autocode_support as support
 
@@ -36,6 +37,32 @@ def retracted(fid, evidence="The finding was based on a stale screenshot"):
 
 
 class LedgerTests(unittest.TestCase):
+    def test_partial_milestone_scope_defers_only_proven_unrelated_findings(self):
+        milestones = [
+            {'id': 'M1', 'acceptance_criteria': ['C1'], 'depends_on': []},
+            {'id': 'M2', 'acceptance_criteria': ['C2'], 'depends_on': ['M1']},
+            {'id': 'M3', 'acceptance_criteria': ['C3'], 'depends_on': ['M2']}]
+        current = {'id': 'M1', 'acceptance_criteria': ['C1']}
+        def finding(fid, owner, criteria):
+            return {'id': fid, 'scope': None if owner is None else
+                    {'milestone_id': owner, 'criteria': criteria}}
+        rows = [finding('later', 'M2', ['C2']), finding('current', 'M1', ['C1']),
+                finding('overlap', 'M2', ['C1']), finding('unknown', 'M9', ['C9']),
+                finding('unscoped', None, None), finding('missing-criteria', 'M2', []),
+                finding('unknown-criterion', 'M2', ['C9'])]
+        self.assertEqual({'current', 'overlap', 'unknown', 'unscoped',
+                          'missing-criteria', 'unknown-criterion'},
+                         {r['id'] for r in finding_scope.relevant_blockers(rows, current, milestones)})
+        # An ancestor remains relevant even without a criterion overlap.
+        self.assertEqual(['current'], [r['id'] for r in finding_scope.relevant_blockers(
+            [finding('current', 'M1', ['C1'])],
+            {'id': 'M3', 'acceptance_criteria': ['C3']}, milestones)])
+        # Shared approved criteria make a later finding's ownership ambiguous.
+        shared = copy.deepcopy(milestones)
+        shared[1]['acceptance_criteria'].append('C1')
+        self.assertEqual(['later'], [r['id'] for r in finding_scope.relevant_blockers(
+            [rows[0]], current, shared)])
+
     def test_sol_findings_open_repeat_and_close_only_by_explicit_disposition(self):
         state = {}
         findings.record_validation(state, sol("Empty names are accepted", "Help text missing"), {"output": "sol-01.json"})

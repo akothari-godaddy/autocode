@@ -20,9 +20,11 @@ import copy
 try:
     from . import autocode_support as s
     from . import autocode_milestones as milestones
+    from . import autocode_finding_scope as finding_scope
 except ImportError:
     import autocode_support as s
     import autocode_milestones as milestones
+    import autocode_finding_scope as finding_scope
 
 SOURCES = ("sol", "astra")
 SEVERITIES = ("critical", "high", "medium", "low")
@@ -53,6 +55,12 @@ def open_entries(state, source=None) -> list:
 
 def blocking_entries(state) -> list:
     return [row for row in open_entries(state) if row.get("blocking", True)]
+
+
+def blocking_for_milestone(state, current_scope) -> list:
+    """Open blockers relevant to partial acceptance, without closing later findings."""
+    approved = state.get("goal_contract", {}).get("body", {}).get("milestones", [])
+    return finding_scope.relevant_blockers(blocking_entries(state), current_scope, approved)
 
 
 def _normalize(source, raw):

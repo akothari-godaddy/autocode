@@ -131,7 +131,7 @@ def normalize_human_boundary(state, run_dir):
             state.get(resolver_human.PRIVATE, {}).get('scope') != 'operational_exhaustion'):
         return
     public = resolver_human.current(state)
-    if public:
+    if public and not milestones.release_obsolete_gate_request(state, public):
         return
     proposal = state.get(resolver_human.PRIVATE)
     if not proposal and state.get('status') in ('WAITING_FOR_USER', 'AWAITING_GOAL_APPROVAL', 'PAUSED_GOAL_UNAPPROVED'):
@@ -173,6 +173,7 @@ def normalize_human_boundary(state, run_dir):
         return
     disposition = resolver_human.evaluate(state)
     if disposition == 'escalate':
+        milestones.release_obsolete_gate_request(state, resolver_human.current(state))
         return
     if disposition == 'defer' and proposal['scope'] == 'goal_approval':
         if planning.enabled(state) and not (state.get('goal_contract') or {}).get('body', {}).get('open_blocking_questions'):
@@ -208,8 +209,7 @@ def normalize_human_boundary(state, run_dir):
                                        source_report=not semantic.startswith('astra'))
             state.update(status='RUNNING', phase='RESOLVING')
             return
-    # A deferred or rejected proposal is not permission to display its raw text
-    # as a question. Keep the proposal/evidence available for resolver diagnosis.
+    # Deferred or rejected proposals stay private for resolver diagnosis.
     state.update(status='RESOLVER_PENDING', phase='RESOLVING')
 
 
