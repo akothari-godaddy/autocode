@@ -102,6 +102,19 @@ class RunViewTests(unittest.TestCase):
         self.assertEqual([{"id": "q1", "question": "Use a network?", "why": "tests", "options": ["no"],
                            "proposed_default": "no"}], need["questions"])
 
+    def test_a_pending_resolver_request_carries_its_token_and_scope(self):
+        public = {"request_id": "r1", "request_token": "t1", "scope": "operational_exhaustion"}
+        state = {"status": "WAITING_FOR_USER", "user_request": {"kind": "blocker"},
+                 "pending_questions": [{"id": "q1", "question": "Raise the cap?"}],
+                 "resolver_human_request": public,
+                 "resolver": {"human_escalations": {"r1": {"status": "pending"}}}}
+        need = run_view.needs(state)
+        self.assertEqual(("r1", "t1", "operational_exhaustion"),
+                         (need["resolver_request_id"], need["resolver_token"], need["resolver_scope"]))
+        # A consumed request is not answerable, so it carries none of them.
+        state["resolver"]["human_escalations"]["r1"]["status"] = "consumed"
+        self.assertFalse({"resolver_request_id", "resolver_token", "resolver_scope"} & set(run_view.needs(state)))
+
     def test_plan_approval_needs_the_displayed_token(self):
         self.assertEqual({"kind": "approve_plan", "token": "g-1"},
                          run_view.needs({"status": "AWAITING_GOAL_APPROVAL", "displayed_goal": "g-1"}))
