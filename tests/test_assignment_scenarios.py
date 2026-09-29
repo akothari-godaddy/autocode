@@ -356,3 +356,62 @@ class AssignmentScenarios(unittest.TestCase):
         self.assertEqual(["src/greeting.py"], self.state["changed_files"])
         self.assertEqual(WELCOME, (self.root / "src/greeting.py").read_text())
         self.assertNotEqual("TASK_COMPLETE", self.state["status"])
+
+    # A retry is gated on everything the assignment has changed so far, not only on
+    # its own edits. Otherwise an out-of-scope edit that a rejected attempt left in
+    # the tree for inspection would ride along with the next attempt to validation.
+    def serial_attempt(self, scenario):
+        """One Builder attempt through Autopilot's own stage path, as a run makes it."""
+        if not hasattr(self, "environment"):
+            self.install_builder(scenario)
+        os.environ["AUTOCODE_SCENARIO"] = scenario
+        self.state.update(status="RUNNING", phase="EXECUTING", next_stage="terra")
+        self.state.pop("stop_reason", None)
+        try:
+            runner.autopilot.dispatch_unit(runner, self.state, "terra", self.root, self.run)
+        except s.Paused as caught:
+            return str(caught)
+        return None
+
+    def serial_greeting(self, first):
+        self.seed()
+        self.greeting_contract()
+        self.state["settings"]["orchestration"]["enabled"] = False
+        self.assertRegex(self.serial_attempt(first), "outside the assigned paths")
+
+    def test_serial_retry_without_edits_cannot_carry_an_earlier_escape(self):
+        self.serial_greeting("escape_tests")
+        self.assertRegex(self.serial_attempt("correct"), "outside the assigned paths.*tests/test_greeting.py")
+        self.assertNotIn("implementation", self.state)
+        self.assertNotEqual("sol", self.state["next_stage"])
+        self.assertNotEqual(TEST_SOURCE, (self.root / "tests/test_greeting.py").read_text())
+
+    def test_serial_retry_with_in_scope_edits_cannot_carry_an_earlier_escape(self):
+        self.serial_greeting("escape_tests")
+        (self.root / "src/greeting.py").write_text(HELLO)
+        self.assertRegex(self.serial_attempt("correct"), "outside the assigned paths.*tests/test_greeting.py")
+        self.assertNotIn("implementation", self.state)
+        self.assertNotEqual("sol", self.state["next_stage"])
+        self.assertNotEqual(TEST_SOURCE, (self.root / "tests/test_greeting.py").read_text())
+
+    def test_serial_retry_cannot_carry_an_earlier_deletion(self):
+        self.serial_greeting("delete_unrelated")
+        self.assertRegex(self.serial_attempt("correct"), "outside the assigned paths.*notes/unrelated.txt")
+        self.assertFalse((self.root / "notes/unrelated.txt").exists())
+
+    def test_serial_retry_proceeds_once_the_escape_is_restored(self):
+        self.serial_greeting("escape_tests")
+        (self.root / "tests/test_greeting.py").write_text(TEST_SOURCE)
+        (self.root / "src/greeting.py").write_text(HELLO)
+        self.assertIsNone(self.serial_attempt("correct"))
+        self.assertEqual(["src/greeting.py"], self.state["changed_files"])
+        self.assertEqual("sol", self.state["next_stage"])
+
+    def test_serial_retry_pauses_when_the_starting_snapshot_is_missing(self):
+        self.serial_greeting("escape_tests")
+        first = next(row for row in self.state["stages"] if row.get("stage") == "terra")
+        Path(first["before_ref"]).unlink()
+        (self.root / "tests/test_greeting.py").write_text(TEST_SOURCE)
+        (self.root / "src/greeting.py").write_text(HELLO)
+        self.assertRegex(self.serial_attempt("correct"), "starting snapshot is missing")
+        self.assertNotEqual("sol", self.state["next_stage"])

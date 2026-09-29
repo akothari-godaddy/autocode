@@ -11,7 +11,7 @@ try:
     from . import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
-    from . import autocode_resolver_human as human, autocode_failures as failures
+    from . import autocode_resolver_human as human, autocode_failures as failures, autocode_assignment as assignment
     from .units import autoplanner as planning_unit
     from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
 except ImportError:
@@ -25,7 +25,7 @@ except ImportError:
     import autocode_findings as findings_ledger
     import autocode_builder_policy as builder_policy
     import autocode_resolver_human as human
-    import autocode_failures as failures
+    import autocode_failures as failures, autocode_assignment as assignment
     from units import autoplanner as planning_unit
 
 SKIP = object()
@@ -620,23 +620,22 @@ def apply_planning_result(state, stage, value, record, *, run_dir=None):
 def assert_within_assignment(state, record):
     """A serial Builder gets the same ownership gate as a parallel worktree.
 
-    The declared affected_paths are the assignment boundary. Evidence is the
-    actual tree delta, never the report's changed_files list. Tasks without
-    explicit ownership (legacy contracts, [] for serial dispatch) are unbounded.
+    The declared affected_paths are the assignment boundary. Evidence is the retained
+    tree delta since the task's first Builder attempt began (autocode_assignment), so
+    edits an earlier attempt left behind count; never the report's changed_files list.
+    Tasks without explicit ownership (legacy contracts, [] for serial dispatch) are unbounded.
     """
     owned = (state.get("current_task") or {}).get("affected_paths") or []
     if not owned or not state.get("goal_contract"):
         return
-    try:
-        from . import autocode_dispatch as dispatch
-    except ImportError:
-        import autocode_dispatch as dispatch
-    outside = sorted(name for name in record.get("changed_files", [])
-                     if not any(dispatch.contains(root, name) for root in owned))
+    outside = assignment.outside(owned, state.get("stages", []), record)
+    if outside is None:
+        raise support.Paused("PAUSED_ASSIGNMENT_SCOPE",
+                             "The assignment's starting snapshot is missing; edits retained for inspection")
     if outside:
         raise support.Paused("PAUSED_ASSIGNMENT_SCOPE",
-                             "Builder changed files outside the assigned paths; edits retained for inspection: "
-                             + ", ".join(outside))
+                             "Builder attempts for this task changed files outside the assigned paths; "
+                             "edits retained for inspection: " + ", ".join(outside))
 
 
 def retained_validated_candidate(state, value, record, workspace):
@@ -647,7 +646,8 @@ def retained_validated_candidate(state, value, record, workspace):
     affected = set((state.get('current_task') or {}).get('affected_paths') or [])
     if (not declared or not affected or not declared <= affected
             or not value.get('commands_run') or not value.get('evidence_refs')
-            or any(not (Path(workspace) / path).is_file() for path in declared)):
+            or any(not (Path(workspace) / path).is_file() for path in declared)
+            or assignment.outside(list(affected), state.get('stages', []), record) != []):
         return None
     revision = support.snapshot(workspace)['revision']
     criteria = {row['id'] for row in (state.get('goal_contract') or {}).get('body', {}).get('acceptance_criteria', [])}

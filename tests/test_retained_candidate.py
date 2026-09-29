@@ -77,3 +77,30 @@ class RetainedCandidateTests(unittest.TestCase):
         self.state = copy.deepcopy(baseline)
         (self.root / 'greet.py').write_text('changed again\n')
         self.assertFalse(autopilot.recover_retained_candidate(self.state, self.root))
+
+    def reconsider_after(self, stray_before_start):
+        """A task whose first Builder attempt began before (or after) a stray edit outside it."""
+        (self.root / 'outside.py').unlink(missing_ok=True)
+        if stray_before_start:
+            (self.root / 'outside.py').write_text('stray\n')
+        start = self.run / 'terra-01.before.json'
+        support.atomic_json(start, support.snapshot(self.root))
+        (self.root / 'outside.py').write_text('stray\n')
+        value, record, revision = self.fixture()
+        after = self.run / 'terra-02.after.json'
+        support.atomic_json(after, support.snapshot(self.root))
+        self.state['stages'].append({'stage': 'terra', 'task_id': 'task-1', 'before_ref': str(start),
+                                     'output': 'terra-01.json', 'rejected': True})
+        record.update(stage='terra', task_id='task-1', source_revision=revision, output='terra.json',
+                      after_ref=str(after))
+        self.state['stages'].append(record)
+        self.state['no_progress_reports'] = [copy.deepcopy(value)]
+        return autopilot.recover_retained_candidate(self.state, self.root)
+
+    def test_saved_no_progress_report_cannot_carry_an_edit_outside_the_task(self):
+        self.assertFalse(self.reconsider_after(stray_before_start=False))
+        self.assertNotIn('implementation', self.state)
+
+    def test_files_already_changed_when_the_task_began_are_not_its_edits(self):
+        self.assertTrue(self.reconsider_after(stray_before_start=True))
+        self.assertEqual('sol', self.state['next_stage'])
