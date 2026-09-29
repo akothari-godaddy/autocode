@@ -185,7 +185,7 @@ class Framework:
 
     @property
     def per_test(self):
-        return self.name in ("pytest", "unittest")
+        return self.name in ("pytest", "unittest", "go")
 
     def targeted(self, test_paths):
         files = sorted(test_paths)
@@ -324,9 +324,18 @@ def run_command(command, cwd, log_path, *, timeout=DEFAULT_TIMEOUT, env=None) ->
             "tail": data[-TAIL_CHARS:].decode("utf-8", "replace")}
 
 
+def _go_test(command):
+    """A plain `go test ...` command the runner can ask for per-test JSON events (not a shell pipeline)."""
+    return command.startswith("go test ") and not re.search(r"[;&|<>`$()]", command)
+
+
 def _with_results(framework, command, xml_path):
     if framework and framework.name == "pytest" and " -m pytest" in command:
         return f"{command} --junitxml={shlex.quote(str(xml_path))}"
+    if framework and framework.name == "go" and _go_test(command) and " -json" not in command:
+        # Go reports per-test results only as `go test -json` events (a live Go port could not be
+        # proven without them, 2026-09-29). The flag goes before the packages, where go test reads it.
+        return "go test -json " + command[len("go test "):]
     return command
 
 
@@ -334,7 +343,50 @@ def expects_results(framework, command):
     """True when this command, run by the runner, must yield per-test results."""
     if not framework or not framework.per_test or not command:
         return False
+    if framework.name == "go":
+        return _go_test(command)
     return (" -m pytest" in command) if framework.name == "pytest" else (" -m unittest" in command and " -v" in command)
+
+
+def _go_results(text):
+    """Per-test results from `go test -json` events (one JSON object per line; other lines, such as
+    compiler errors, are ignored). A test is ``package::Name`` (a subtest ``package::Name/sub``). A
+    package that fails without running any test (it did not build, so its tests could not run, like
+    a Python module that fails to import) is a collection error named ``package::[build failed]``.
+    None when there are no events at all."""
+    outcome, ran_in, package_fail, seen = {}, set(), set(), False
+    for line in text.splitlines():
+        if not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict) or not event.get("Action"):
+            continue
+        seen = True
+        package, test, action = event.get("Package") or "", event.get("Test"), event["Action"]
+        if test:
+            key = f"{package}::{test}"
+            if action == "run":
+                outcome.setdefault(key, None)
+                ran_in.add(package)
+            elif action in ("pass", "fail", "skip"):
+                outcome[key] = action
+                ran_in.add(package)
+        elif action == "fail":
+            package_fail.add(package)
+    if not seen:
+        return None
+    passed = {key for key, action in outcome.items() if action == "pass"}
+    skipped = {key for key, action in outcome.items() if action == "skip"}
+    failed = {key for key, action in outcome.items() if action == "fail"}
+    collection = {f"{package}::[build failed]" for package in package_fail if package not in ran_in}
+    failed |= collection
+    # A test that started but never ended (the binary panicked or timed out) is not attributed.
+    complete = all(action is not None for action in outcome.values())
+    return {"passed": sorted(passed), "failed": sorted(failed), "skipped": sorted(skipped),
+            "collection_errors": sorted(collection), "total": len(outcome) + len(collection), "complete": complete}
 
 
 def _unittest_id(name, owner):
@@ -349,6 +401,9 @@ def per_test_results(framework, receipt, xml_path) -> dict | None:
     """
     if not framework or not framework.per_test:
         return None
+    if framework.name == "go":
+        output = receipt.get("output")
+        return _go_results(Path(output).read_text(errors="replace")) if output and Path(output).is_file() else None
     passed, failed, skipped, collection = set(), set(), set(), set()
     if framework.name == "pytest":
         if not Path(xml_path).is_file():
