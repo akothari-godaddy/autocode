@@ -98,8 +98,10 @@ First decide the mode:
    example: python3 -c "from events.processor import Processor; assert Processor.STRICT_SEQ"). The runner
    runs every probe in a scratch copy and rejects the review if one fails, so only probe what you have
    checked. A concern about the design text alone (a missing rollback step) has probe "".
-5. questions: only decisions the requester must make (for example which consumers need strict ordering),
-   each with the realistic options.
+5. questions: decisions only the requester can make because the design leaves a requirement choice open
+   (for example whether strict ordering is required and for which consumers). When a blocking concern
+   can be resolved only by that choice, ask it here rather than assuming one interpretation; give each
+   the realistic options. Do not ask about a choice the design or the code already settles.
 verdict: request_changes when there is at least one blocking concern, otherwise approve.
 
 Return JSON only, matching the schema the runner gives you. The runner saves your report as

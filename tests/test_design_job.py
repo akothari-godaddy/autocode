@@ -57,6 +57,14 @@ class PrepareTests(unittest.TestCase):
         self.assertEqual(design_job.SCHEMA, request.schema)
         self.assertIn("kafka-events.md", request.prompt)
 
+    def test_prompt_puts_an_open_requirement_choice_to_the_requester(self):
+        """A blocking concern hinging on an unspecified guarantee must become a question, not an assumption."""
+        text, _ = design_job.prompt(state_for("/nowhere"), {})
+        self.assertIn("requirement choice open", text)
+        self.assertIn("whether strict ordering is required", text)
+        self.assertIn("ask it here rather than assuming one interpretation", text)
+        self.assertIn("already settles", text)
+
     def test_architect_effort_is_capped_at_medium_but_never_raised(self):
         for given, expected in (("max", "medium"), ("xhigh", "medium"), ("high", "medium"),
                                 ("medium", "medium"), ("low", "low"), (None, "medium"), ("weird", "medium")):
