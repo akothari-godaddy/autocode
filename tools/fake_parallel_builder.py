@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Offline Builder fixture; a rendezvous verifies actual concurrent processes."""
 import json
+import shlex
 import os
 from pathlib import Path
 import sys
@@ -37,10 +38,10 @@ def report(data):
         command = [sys.executable, "-c", "from pathlib import Path; print({p:Path(p).read_text() for p in ('a.txt','b.txt','combined.txt') if Path(p).exists()})"]
         checked = subprocess.run(command, capture_output=True, text=True)
         print(json.dumps({"type": "item.completed", "item": {"id": "check", "type": "command_execution",
-              "command": "read-outputs", "exit_code": checked.returncode, "aggregated_output": checked.stdout}}))
+              "command": shlex.join(command), "exit_code": checked.returncode, "aggregated_output": checked.stdout}}))
         done = Path("combined.txt").exists()
         value = {**common, "verdict": "PASS", "checks_run": ["read-outputs"], "findings": [],
-                 "unverified_criteria": [] if done else ["C3"], "checks": [{"command": "read-outputs", "exit_code": 0, "evidence_ref": "event:check"}],
+                 "unverified_criteria": [] if done else ["C3"], "checks": [{"command": shlex.join(command), "exit_code": 0, "evidence_ref": "event:check"}],
                  "criterion_results": [{"id": f"C{i}", "status": "PASS" if i < 3 or done else "NOT_VERIFIED",
                                         "evidence_refs": ["event:check"]} for i in (1, 2, 3)],
                  "end_to_end_result": {"status": "PASS" if done else "NOT_VERIFIED",

@@ -1,0 +1,69 @@
+"""The runner re-runs the Validator's checks before its PASS counts.
+
+A Validator's checks are attested against the provider's own event log or a
+capture receipt (``autocode_support.verify_checks``), which shows a command ran
+and what it returned in the Validator's session, not that it passes on the code
+as it is. Before a PASS validation is accepted, ``replay`` runs every cited check
+again itself: from the repository root, in a scratch copy of the current source
+(never the workspace), with the credential-free environment and a time limit per
+check. Every check must exit 0 there. There are no exceptions a model can claim:
+a check that needs a server or other setup starts and stops it itself.
+
+A check that does not reproduce rejects the Validator's report with a ValueError
+naming the command, the runner's exit code and the end of its output. That is the
+runner's ordinary rejected-report path: a bounded report repair may drop the check
+or cite another executed one (each is replayed again), then the run pauses, and
+``--resume-paused`` asks for a fresh validation.
+
+The result is saved with the validation (``validation["check_replay"]``), bound to
+the source revision it was run on, and shown in the status view's evidence. The
+caller passes the scratch runner (``autocode_verify.scratch_run``), so this module
+imports nothing from the runner.
+"""
+from __future__ import annotations
+
+import datetime as dt
+import json
+from pathlib import Path
+
+PASS, FAIL = "PASS", "FAIL"
+TIMEOUT_SECONDS = 900
+TAIL_CHARS = 600
+
+
+def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS) -> dict:
+    """Re-run each distinct check command; return the result or raise ValueError on the first that fails."""
+    out = Path(run_dir) / "check-replay" / Path(record.get("output") or "validation").stem
+    rows, seen = [], {}
+    for check in checks:
+        command = check["command"]
+        if command not in seen:
+            receipt = scratch_run(workspace, out / f"check-{len(seen) + 1:02d}", command=command, timeout=timeout)
+            seen[command] = {"command": command, "exit_code": receipt.get("exit_code"),
+                             "timed_out": bool(receipt.get("timed_out")), "output": receipt.get("output"),
+                             "output_sha256": receipt.get("output_sha256"),
+                             "duration_seconds": receipt.get("duration_seconds"),
+                             "error": receipt.get("error") or "", "tail": (receipt.get("tail") or "")[-TAIL_CHARS:]}
+        rows.append({**seen[command], "reported_exit_code": check.get("exit_code"),
+                     "evidence_ref": check.get("evidence_ref")})
+    failed = [row for row in rows if row["error"] or row["timed_out"] or row["exit_code"] != 0]
+    result = {"verdict": FAIL if failed else PASS, "checks": rows, "source_revision": record.get("source_revision"),
+              "timeout_seconds": timeout, "replayed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "replay.json").write_text(json.dumps(result, indent=2) + "\n")
+    if failed:
+        row = failed[0]
+        if row["error"]:
+            what = f"could not run ({row['error']})"
+        elif row["timed_out"]:
+            what = f"timed out after {timeout} seconds"
+        else:
+            what = f"exited {row['exit_code']}"
+        raise ValueError(
+            f"Check `{row['command']}` was reported as exit {row['reported_exit_code']}, but when the runner re-ran it "
+            f"from the repository root in a clean copy of the current source it {what}"
+            + (f"; its output ended: {row['tail'].strip()[-300:]}" if row["tail"].strip() else "")
+            + f". Receipt: {out / 'replay.json'}. Cite only checks that pass from the repository root in a clean "
+            "checkout of this source; a check that needs a server or other setup must start and stop it itself.")
+    return result
+

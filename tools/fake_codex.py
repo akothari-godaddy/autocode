@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Deterministic offline provider for end-to-end tests; never contacts a model."""
 import json
+import shlex
 import os
 from pathlib import Path
 import subprocess
@@ -200,7 +201,18 @@ else:
         goodbye = subprocess.run([sys.executable, 'bye.py', 'Ada'], capture_output=True, text=True)
         goodbye_passed = goodbye.returncode == 0 and goodbye.stdout == 'Goodbye, Ada\n'
         passed = passed and goodbye_passed
-    command = "fixture: execute greet.py with Ada and empty name"
+    # A real command the runner can re-run in a clean copy (autocode_check_replay): the same checks.
+    script = ("import subprocess, sys\n"
+              "run = lambda *a: subprocess.run([sys.executable, *a], capture_output=True, text=True)\n"
+              "ok = run('greet.py', 'Ada').stdout == 'Hello, Ada\\n' and run('greet.py', '').returncode == 2\n"
+              + ("ok = ok and run('bye.py', 'Ada').stdout == 'Goodbye, Ada\\n'\n"
+                 if mode == 'milestones' and data['current_task']['milestone_id'] == 'M2' else "")
+              + "sys.exit(0 if ok else 1)\n")
+    command = shlex.join([sys.executable, "-c", script])
+    if os.environ.get("AUTOCODE_FIXTURE_UNREPRODUCIBLE_CHECK"):
+        # Passes only in the Validator's own session: it reads a file the Validator made outside the source.
+        Path(".autocode/validator-only").write_text("set up by the Validator\n")
+        command = "test -f .autocode/validator-only"
     print(json.dumps({"type": "item.completed", "item": {"id": "check", "type": "command_execution",
         "command": command, "exit_code": 0 if passed else 1,
         "aggregated_output": json.dumps({"valid": [valid.returncode, valid.stdout], "invalid": invalid.returncode})}}))
@@ -237,7 +249,7 @@ if stage=='terra' and (data.get('workflow') or {}).get('mode')=='glm_final_audit
     valid=subprocess.run([sys.executable,'greet.py','Ada'],capture_output=True,text=True)
     invalid=subprocess.run([sys.executable,'greet.py',''],capture_output=True,text=True)
     passed=valid.returncode==0 and valid.stdout=='Hello, Ada\n' and invalid.returncode==2
-    command='fixture: Builder tests valid and invalid greetings'
+    command=shlex.join([sys.executable,'-c',"import subprocess, sys\nrun = lambda *a: subprocess.run([sys.executable, *a], capture_output=True, text=True)\nsys.exit(0 if run('greet.py', 'Ada').stdout == 'Hello, Ada\\n' and run('greet.py', '').returncode == 2 else 1)\n"])
     print(json.dumps({'type':'item.completed','item':{'id':'self-check','type':'command_execution',
         'command':command,'exit_code':0 if passed else 1,'aggregated_output':'fixture checks'}}))
     assessment={**common,'verdict':'PASS' if passed else 'FAIL','findings':[],'finding_dispositions':[],'checks_run':[command],

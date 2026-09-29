@@ -26,15 +26,15 @@ class WorkflowTests(unittest.TestCase):
     def record(self):
         events = self.run/'validation.jsonl'
         events.write_text(json.dumps({'type':'item.completed','item':{'type':'command_execution',
-            'id':'check','command':'test-greeting','exit_code':0,'aggregated_output':'passed'}})+'\n')
+            'id':'check','command':'true','exit_code':0,'aggregated_output':'passed'}})+'\n')
         return {'stage':'astra_checkpoint','role':'astra','iteration':5,'events':str(events),
             'source_revision':s.snapshot(self.root)['revision'],'changed_files':[],
             'output':str(self.run/'checkpoint.json')}
 
     def report(self):
         common=envelope(self.state)
-        validation={**common,'verdict':'PASS','findings':[],'checks_run':['test-greeting'],
-            'unverified_criteria':[], 'checks':[{'command':'test-greeting','exit_code':0,'evidence_ref':'event:check'}],
+        validation={**common,'verdict':'PASS','findings':[],'checks_run':['true'],
+            'unverified_criteria':[], 'checks':[{'command':'true','exit_code':0,'evidence_ref':'event:check'}],
             'end_to_end_result':{'status':'PASS','summary':'Independent execution','evidence_refs':['event:check']},
             'criterion_results':[{'id':'C1','status':'PASS','evidence_refs':['event:check']}]}
         decision={**common,'status':'COMPLETE','acceptance_criteria':[

@@ -31,7 +31,8 @@ not read its auth file or change your global configuration.
 The same approval, task, independent-evidence and completion gates apply. The adapter
 uses OpenCode's [non-interactive JSON event interface](https://opencode.ai/docs/cli/#run),
 validates the final report against the stage schema, and verifies command evidence
-against actual completed bash events. Raw events, session IDs and stage-local
+against actual completed bash events; the runner then re-runs a passing Validator's
+checks itself in a clean copy ([Execution](execution.md#the-runner-re-runs-the-validators-checks)). Raw events, session IDs and stage-local
 permission overrides are saved alongside the checkpoint. Token limits include cache
 reads/writes and reasoning tokens. Malformed, truncated or uncertain results pause;
 the runner does not automatically replay the provider request.

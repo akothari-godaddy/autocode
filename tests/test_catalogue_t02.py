@@ -112,12 +112,14 @@ class DagCase(t01.ApprovalCase):
         passed = all(statuses[cid] == "PASS" for cid in scope["acceptance_criteria"])
         n = sum(1 for r in self.state["stages"] if r.get("role") == "sol")
         events = self.run / f"sol-{n}.jsonl"
+        # A real command with the fixture's outcome: the runner re-runs PASS checks (autocode_check_replay).
+        check = "true" if passed else "false"
         events.write_text(json.dumps({"type": "item.completed", "item": {
-            "id": "check", "type": "command_execution", "command": "execute-milestone",
+            "id": "check", "type": "command_execution", "command": check,
             "exit_code": 0 if passed else 1, "aggregated_output": str(statuses)}}) + "\n")
         value = {**envelope(self.state), "verdict": "PASS" if passed else "FAIL",
-                 "checks_run": ["execute-milestone"],
-                 "checks": [{"command": "execute-milestone", "exit_code": 0 if passed else 1,
+                 "checks_run": [check],
+                 "checks": [{"command": check, "exit_code": 0 if passed else 1,
                              "evidence_ref": "event:check"}],
                  "findings": [], "unverified_criteria": [cid for cid, s in statuses.items() if s == "NOT_VERIFIED"],
                  "criterion_results": [{"id": cid, "status": s, "evidence_refs": ["event:check"]}

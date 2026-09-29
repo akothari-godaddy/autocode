@@ -854,10 +854,10 @@ class RetrofitTest(unittest.TestCase):
                 ev.write_text('{"type":"turn.completed"}\n')
             elif stage=="sol":
                 ev.write_text(json.dumps({"type":"item.completed","item":{"id":"check","type":"command_execution",
-                    "command":"ruby test.rb","exit_code":0,"aggregated_output":"3 tests passed"}})+"\n")
-                value={"verdict":"PASS","checks_run":["ruby test.rb"],"findings":[],"unverified_criteria":[],
+                    "command":"grep -q fixed source.rb","exit_code":0,"aggregated_output":""}})+"\n")
+                value={"verdict":"PASS","checks_run":["grep -q fixed source.rb"],"findings":[],"unverified_criteria":[],
                     "end_to_end_result":{"status":"PASS","summary":"Full fixture flow checked","evidence_refs":["event:check"]},
-                    "checks":[{"command":"ruby test.rb","exit_code":0,"evidence_ref":"event:check"}],
+                    "checks":[{"command":"grep -q fixed source.rb","exit_code":0,"evidence_ref":"event:check"}],
                     "criterion_results":[{"id":"C1","status":"PASS","evidence_refs":["event:check"]}]}
             else:
                 value=self.decision("TASK_COMPLETE");ev.write_text('{"type":"turn.completed"}\n')

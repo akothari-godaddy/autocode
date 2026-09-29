@@ -13,14 +13,12 @@ try:
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
     from . import autocode_resolver_human as human, autocode_failures as failures
     from .units import autoplanner as planning_unit
-    from . import autocode_regression as regression
+    from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
 except ImportError:
-    import autocode_regression as regression
+    import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
     import autocode_support as support, autocode_jobs as jobs
-    import autocode_stuck_job as stuck
-    import autocode_goals as goals
-    import autocode_planning_artifacts as planning_artifacts
-    import autocode_planning_graph as planning_graph
+    import autocode_stuck_job as stuck, autocode_goals as goals
+    import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     import autocode_workflow as workflow
     import autocode_milestones as milestones
     import autocode_escalation as escalation
@@ -771,6 +769,8 @@ def apply_review_result(runtime, state, stage, value, record, workspace, run_dir
                   "reviewer_role": record.get("role", stage)}
     if value["verdict"] == "PASS" and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):
         raise support.Paused("PAUSED_INVALID_OUTPUT", "Validator PASS lacks successful executed checks")
+    validation["check_replay"] = (check_replay.replay(value["checks"], workspace, run_dir, record, verify.scratch_run)
+                                  if value["verdict"] == "PASS" else None)  # the runner re-runs every check
     if state.get("validation"):
         state.setdefault("validation_archive", []).append({
             "reason": "Superseded by another independent validation", "validation": state["validation"]})

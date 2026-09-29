@@ -1,0 +1,122 @@
+"""The runner re-runs the Validator's checks in a clean copy before a PASS counts."""
+import json
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+from . import test_subprocess
+import autocode_check_replay as check_replay
+import autocode_verify as verify
+
+
+def receipt(exit_code=0, *, timed_out=False, error="", tail=""):
+    return {"exit_code": exit_code, "timed_out": timed_out, "error": error, "tail": tail,
+            "output": "/log", "output_sha256": "x", "duration_seconds": 0.1}
+
+
+class ReplayTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.run_dir = Path(temp.name)
+        self.record = {"output": str(self.run_dir / "sol-01.json"), "source_revision": "rev1"}
+
+    def replay(self, checks, results):
+        calls = []
+
+        def scratch_run(workspace, run_dir, *, command, timeout):
+            calls.append(command)
+            return results[command]
+        return check_replay.replay(checks, "/ws", self.run_dir, self.record, scratch_run), calls
+
+    def test_every_distinct_command_is_rerun_once_and_bound_to_the_source(self):
+        checks = [{"command": "pytest -q", "exit_code": 0, "evidence_ref": "event:a"},
+                  {"command": "pytest -q", "exit_code": 0, "evidence_ref": "event:b"},
+                  {"command": "python cli.py --help", "exit_code": 0, "evidence_ref": "event:c"}]
+        result, calls = self.replay(checks, {"pytest -q": receipt(), "python cli.py --help": receipt()})
+        self.assertEqual(["pytest -q", "python cli.py --help"], calls)
+        self.assertEqual(("PASS", "rev1", 3), (result["verdict"], result["source_revision"], len(result["checks"])))
+        saved = json.loads((self.run_dir / "check-replay" / "sol-01" / "replay.json").read_text())
+        self.assertEqual("PASS", saved["verdict"])
+
+    def test_a_check_that_does_not_reproduce_rejects_the_report_and_says_why(self):
+        for result, words in ((receipt(1, tail="AssertionError: 3 != 4"), ["exited 1", "3 != 4"]),
+                              (receipt(None, timed_out=True), ["timed out after 900 seconds"]),
+                              (receipt(None, error="no such file"), ["could not run (no such file)"])):
+            with self.subTest(words=words):
+                with self.assertRaises(ValueError) as rejected:
+                    self.replay([{"command": "pytest -q", "exit_code": 0, "evidence_ref": "event:a"}],
+                                {"pytest -q": result})
+                message = str(rejected.exception)
+                self.assertIn("`pytest -q` was reported as exit 0", message)
+                for word in words:
+                    self.assertIn(word, message)
+                self.assertIn("clean checkout", message)
+
+
+class ScratchReplayTests(unittest.TestCase):
+    """The real scratch runner: the clean copy is the source as it is now, and only that."""
+
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.workspace = Path(temp.name).resolve() / "project"
+        self.workspace.mkdir()
+        git = lambda *a: subprocess.run(["git", "-C", str(self.workspace), *a], check=True, capture_output=True)
+        git("init", "-q")
+        (self.workspace / ".gitignore").write_text("local-only.txt\n")
+        (self.workspace / "app.txt").write_text("committed\n")
+        git("add", ".")
+        git("-c", "user.name=T", "-c", "user.email=t@example.test", "commit", "-qm", "base")
+        (self.workspace / "new.txt").write_text("delivered, uncommitted\n")
+        (self.workspace / "local-only.txt").write_text("the Validator's own setup\n")
+        self.run_dir = Path(temp.name) / "run"
+
+    def replay(self, command):
+        return check_replay.replay([{"command": command, "exit_code": 0, "evidence_ref": "event:a"}],
+                                   self.workspace, self.run_dir, {"output": "sol-01.json", "source_revision": "r"},
+                                   verify.scratch_run, timeout=60)
+
+    def test_the_copy_has_committed_and_delivered_files_but_nothing_ignored(self):
+        self.assertEqual("PASS", self.replay("test -f app.txt && test -f new.txt")["verdict"])
+        with self.assertRaisesRegex(ValueError, "exited 1"):
+            self.replay("test -f local-only.txt")
+
+    def test_a_command_naming_the_workspace_runs_against_the_copy(self):
+        self.replay(f"cat {self.workspace}/new.txt && touch {self.workspace}/written-by-check.txt")
+        self.assertFalse((self.workspace / "written-by-check.txt").exists(), "a replay never writes the workspace")
+
+
+class CliTests(unittest.TestCase):
+    setUp = test_subprocess.SubprocessFlow.setUp
+    launch = test_subprocess.SubprocessFlow.launch
+    saved = test_subprocess.SubprocessFlow.saved
+    new_run_engine_args = ("--engine", "codex")
+
+    def test_a_completed_run_shows_the_checks_the_runner_reran(self):
+        self.env["AUTOCODE_FIXTURE_MODE"] = "no-human"
+        self.launch(["Build greeting", "--chat"], 0, answers="CLI\nyes\n")
+        run, state = self.saved()
+        self.assertEqual("TASK_COMPLETE", state["status"])
+        evidence = json.loads(self.launch(["--run-dir", str(run), "--status"], 0).stdout)["view"]["evidence"]
+        replay = evidence["check_replay"]
+        self.assertEqual("PASS", replay["verdict"])
+        self.assertEqual(state["validation"]["source_revision"], replay["source_revision"])
+        self.assertEqual([0], [row["exit_code"] for row in replay["checks"]])
+        self.assertIn("greet.py", replay["checks"][0]["command"])
+
+    def test_a_check_that_passes_only_in_the_validators_session_never_completes(self):
+        self.env.update(AUTOCODE_FIXTURE_MODE="no-human", AUTOCODE_FIXTURE_UNREPRODUCIBLE_CHECK="1")
+        self.launch(["Build greeting", "--chat"], 2, answers="CLI\nyes\n")
+        _, state = self.saved()
+        self.assertNotEqual("TASK_COMPLETE", state["status"])
+        self.assertIn(state["status"], ("PAUSED_INVALID_OUTPUT", "PAUSED_REPEATED_FAILURE"))
+        self.assertIn("`test -f .autocode/validator-only` was reported as exit 0", state["stop_reason"])
+        self.assertIn("exited 1", state["stop_reason"])
+        self.assertIsNone((state.get("validation") or {}).get("check_replay"),
+                          "a validation whose check did not reproduce is never stored")
+
+
+if __name__ == "__main__":
+    unittest.main()
