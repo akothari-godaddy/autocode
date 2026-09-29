@@ -20,11 +20,13 @@ DEFAULT_MODELS = {
     # No MiMo anywhere (user 2026-09-27): OpenAI GPT via the ChatGPT login instead.
     # GPT-6 Sol, not Astra: Astra is too expensive and only for the Resolver (user 2026-09-28).
     "plan_reviewer": "openai/gpt-6-sol",
-    # Execution path: Builder on OpenAI GPT-6 Sol; Validator and Completion Owner verify
-    # on GLM so the verifier never grades its own work (docs/models.md independence).
-    "terra": "openai/gpt-6-sol",
-    "sol": "zai-coding-plan/glm-5.3",
-    "completion": "zai-coding-plan/glm-5.3",
+    # Execution path (user 2026-09-29): the cheap model does the volume, the expensive one
+    # judges it. Builder on GLM; Validator and Completion Owner check on GPT-6 Sol, so the
+    # verifier never grades its own work (docs/models.md independence). A stuck Builder's
+    # stronger attempt runs GPT-6 Sol and GLM checks it (autocode_builder_policy).
+    "terra": "zai-coding-plan/glm-5.3",
+    "sol": "openai/gpt-6-sol",
+    "completion": "openai/gpt-6-sol",
     # The Resolver (astra role) is the only default use of GPT-6 Astra.
     "astra": "openai/gpt-6-astra",
 }

@@ -40,11 +40,12 @@ class EscalationTests(unittest.TestCase):
         self.assertEqual("max", state["settings"]["roles"]["sol"]["reasoning_effort"])
         self.assertEqual("GPT-6 Sol Max", event["selected"]["profile"])
 
-    def test_only_the_resolver_climbs_astra_and_default_verifiers_never_escalate(self):
-        """Astra is only for the Resolver (user 2026-09-28); GLM verifiers are on no ladder."""
+    def test_only_the_resolver_climbs_astra_and_glm_roles_never_escalate(self):
+        """Astra is only for the Resolver (user 2026-09-28); GLM roles, including the default
+        Builder, are on no ladder (its stronger attempt is the Builder retry policy's)."""
         cases = [("sol", "openai/gpt-6-astra", "high"), ("completion", "openai/gpt-6-astra", "medium"),
                  ("sol", "zai-coding-plan/glm-5.3", "high"), ("completion", "zai-coding-plan/glm-5.3", "medium"),
-                 ("plan_reviewer", "openai/gpt-6-sol", "high")]
+                 ("terra", "zai-coding-plan/glm-5.3", "medium"), ("plan_reviewer", "openai/gpt-6-sol", "high")]
         for role, model, effort in cases:
             with self.subTest(role=role, model=model):
                 state = self.state(role, model, effort)

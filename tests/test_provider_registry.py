@@ -114,7 +114,7 @@ class ProviderRegistryTests(unittest.TestCase):
             "engine": "opencode", "provider": None, "model": "openai/gpt-6-sol",
             "reasoning_effort": "high", "model_pinned": True,
         }, settings["roles"]["plan_reviewer"])
-        self.assertEqual("openai/gpt-6-sol", settings["roles"]["terra"]["model"])
+        self.assertEqual("zai-coding-plan/glm-5.3", settings["roles"]["terra"]["model"])
         self.assertEqual("medium", settings["roles"]["glm"]["reasoning_effort"])
 
 

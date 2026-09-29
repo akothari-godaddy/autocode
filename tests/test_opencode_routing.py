@@ -60,7 +60,7 @@ class OpenCodeRoutingTests(unittest.TestCase):
 
     def test_new_defaults_and_bare_aliases_never_read_codex_login(self):
         for overrides, expected_sol in (
-            ({}, "zai-coding-plan/glm-5.3"),
+            ({}, "openai/gpt-6-sol"),
             ({"astra_model": "openai/gpt-6-astra",
               "sol_model": "openai/gpt-6-astra"},
              "openai/gpt-6-astra"),

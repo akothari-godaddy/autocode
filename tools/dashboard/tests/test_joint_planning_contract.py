@@ -93,7 +93,7 @@ class JointPlanningContractTests(unittest.TestCase):
     # Defaults match tools/providers/opencode.py DEFAULT_MODELS (GLM plus OpenAI GPT-6; no MiMo since 2026-09-27).
     def assert_joint_routes(
             self, settings, *, glm='zai-coding-plan/glm-5.3', astra='openai/gpt-6-astra',
-            terra='openai/gpt-6-sol', sol='zai-coding-plan/glm-5.3'):
+            terra='zai-coding-plan/glm-5.3', sol='openai/gpt-6-sol'):
         self.assertTrue(settings['joint_planning'])
         self.assertEqual('opencode', settings['engine'])
         self.assertEqual({'opencode'}, set(settings['transport_identities']))

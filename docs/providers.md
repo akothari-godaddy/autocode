@@ -22,9 +22,10 @@ Override execution roles with `--astra-model`, `--terra-model`,
 engines and sessions; no existing run is migrated by a dashboard selection.
 OpenCode reasoning variants can be selected in the browser or with the existing
 role-specific reasoning-effort flags. New joint runs start with separate GLM requirements
-and planner sessions, Sol High for the Plan Reviewer, Terra Medium for the Builder, Sol High for
-the Validator, and a separate Sol Medium session for the Completion Owner. The four
-execution roles then follow the automatic ladders documented in [Models](models.md). Provider
+and planner sessions, GPT-6 Sol High for the Plan Reviewer, GLM Medium for the Builder, GPT-6
+Sol High for the Validator, and a separate GPT-6 Sol Medium session for the Completion Owner.
+Escalation then follows the ladders and Builder retry policy documented in
+[Models](models.md). Provider
 credentials remain with OpenCode: Autocode does
 not read its auth file or change your global configuration.
 
@@ -131,9 +132,9 @@ version_command = ["gocode", "--version"]
 
 [roles]
 astra = { model = "openai/gpt-6-astra", effort = "high" }
-terra = { model = "openai/gpt-6-sol", effort = "medium" }
-sol = { model = "zai-coding-plan/glm-5.3", effort = "high" }
-completion = { model = "zai-coding-plan/glm-5.3", effort = "medium" }
+terra = { model = "zai-coding-plan/glm-5.3", effort = "medium" }
+sol = { model = "openai/gpt-6-sol", effort = "high" }
+completion = { model = "openai/gpt-6-sol", effort = "medium" }
 glm = { model = "zai-coding-plan/glm-5.3", effort = "medium" }
 plan_reviewer = { model = "openai/gpt-6-sol", effort = "high" }
 ```

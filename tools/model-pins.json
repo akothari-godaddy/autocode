@@ -1,12 +1,14 @@
 {
   "version": 1,
-  "pinned_at": "2026-09-27",
+  "pinned_at": "2026-09-29",
   "source": "live opencode models search; user confirmed shortlist",
   "rules": [
     "verifier != producer: OpenAI GPT checks GLM work and GLM checks OpenAI GPT work",
     "subscription routes only: no free, flash, or highspeed",
     "never MiMo (user 2026-09-27): no xiaomi-token-plan-sgp/ or mimo-token-plan/ route",
-    "start on the ladder medium rung where docs say medium; escalate reasoning in-stage when needed"
+    "start on the ladder medium rung where docs say medium; escalate reasoning in-stage when needed",
+    "cheap model does the volume, expensive model judges (user 2026-09-29): GLM plans and builds, GPT-6 Sol reviews and checks",
+    "GPT-6 Astra only for the Resolver (user 2026-09-28)"
   ],
   "roles": {
     "requirements": {
@@ -18,19 +20,19 @@
       "effort": "high"
     },
     "reviewer": {
-      "model": "openai/gpt-6-astra",
+      "model": "openai/gpt-6-sol",
       "effort": "high"
     },
     "builder": {
-      "model": "openai/gpt-6-sol",
+      "model": "zai-coding-plan/glm-5.3",
       "effort": "medium"
     },
     "validator": {
-      "model": "zai-coding-plan/glm-5.3",
+      "model": "openai/gpt-6-sol",
       "effort": "high"
     },
     "completion": {
-      "model": "zai-coding-plan/glm-5.3",
+      "model": "openai/gpt-6-sol",
       "effort": "medium"
     },
     "resolver": {

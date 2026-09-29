@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 import unittest
 import autocode_builder_policy as policy
+import autocode_dispatch as dispatch
 from . import test_build_blackbox as bb
 
 
@@ -49,6 +50,64 @@ class PolicyTests(unittest.TestCase):
         policy.guard(state)
         self.assertEqual(selected, state['settings']['roles']['terra'])
         self.assertEqual(selected, policy.lane(state)['initial_route'])
+
+    def default_routes(self):
+        state = self.state()
+        state['settings']['engine'] = 'opencode'
+        state['settings']['roles'] = {
+            'terra': {'model': 'zai-coding-plan/glm-5.3', 'reasoning_effort': 'medium'},
+            'sol': {'model': 'openai/gpt-6-sol', 'reasoning_effort': 'high'},
+            'completion': {'model': 'openai/gpt-6-sol', 'reasoning_effort': 'medium'}}
+        return state
+
+    def test_escalated_builder_is_checked_by_glm_until_the_next_milestone(self):
+        state = self.default_routes()
+        dispatch.enforce_cross_model_verification(state)
+        policy.failure(state, 'e1', 'f')
+        self.assertEqual('escalate', policy.failure(state, 'e2', 'f'))
+        roles = state['settings']['roles']
+        self.assertEqual(('openai/gpt-6-sol', 'xhigh'), (roles['terra']['model'], roles['terra']['reasoning_effort']))
+        self.assertEqual(('zai-coding-plan/glm-5.3', 'high'), (roles['sol']['model'], roles['sol']['reasoning_effort']))
+        self.assertEqual(('zai-coding-plan/glm-5.3', 'medium'),
+                         (roles['completion']['model'], roles['completion']['reasoning_effort']))
+        self.assertEqual({'sol': 'zai-coding-plan/glm-5.3', 'completion': 'zai-coding-plan/glm-5.3'},
+                         state['builder_retry_decisions'][-1]['checker_models'])
+        dispatch.enforce_cross_model_verification(state)
+        state = json.loads(json.dumps(state))
+        state['current_task'] = {'id': 'task2', 'milestone_id': 'M2'}
+        policy.guard(state)
+        self.assertEqual(self.default_routes()['settings']['roles'], state['settings']['roles'])
+        dispatch.enforce_cross_model_verification(state)
+
+    def test_a_climbed_checker_moves_to_a_glm_effort(self):
+        state = self.default_routes()
+        state['settings']['roles']['sol']['reasoning_effort'] = 'max'
+        policy.failure(state, 'e1', 'f'); policy.failure(state, 'e2', 'f')
+        self.assertEqual('high', state['settings']['roles']['sol']['reasoning_effort'])
+        state['current_task'] = {'id': 'task2', 'milestone_id': 'M2'}
+        policy.guard(state)
+        self.assertEqual('max', state['settings']['roles']['sol']['reasoning_effort'])
+
+    def test_a_pinned_checker_is_not_moved_and_the_cross_model_guard_still_pauses(self):
+        state = self.default_routes()
+        state['settings']['roles']['sol']['model_pinned'] = True
+        policy.failure(state, 'e1', 'f')
+        self.assertEqual('escalate', policy.failure(state, 'e2', 'f'))
+        self.assertEqual('openai/gpt-6-sol', state['settings']['roles']['sol']['model'])
+        self.assertEqual('zai-coding-plan/glm-5.3', state['settings']['roles']['completion']['model'])
+        with self.assertRaises(policy.s.Paused) as raised:
+            dispatch.enforce_cross_model_verification(state)
+        self.assertEqual('PAUSED_CROSS_MODEL', raised.exception.status)
+
+    def test_a_parallel_builder_pauses_rather_than_be_checked_by_its_strong_model(self):
+        state = self.default_routes()
+        state['parent_run'] = '/runs/parent'
+        policy.failure(state, 'e1', 'f')
+        self.assertEqual('pause', policy.failure(state, 'e2', 'f'))
+        self.assertEqual('zai-coding-plan/glm-5.3', state['settings']['roles']['terra']['model'])
+        self.assertEqual('openai/gpt-6-sol', state['settings']['roles']['sol']['model'])
+        self.assertEqual('PAUSED_BUILDER_RETRY_LIMIT', state['status'])
+        self.assertIn('also checks this batch', state['stop_reason'])
 
     def test_configured_strong_model_retains_opencode_transport(self):
         state=self.state(); state['settings']['engine']='opencode'

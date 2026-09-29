@@ -48,9 +48,9 @@ LADDER = {
     "requirements": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
     "glm": {"model": "zai-coding-plan/glm-5.3", "effort": "high"},
     "plan_reviewer": {"model": "openai/gpt-6-sol", "effort": "high"},
-    "terra": {"model": "openai/gpt-6-sol", "effort": "medium"},
-    "sol": {"model": "zai-coding-plan/glm-5.3", "effort": "high"},
-    "completion": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
+    "terra": {"model": "zai-coding-plan/glm-5.3", "effort": "medium"},
+    "sol": {"model": "openai/gpt-6-sol", "effort": "high"},
+    "completion": {"model": "openai/gpt-6-sol", "effort": "medium"},
     "astra": {"model": "openai/gpt-6-astra", "effort": "high"},
     "resolver": {"model": "openai/gpt-6-astra", "effort": "high"},
 }

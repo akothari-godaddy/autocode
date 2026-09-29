@@ -69,14 +69,15 @@ class AllRoleModelTests(unittest.TestCase):
     def test_explicit_override_changes_only_the_selected_role_on_a_new_run(self):
         with patch.object(oc, 'local_settings', return_value={'engine':'opencode'}), \
              patch.object(support, 'local_settings', return_value={'auth_mode':'ChatGPT'}):
-            args = self.configure_args(sol_model='zai-coding-plan/glm-5.3')
+            args = self.configure_args(sol_model='openai/gpt-6-luna')
             settings = runner.configure(args, {'workspace':'/fixture','iteration':0})
         self.assertEqual('opencode', settings['roles']['astra']['engine'])
         self.assertEqual('openai/gpt-6-astra', settings['roles']['astra']['model'])
         self.assertEqual('opencode', settings['roles']['sol']['engine'])
-        self.assertEqual('zai-coding-plan/glm-5.3', settings['roles']['sol']['model'])
+        self.assertEqual('openai/gpt-6-luna', settings['roles']['sol']['model'])
         self.assertEqual('zai-coding-plan/glm-5.3', settings['roles']['glm']['model'])
-        self.assertEqual('openai/gpt-6-sol', settings['roles']['terra']['model'])
+        self.assertEqual('zai-coding-plan/glm-5.3', settings['roles']['terra']['model'])
+        self.assertEqual('openai/gpt-6-sol', settings['roles']['completion']['model'])
         state = {'settings':settings,'sessions':{'astra':'opencode-astra','sol':'opencode-sol'}}
         before = copy.deepcopy(state)
         for override in ({'astra_model':'gpt-6-astra'}, {'sol_model':'gpt-5.6-sol'}):

@@ -45,10 +45,11 @@ class UsableTest(unittest.TestCase):
 class SuggestTest(unittest.TestCase):
     def test_prefers_subscription_pair_when_present(self):
         roles = mc.suggest(mc.usable(CATALOGUE))
-        self.assertEqual("openai/gpt-6-sol", roles["builder"]["model"])
+        self.assertEqual("zai-coding-plan/glm-5.3", roles["builder"]["model"])
         self.assertEqual("openai/gpt-6-sol", roles["reviewer"]["model"])
         self.assertEqual("medium", roles["builder"]["effort"])
-        self.assertEqual("zai-coding-plan/glm-5.3", roles["validator"]["model"])
+        self.assertEqual("openai/gpt-6-sol", roles["validator"]["model"])
+        self.assertEqual("openai/gpt-6-sol", roles["completion"]["model"])
         self.assertEqual("zai-coding-plan/glm-5.3", roles["requirements"]["model"])
         self.assertEqual("medium", roles["requirements"]["effort"])
 

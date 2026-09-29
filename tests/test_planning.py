@@ -352,7 +352,7 @@ class PlanningTests(unittest.TestCase):
                     "transport_identity": {"engine": "opencode"}}
         with patch.object(support, "local_settings", side_effect=AssertionError("No Codex login required")):
             runner.configure_joint(settings, args, fresh=True)
-        self.assertEqual({"engine": "opencode", "provider": None, "model": "zai-coding-plan/glm-5.3",
+        self.assertEqual({"engine": "opencode", "provider": None, "model": "openai/gpt-6-sol",
                           "reasoning_effort": "high"}, settings["roles"]["sol"])
         settings["roles"]["sol"] = {"engine": "opencode", "provider": None, "model": "zai-coding-plan/glm-5.3"}
         saved = copy.deepcopy(settings)
@@ -386,10 +386,10 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual("opencode", settings["engine"])
         self.assertEqual("glm", planning.role_for({"settings": settings}, "astra_discovery"))
         self.assertEqual("zai-coding-plan/glm-5.3", settings["roles"]["glm"]["model"])
-        self.assertEqual("openai/gpt-6-sol", settings["roles"]["terra"]["model"])
+        self.assertEqual("zai-coding-plan/glm-5.3", settings["roles"]["terra"]["model"])
         self.assertEqual({"engine": "opencode", "provider": None, "model": "openai/gpt-6-astra"},
                          {key: settings["roles"]["astra"][key] for key in ("engine", "provider", "model")})
-        self.assertEqual({"engine": "opencode", "provider": None, "model": "zai-coding-plan/glm-5.3"},
+        self.assertEqual({"engine": "opencode", "provider": None, "model": "openai/gpt-6-sol"},
                          {key: settings["roles"]["sol"][key] for key in ("engine", "provider", "model")})
         self.assertEqual({'astra': 'high', 'terra': 'medium', 'sol': 'high', 'completion': 'medium'},
                          {role: settings['roles'][role]['reasoning_effort']
@@ -563,14 +563,14 @@ class JointFlow(unittest.TestCase):
         self.assertEqual(["orchestrator", "terra", "sol", "astra_review"], [r["stage"] for r in final["stages"][7:]])
         self.assertEqual(["runner", "opencode", "opencode", "opencode"], [r["engine"] for r in final["stages"][7:]])
         sol = final["stages"][9]
-        self.assertEqual("zai-coding-plan/glm-5.3", sol["command"][sol["command"].index("--model") + 1])
+        self.assertEqual("openai/gpt-6-sol", sol["command"][sol["command"].index("--model") + 1])
         self.assertEqual("high", sol["command"][sol["command"].index("--variant") + 1])
         config = json.loads(Path(sol["output"]).with_suffix(".opencode.json").read_text())
         self.assertEqual("deny", config["agent"]["autocode_sol"]["permission"]["edit"])
         completion = final["stages"][10]
         self.assertEqual("astra", completion["role"])
         self.assertEqual("completion", completion["route_role"])
-        self.assertEqual("zai-coding-plan/glm-5.3", completion["command"][completion["command"].index("--model") + 1])
+        self.assertEqual("openai/gpt-6-sol", completion["command"][completion["command"].index("--model") + 1])
         self.assertEqual("medium", completion["command"][completion["command"].index("--variant") + 1])
         self.assertIn("autocode_completion", completion["command"])
         self.assertEqual(3, len({final["sessions"][role] for role in ("plan_reviewer", "sol", "completion")}))

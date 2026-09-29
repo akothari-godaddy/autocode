@@ -25,27 +25,28 @@ See [CLI](cli.md).
 ## Default models
 
 New OpenCode runs (the default engine) use these routes. Every OpenAI model goes
-through the ChatGPT login; GLM goes through the Z.ai Coding Plan. A verifier never
-shares its producer's model family: GPT builds and GLM validates, GLM plans and GPT
-reviews the plan. GPT-6 Astra is reserved for the Resolver.
+through the ChatGPT login; GLM goes through the Z.ai Coding Plan. The cheaper model
+does the volume and the more expensive one judges it: GLM plans and builds, GPT-6 Sol
+reviews the plan and checks the build. A verifier never shares its producer's model
+family. GPT-6 Astra is reserved for the Resolver.
 
 | Role | Default model | Reasoning | Escalation ladder |
 | --- | --- | --- | --- |
 | Requirements Gatherer | `zai-coding-plan/glm-5.3` | medium | None |
 | Planner | `zai-coding-plan/glm-5.3` | high | None |
 | Plan Reviewer | `openai/gpt-6-sol` | high | None |
-| Builder | `openai/gpt-6-sol` | medium | Sol Medium → High → XHigh → Max |
-| Validator | `zai-coding-plan/glm-5.3` | high | None by default (see below) |
-| Completion Owner | `zai-coding-plan/glm-5.3` | medium | None by default (see below) |
+| Builder | `zai-coding-plan/glm-5.3` | medium | None; a stuck Builder gets one GPT-6 Sol XHigh attempt ([retry policy](#builder-retry-policy)) |
+| Validator | `openai/gpt-6-sol` | high | Sol High → XHigh → Max |
+| Completion Owner | `openai/gpt-6-sol` | medium | Sol Medium → High → Max |
 | Resolver (`--astra-model`) | `openai/gpt-6-astra` | high | Astra High → XHigh → Max |
 
 A role escalates only while its exact model and reasoning level are on its ladder.
-The default GLM Validator and Completion Owner, and the Plan Reviewer, are on no
-ladder: they keep their configured route, and a verifier that keeps struggling
-pauses the run instead. If you configure the Validator or Completion Owner on
-`openai/gpt-6-sol` (with a non-Sol Builder), they climb Sol High → XHigh → Max and
-Sol Medium → High → Max respectively. No role other than the Resolver escalates onto
-GPT-6 Astra.
+The default GLM Builder, any GLM Validator or Completion Owner, and the Plan Reviewer
+are on no ladder: they keep their configured route, and a verifier that keeps
+struggling pauses the run instead. The Builder instead gets its
+[retry policy](#builder-retry-policy)'s one stronger attempt. If you configure the
+Builder on `openai/gpt-6-sol` (with GLM checkers), it climbs Sol Medium → High → XHigh
+→ Max. No role other than the Resolver escalates onto GPT-6 Astra.
 
 Other engines keep their own defaults, set where each engine is configured:
 
@@ -67,7 +68,7 @@ overwrites an explicit custom model/provider route.
 > **Note on role names.** The CLI flags keep the older tier names — `--astra-model`
 > (Resolver), `--terra-model` (Builder), `--sol-model` (Validator) — because those
 > names are in saved run state. They are not model choices: `--terra-model
-> openai/gpt-6-sol` pins the model used for the Builder role.
+> zai-coding-plan/glm-5.3` selects the model used for the Builder role.
 
 ## Builder retry policy
 
@@ -79,6 +80,14 @@ Explicit model pins and custom providers are never overridden. Existing saved ru
 without this policy retain their previous routing. Restarting/resuming cannot reset
 an exhausted budget. Scope violations, approval requests and transport safety pauses
 are not automatically retried by this policy.
+
+The stronger attempt must not be checked by its own model. When the Validator or
+Completion Owner runs the stronger model, it moves to `zai-coding-plan/glm-5.3` for the
+rest of that milestone (keeping its effort, or `high` for a climbed `xhigh`/`max`) and
+returns to its route at the next milestone. The decision records the switch as
+`checker_models`. Pinned and custom-provider checkers are never moved; the cross-model
+guard pauses the run instead. A parallel Builder cannot move the checkers that will
+check its batch, so it pauses at this point instead of taking the stronger attempt.
 
 An implementation attempt with no source changes is no progress, not a build candidate.
 The dashboard's named milestone checkpoints distinguish recorded implementation/tool
