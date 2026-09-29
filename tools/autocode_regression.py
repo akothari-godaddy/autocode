@@ -36,6 +36,7 @@ try:
     from . import autocode_workspaces as workspaces
     from . import autocode_bug_job as bug_job, autocode_test_cases as test_cases
     from . import autocode_follow_up as follow_up
+    from . import autocode_runner_check as runner_check, autocode_status as status
 except ImportError:
     import autocode_bug_job as bug_job
     import autocode_follow_up as follow_up
@@ -44,6 +45,8 @@ except ImportError:
     import autocode_goals as goals
     import autocode_verify as verify
     import autocode_workspaces as workspaces
+    import autocode_runner_check as runner_check
+    import autocode_status as status
 
 STAGE = "regression_proof"
 SUMMARY_KEYS = ("verdict", "failures", "unverified", "notes", "review_reasons", "fail_to_pass", "pass_to_pass",
@@ -126,12 +129,15 @@ def reviewed_patch(state, workspace):
     return next((path for path in candidates if path.is_file()), candidates[0])
 
 
-def _baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch=None):
+def _baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch=None, progress=None):
     cached = state.get("regression_baseline") or {}
     patch = str(base_patch) if base_patch else None
     if (cached.get("base") == base and cached.get("command") == suite and cached.get("base_patch") == patch
             and Path(cached.get("path", "")).is_file()):
         return util.read(cached["path"])
+    if progress:
+        progress("Testing the original code before comparing the change", command=suite,
+                 output=Path(run_dir) / "regression" / "baseline" / "suite-on-base.log")
     result = verify.baseline(workspace, base, Path(run_dir) / "regression", framework=framework,
                              suite_command=suite, dependencies_from=dependencies, timeout=suite_timeout(state),
                              base_patch=base_patch)
@@ -151,6 +157,11 @@ def prove(state, workspace, run_dir):
     # The cases due grow as milestones are accepted; a proof for a smaller scope is stale.
     if saved.get("source_revision") == current and saved.get("case_scope", scope) == scope:
         return saved
+    with runner_check.track(state, run_dir, STAGE, "Preparing regression checks", status.persist) as progress:
+        return _prove(state, workspace, run_dir, current, scope, progress)
+
+
+def _prove(state, workspace, run_dir, current, scope, progress):
     started = time.monotonic()
     base = base_commit(state, workspace)
     options = settings(state)
@@ -172,10 +183,11 @@ def prove(state, workspace, run_dir):
         framework = verify.detect_framework(workspace, python=options.get("python")
                                             or verify.python_for(dependencies))
         suite = options.get("test_command") or (framework.suite if framework else None)
-        base_suite = (_baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch)
+        base_suite = (_baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch, progress)
                       if suite else None)
         number = len(state.get("regression_proofs", [])) + 1
         out = Path(run_dir) / "regression" / f"proof-{number:02d}"
+        progress("Comparing regression tests and checking the full candidate suite", command=suite, output=out)
         result = verify.verify(workspace, base, out, framework=framework, suite_command=options.get("test_command"),
                                regression_command=options.get("regression_command"),
                                reported=None, base_suite=base_suite, dependencies_from=dependencies,
@@ -264,6 +276,7 @@ def check_cases(proof, cases):
 
 def before_review(state, stage, workspace, run_dir):
     """Called by both dispatch paths just before the Validator (or combined checkpoint) runs."""
+    runner_check.clear(state, run_dir, status.persist)
     if stage in ("sol", "astra_checkpoint") and required(state):
         prove(state, workspace, run_dir)
 

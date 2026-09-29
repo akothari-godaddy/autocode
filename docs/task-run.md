@@ -144,6 +144,20 @@ Approving a plan or a review is a real user decision. Automated callers should
 do it only when a person has delegated that decision to them, as the scenario
 harness does for test runs.
 
+## Runner checks in status
+
+`view.runner_check` describes a local check in progress before the Validator:
+its `stage`, plain-language `summary`, `started_at`, `updated_at`, `command` and
+`output` path. It is `null` when no such check is active. These checks do not
+consume a model turn. A resumed run saves its running state before the first
+test starts, so it does not continue to look paused throughout a long suite.
+
+The CLI also returns `runner_check_workers` with `checked`, `alive` and
+`live_pids`, using the controller's recorded process birth identity. An exited
+controller makes the checkpoint `stale`; an inaccessible process is unknown,
+not assumed dead. Inspect retained test output before restarting a stale check.
+The check activity never substitutes for a passing proof or independent review.
+
 ## Dependencies between existing runs
 
 An already authorized delivery should not become a request for a person to assemble

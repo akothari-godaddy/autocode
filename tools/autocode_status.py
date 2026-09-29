@@ -20,7 +20,8 @@ def record(state, *, timestamp=None):
     if not all(key in state for key in ('task', 'workspace', 'status')):
         return None
     timestamp = timestamp if timestamp is not None else dt.datetime.now(dt.timezone.utc).timestamp()
-    active = state.get('active_stage') or {}
+    check = state.get('active_runner_check') or {}
+    active = state.get('active_stage') or check
     stage = active.get('stage') or state.get('next_stage') or ''
     role = ROLES.get(stage.removesuffix('_report_repair'), stage.replace('_', ' ').title() or 'Runner')
     task = state.get('current_task') or {}
@@ -33,7 +34,7 @@ def record(state, *, timestamp=None):
     status = state['status']
     signature = hashlib.sha256(json.dumps([status, stage, state.get('iteration'), task.get('id'),
         task.get('objective'), bool(active), active.get('started_at'), active.get('name'), workers, state.get('stop_reason'), request,
-        questions, public.get('request_id') if public else None], sort_keys=True).encode()).hexdigest()
+        questions, public.get('request_id') if public else None, check.get('summary')], sort_keys=True).encode()).hexdigest()
     previous = state.get('progress_checkpoint') or {}
     changed = previous.get('signature') != signature
     heartbeat = status == 'RUNNING' and (bool(active) or batch.get('status') == 'BUILDING') and timestamp - previous.get('at', 0) >= 60
@@ -67,6 +68,9 @@ def record(state, *, timestamp=None):
                      if public['scope'] == 'goal_approval' else ' Respond to the issued AutoResolver request.')
         elif operational_hold:
             text += ' AutoResolver must evaluate human escalation before any request is shown.'
+    elif check:
+        role = 'Runner'
+        text = check['summary'] + '. This check runs locally before the Validator; no model is active.'
     else:
         text = f'{role}{" started" if active else " queued"}: ' + (task.get('objective') or 'Working on the task.')
         if activity:
