@@ -821,6 +821,7 @@ def verify(workspace, base, run_dir, *, framework=None, suite_command=None, regr
             "baseline": ({"health": base_suite["health"], "exit_code": base_suite["receipt"]["exit_code"],
                           "output": base_suite["receipt"]["output"]} if base_suite else None),
             "fail_to_pass": proof.get("fail_to_pass"), "pass_to_pass": proof.get("pass_to_pass"),
+            "not_run_on_base": proof.get("not_run_on_base"),
             "checks": checks}
 
 
@@ -883,6 +884,9 @@ def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, rev
         # Tests that ran and passed on the original code and still pass: the proof
         # preserve cases are matched against (autocode_regression.check_cases).
         proof["pass_to_pass"] = sorted(set(base["passed"]) & passed)
+        # Passing tests that never ran on the original code (their module did not import there): a
+        # guard's test there is not shown to fail before, only not shown to pass (check_cases).
+        proof["not_run_on_base"] = sorted(passed - set(base["passed"]) - set(base["failed"]))
         if not flipped and new_behavior:
             fail.append("No new or changed test passes with the change and did not pass without it, "
                         "so the tests do not show the new behavior")

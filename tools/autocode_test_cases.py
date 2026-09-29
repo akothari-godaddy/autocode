@@ -3,8 +3,9 @@
 Two places write them. A bug fix's Investigator writes ``test_cases`` (id,
 given, when, then) in its diagnosis (autocode_bug_job). A small feature's
 Planner writes acceptance criteria as concrete examples and marks the ones a
-test proves with a verification_method of ``test: test_<id>_...``
-(``contract_cases``). Either way a person approves English, the Builder writes
+test proves with a verification_method of ``test: test_<id>_...``, or of
+``guard: test_<id>_...`` for behavior that already works and must keep working
+(``contract_cases``; a guard is a preserve case, as in a bug diagnosis). Either way a person approves English, the Builder writes
 one test per case named after its id, and the runner's proof
 (autocode_regression) checks by name, with no model, that each case has a
 test that passes with the change and did not before (``match_cases``).
@@ -23,6 +24,11 @@ from __future__ import annotations
 import re
 
 MARK = "test:"
+# Behavior that already works and must keep working: its test passes before and after the change
+# (a "preserve" case, autocode_regression.check_cases). Live review-then-fix plans (2026-09-29) had
+# only "test:" for "a timeout before execution is still retried", which the reviewed change never
+# broke, so the proof could not pass it: one run asked the user, one was sent back to rework.
+GUARD_MARK = "guard:"
 
 
 def design_only(state: dict) -> bool:
@@ -33,15 +39,19 @@ def design_only(state: dict) -> bool:
 
 
 def contract_cases(state: dict) -> list[dict]:
-    """The approved plan's criteria marked ``test:`` that are due now, as cases (id, text). None in a
-    design-only job: nothing there is proven by a test the Builder writes."""
+    """The approved plan's criteria marked ``test:`` or ``guard:`` that are due now, as cases (id, text, and
+    kind "preserve" for a guard). None in a design-only job: nothing there is proven by a test the Builder writes."""
     if design_only(state):
         return []
     body = (state.get("goal_contract") or {}).get("body") or {}
     due = in_scope(state)
-    return [{"id": row["id"], "text": row.get("criterion", "")} for row in body.get("acceptance_criteria") or []
-            if isinstance(row, dict) and row.get("id") and (due is None or row["id"] in due)
-            and str(row.get("verification_method", "")).strip().lower().startswith(MARK)]
+    cases = []
+    for row in body.get("acceptance_criteria") or []:
+        method = str(row.get("verification_method", "")).strip().lower() if isinstance(row, dict) else ""
+        if row.get("id") and (due is None or row["id"] in due) and method.startswith((MARK, GUARD_MARK)):
+            cases.append({"id": row["id"], "text": row.get("criterion", ""),
+                          **({"kind": "preserve"} if method.startswith(GUARD_MARK) else {})})
+    return cases
 
 
 def in_scope(state: dict) -> set[str] | None:
@@ -131,7 +141,9 @@ TESTS NAMED IN THE PLAN: every acceptance criterion of your milestone whose veri
 "test:" is a concrete example you must write as its own test, named with that criterion's id (C2 ->
 test_c2_<what it checks>) and asserting exactly the criterion's example. Before the Validator runs, the runner
 runs these tests itself, with those of milestones already accepted: each must pass with the change and must
-not have passed before the run began. Criteria without "test:" are checked by the Validator as usual.
+not have passed before the run began. A criterion whose verification_method starts with "guard:" is behavior
+that already works and must keep working: write its test the same way (C4 -> test_c4_...); it must pass both
+before and after the change, so put it where it imports only code that exists before the change. Criteria without "test:" or "guard:" are checked by the Validator as usual.
 """
 
 

@@ -47,6 +47,7 @@ except ImportError:
 
 STAGE = "regression_proof"
 SUMMARY_KEYS = ("verdict", "failures", "unverified", "notes", "review_reasons", "fail_to_pass", "pass_to_pass",
+                "not_run_on_base",
                 "commands", "base", "base_patch", "source_revision", "test_files", "source_files", "case_tests")
 
 
@@ -234,8 +235,19 @@ def check_cases(proof, cases):
     failures += [
         f"Test case {test_cases.case_text(case)} has no test named {test_cases.case_test_name(case['id'])} "
         "that passes with the change and did not pass without it" for case in missing]
+    # A preserve case (a plan's guard:) whose test could not even import on the original code is not
+    # shown to fail there: it counts, with a note that its before-state is unproven.
+    unrun = proof.get("not_run_on_base") or []
+    for case in preserve:
+        found = [] if proof["case_tests"][case["id"]] else test_cases.match_cases([case], unrun)[case["id"]]
+        if found:
+            proof["case_tests"][case["id"]] = found
+            proof["notes"] = list(proof.get("notes") or []) + [
+                f"Preserve case {case['id']}'s test {', '.join(found)} passes with the change but could not run "
+                "on the original code (its test file imports code the change adds), so it is not shown to "
+                "have passed before"]
     mistagged = [case for case in preserve
-                 if test_cases.match_cases([case], proof["fail_to_pass"])[case["id"]]]
+                 if set(test_cases.match_cases([case], proof["fail_to_pass"])[case["id"]]) - set(unrun)]
     untested = [case for case in preserve
                 if not proof["case_tests"][case["id"]] and case not in mistagged]
     failures += [
