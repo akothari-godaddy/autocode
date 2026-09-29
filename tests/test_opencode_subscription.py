@@ -33,8 +33,26 @@ class OpenCodeSubscriptionTests(unittest.TestCase):
 
     def test_timeout_and_missing_cli_do_not_fallback_or_expose_output(self):
         for error in (subprocess.TimeoutExpired(['opencode'], 15), FileNotFoundError('missing')):
-            with patch.object(oc.subprocess, 'run', side_effect=error), self.assertRaisesRegex(RuntimeError, 'no provider request'):
+            with patch.object(oc.subprocess, 'run', side_effect=error) as run, self.assertRaisesRegex(RuntimeError, 'no provider request'):
                 oc.check_subscription_routes(self.roles)
+            # Every transport failure is retried before the guard concludes
+            # anything; the conclusion is still "cannot verify", never a guess.
+            self.assertEqual(3, run.call_count)
+
+    def test_slow_auth_probe_cold_start_recovers_on_retry(self):
+        # Observed in containers: opencode auth list can exceed the 15 s probe
+        # timeout once under load and succeed on the next attempt.
+        ok = SimpleNamespace(returncode=0, stdout='● OpenAI oauth\n', stderr='')
+        with patch.object(oc.subprocess, 'run', side_effect=[subprocess.TimeoutExpired(['opencode'], 15), ok]) as run:
+            oc.check_subscription_routes(self.roles)
+        self.assertEqual(2, run.call_count)
+
+    def test_completed_auth_check_is_never_retried(self):
+        for response in (SimpleNamespace(returncode=0, stdout='● OpenAI api\n', stderr=''),
+                         SimpleNamespace(returncode=1, stdout='● OpenAI oauth\n', stderr='')):
+            with patch.object(oc.subprocess, 'run', return_value=response) as run, self.assertRaises(RuntimeError):
+                oc.check_subscription_routes(self.roles)
+            self.assertEqual(1, run.call_count)
 
     def test_existing_zai_routes_do_not_gain_an_auth_probe(self):
         with patch.object(oc.subprocess, 'run', side_effect=AssertionError('Unrelated routes remain unchanged')):
