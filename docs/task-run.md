@@ -134,3 +134,32 @@ the run; a caller must not answer it with a proposed default.
 Approving a plan or a review is a real user decision. Automated callers should
 do it only when a person has delegated that decision to them, as the scenario
 harness does for test runs.
+
+## Dependencies between existing runs
+
+An already authorized delivery should not become a request for a person to assemble
+hashes and review logs. At an exact stopped permission request, an operator can bind
+the consumer to a producer using `--bind-dependency SPEC.json` (also
+`TaskRun.bind_dependency`). The specification names `producer_workspace`,
+`producer_run`, `question_id`, the current `request_token`, a human-readable `label`,
+an explicit `files` list, and a `destination` beneath the consumer run's `evidence/`.
+This action delegates only that delivery, records the authorization, and presents
+`WAITING_FOR_DEPENDENCY` / `needs.kind=dependency`, with no question to answer.
+It cannot consume a plan approval or artifact acceptance request.
+
+Run `python tools/autocode_dependencies.py --workspace CONSUMER --run-dir RUN --watch`
+to supervise this binding. The worker uses `TaskRun.status`, never another run's
+private state. The additive `view.delivery` exists only for runner-verified current
+completion, with the source snapshot, approved contract and independently recorded
+Validator/completion review pins. The worker waits without model calls, copies only
+the declared regular files into an atomic evidence bundle, checks the producer again,
+then calls `--receive-dependency MANIFEST` and continues the consumer. It never imports
+source into the consumer itself or accepts the consumer's integration result.
+
+Both the binding and delivered receipt survive restarts. A single worker lock prevents
+duplicate transports; a crash after publishing the bundle is safely replayable.
+Changed producer source, missing review pins, modified deliveries and changed consumer
+source/contracts block transport or resume. Operator feedback or an edited plan cancels
+the wait so the new decision can be reviewed. Keep the worker running while waiting;
+if it exits with an error, reconcile the reported cause and restart it against the same
+run. A failed/incomplete producer cannot release the consumer.

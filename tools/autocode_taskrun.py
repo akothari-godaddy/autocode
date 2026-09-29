@@ -95,6 +95,12 @@ class TaskRun:
         self._invoke("resume", "--resume-paused", "--no-chat", *self.options, advancing=True)
         return self.status()
 
+    def bind_dependency(self, specification: Path) -> dict:
+        return self._act("bind dependency", "--bind-dependency", str(specification))
+
+    def receive_dependency(self, manifest: Path) -> dict:
+        return self._act("receive dependency", "--receive-dependency", str(manifest))
+
     def answer(self, question_id: str, text: str) -> dict:
         return self._act("answer", "--answer", f"{question_id}={text}")
 

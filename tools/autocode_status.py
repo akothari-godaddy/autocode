@@ -41,6 +41,8 @@ def record(state, *, timestamp=None):
         return None
     if status in ('TASK_COMPLETE', 'COMPLETE'):
         text = 'Task complete. Acceptance checks and required reviews are recorded.'
+    elif status == 'WAITING_FOR_DEPENDENCY':
+        text = state.get('stop_reason') or 'Waiting for prerequisite delivery. No user action needed.'
     elif status == 'DRY_RUN':
         text = 'Dry run complete. No providers were launched.'
     elif status.endswith('REWORK_REQUIRED'):
