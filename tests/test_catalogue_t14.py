@@ -76,7 +76,7 @@ MUTATIONS = [
      '    state.pop("active_stage", None)\n    state["consecutive_timeout_recoveries"] = 0',
      '    state["consecutive_timeout_recoveries"] = 0',
      ["tests.test_catalogue_t05"]),
-    ("M11", "tools/autocode.py",
+    ("M11", "tools/autocode_run_records.py",
      'def assert_stage_stopped(record):',
      'def assert_stage_stopped(record):\n    return',
      ["tests.test_catalogue_t09"]),
