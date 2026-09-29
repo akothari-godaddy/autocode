@@ -6,13 +6,9 @@
   python3 scenarios/run.py run ID ... --fake  # full AutoCode run with a scripted model (no spend)
   python3 scenarios/run.py run ID ... --profile glm53-openai --i-authorize-live-model-spend
   python3 scenarios/run.py route --fake      # which workflow AutoCode recognizes for each prompt in routing.toml
-  python3 scenarios/run.py compare ID ... --fake  # AutoCode vs a plain agent, same oracle (scripted; no spend)
-  python3 scenarios/run.py compare ID ... --profile openai-only --baseline opencode --i-authorize-live-model-spend
-  python3 scenarios/run.py stats [ID ...]    # runs, passes, pass streak, time and model stages per scenario and mode
 
 Results go to .scenario-runs/<time>-<id>-<mode>/ (result.json, steps.jsonl,
-state.json, and the delivered project); a comparison adds comparison.md and
-comparison.json. See scenarios/README.md.
+state.json, and the delivered project). See scenarios/README.md.
 """
 from __future__ import annotations
 
@@ -23,15 +19,13 @@ import json
 import subprocess
 import sys
 import tempfile
-import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import baseline, catalog, compare, profiles, routing, stats, verdict  # noqa: E402
-from harness.driver import (REPO, DriveError, Driver, default_autocode, fake_setup, live_setup, metrics,  # noqa: E402
-                            split_by_turn)
+from harness import catalog, routing, verdict  # noqa: E402
+from harness.driver import REPO, DriveError, Driver, default_autocode, fake_setup, live_setup, metrics  # noqa: E402
 from harness.project import materialize  # noqa: E402
 
 
@@ -94,7 +88,7 @@ def cmd_run(args) -> int:
         result = run_one(scenario, args)
         outcome = result["verdict"]
         note = ""
-        if outcome not in (verdict.PASS, verdict.SKIPPED, verdict.NOT_EXERCISED):
+        if outcome not in (verdict.PASS, verdict.SKIPPED):
             if scenario.known_failure:
                 note = f"\n  known failure (not counted): {scenario.known_failure}"
             else:
@@ -116,7 +110,7 @@ def caps_flags(args) -> list[str]:
 
 
 def evidence_directory(root: Path, label: str) -> tuple[str, Path]:
-    """Allocate fresh evidence atomically, including simultaneous same-scenario runs."""
+    """Allocate a fresh evidence directory atomically, even for simultaneous runs."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     root = root.resolve()
     root.mkdir(parents=True, exist_ok=True)
@@ -146,66 +140,36 @@ def run_one(scenario, args) -> dict:
                     max_steps=args.max_steps or scenario.max_steps,
                     timeout_seconds=60 * (args.timeout_minutes or scenario.timeout_minutes))
     drive_error = ""
-    started = time.monotonic()
     try:
-        driver.drive(scenario.brief, scenario.turns)
+        driver.drive(scenario.brief)
     except DriveError as error:
         drive_error = str(error)
-    wall_seconds = round(time.monotonic() - started, 1)
     state = driver.state()
     if state:
         (out / "state.json").write_text(json.dumps(state, indent=2))
     record = run_record(driver, state)
     oracle = verdict.evaluate(scenario, project, record)
     outcome, summary = verdict.judge(state.get("status", ""), oracle, scenario.expected)
-    outcome, summary = verdict.exercised(outcome, summary, scenario.requires_stages, record["model_stages"])
     if drive_error:
         outcome, summary = verdict.ERROR, f"harness stopped: {drive_error}; oracle {oracle.summary}"
     result.update(runner_status=state.get("status"), run_dir=str(driver.run_dir or ""),
                   cli_calls=len(driver.steps), answers=driver.answers, metrics=metrics(state),
-                  resolutions=record["resolutions"],
-                  wall_seconds=wall_seconds, cli_seconds=round(sum(step["seconds"] for step in driver.steps), 1),
                   workflow=record["view"].get("workflow"), expected=scenario.expected,
-                  turns=[{"say": turn["say"], "workflow": turn["view"].get("workflow"),
-                          "model_stage_names": turn["model_stages"]} for turn in record.get("turns", [])],
                   checks=[dataclasses.asdict(check) for check in oracle.checks], oracle_error=oracle.error)
     return finish(out, result, outcome, summary)
 
 
 def run_record(driver: Driver, state: dict) -> dict:
-    """What an oracle may know about how the run went (harness.oracle.run_checks).
-
-    A scenario with follow-up turns also gets ``turns``: one record of the same
-    shape per turn, the first for the brief, each later one from the moment its
-    message was said. Only the last turn's record carries the final view; earlier
-    ones carry the view the driver saw when that turn ended.
-    """
+    """What an oracle may know about how the run went (harness.oracle.run_checks)."""
     view = {}
     if driver.run_dir:
         try:
             view = driver.view()
         except DriveError:
             view = {}
-    record = {"status": state.get("status", ""), "view": view, "stages": metrics(state)["stage_names"],
-              "model_stages": metrics(state)["model_stage_names"],
-              "answers": driver.answers, "cli_calls": [step["kind"] for step in driver.steps],
-              # AutoResolver's accepted diagnoses, oldest first, for oracles that score them (issue #59).
-              "resolutions": [{"diagnosis": row.get("diagnosis"), "evidence": row.get("evidence")}
-                              for row in state.get("resolution_history") or [] if isinstance(row, dict)]}
-    if driver.turn_marks:
-        stage_turns = split_by_turn(state, driver.turn_marks)
-        steps = [0, *(mark["steps"] for mark in driver.turn_marks), len(driver.steps)]
-        answers = [0, *(mark["answers"] for mark in driver.turn_marks), len(driver.answers)]
-        record["turns"] = []
-        for index, stages in enumerate(stage_turns):
-            turn_metrics = metrics({"stages": stages})
-            record["turns"].append({
-                "say": driver.turn_marks[index - 1]["say"] if index else None,
-                "stages": turn_metrics["stage_names"], "model_stages": turn_metrics["model_stage_names"],
-                "answers": driver.answers[answers[index]:answers[index + 1]],
-                "cli_calls": [step["kind"] for step in driver.steps[steps[index]:steps[index + 1]]],
-                "view": (driver.turn_marks[index].get("view") if index < len(driver.turn_marks) else view) or {}})
-    return record
+    return {"status": state.get("status", ""), "view": view, "stages": metrics(state)["stage_names"],
+            "model_stages": metrics(state)["model_stage_names"],
+            "answers": driver.answers, "cli_calls": [step["kind"] for step in driver.steps]}
 
 
 def cmd_route(args) -> int:
@@ -255,86 +219,6 @@ def cmd_route(args) -> int:
     return 1
 
 
-def cmd_compare(args) -> int:
-    """Run each scenario through AutoCode and through a plain agent, and judge both with the same oracle."""
-    require_mode(args)
-    if not args.fake:
-        probe = baseline.command(args.baseline, args.baseline_command, Path("."), None)
-        if not baseline.available(probe):
-            sys.exit(f"baseline agent {probe[0]!r} is not installed; install it or pass --baseline-command")
-    mode = "fake" if args.fake else args.profile
-    stamp, root = evidence_directory(args.out, f"compare-{mode}")
-    autocode_args = argparse.Namespace(**{**vars(args), "out": root})
-    rows = []
-    for scenario in selected(args.ids):
-        solution = scenario.dir / args.fake_baseline_solution
-        if args.fake and not solution.is_dir():
-            rows.append({"scenario": scenario.id, "skipped": f"no {args.fake_baseline_solution}/ for the fake agent"})
-            print(f"{scenario.id}: skipped ({rows[-1]['skipped']})")
-            continue
-        started = time.monotonic()
-        auto = run_one(scenario, autocode_args)
-        seconds = round(time.monotonic() - started, 1)
-        if auto["verdict"] == verdict.SKIPPED:
-            rows.append({"scenario": scenario.id, "skipped": auto["summary"]})
-            print(f"{scenario.id}: skipped ({auto['summary']})")
-            continue
-        # The deliverable alone, as the baseline is judged: no AutoCode-only process checks.
-        delivered = verdict.evaluate(scenario, Path(auto["evidence"]) / "project")
-        base = run_baseline(scenario, args, root, solution)
-        row = {"scenario": scenario.id, "category": scenario.category, "expected": scenario.expected,
-               "autocode": {"verdict": auto["verdict"], "summary": auto["summary"], "seconds": seconds,
-                            "deliverable_passed": delivered.passed, "deliverable": delivered.summary,
-                            "model_stages": len((auto.get("metrics") or {}).get("model_stage_names") or []),
-                            "tokens": (auto.get("metrics") or {}).get("tokens"), "evidence": auto["evidence"]},
-               "baseline": base}
-        rows.append(row)
-        print(f"{scenario.id}: AutoCode {auto['verdict']} ({seconds}s), baseline {base['verdict']} "
-              f"({base['seconds']}s); deliverable accepted: {compare.outcome(row)}")
-    summary = compare.summarize(rows)
-    meta = {"mode": mode, "baseline": "a scripted agent" if args.fake else
-            (f"`{args.baseline_command}`" if args.baseline_command else f"{args.baseline} (one call)"),
-            "autocode": autocode_revision(), "started_at": stamp, "out": str(root)}
-    (root / "comparison.json").write_text(json.dumps({**meta, "summary": summary, "rows": rows}, indent=2))
-    (root / "comparison.md").write_text(compare.markdown(meta, rows, summary))
-    a, b = summary["autocode"], summary["baseline"]
-    print(f"compared {summary['compared']} scenarios: deliverable accepted AutoCode {a['deliverable_passed']}, "
-          f"baseline {b['deliverable_passed']}; false completions AutoCode {a['false_completions']}, "
-          f"baseline {b['false_completions']}\n  report: {root / 'comparison.md'}")
-    return 0
-
-
-def run_baseline(scenario, args, root: Path, solution: Path) -> dict:
-    out = root / f"{scenario.id}-baseline"
-    out.mkdir()
-    project = materialize(scenario.seed, out / "project")
-    if args.fake:
-        argv, env = baseline.fake_setup(out, solution)
-    else:
-        builder = (profiles.resolve(args.profile).get("models") or {}).get("builder")
-        model = args.baseline_model or (builder if args.baseline == "opencode" and not args.baseline_command else None)
-        argv, env = baseline.command(args.baseline, args.baseline_command, project, model), {}
-    call = baseline.run(argv, project, scenario.brief, out / "agent.log", env=env,
-                        timeout_seconds=60 * (args.timeout_minutes or scenario.timeout_minutes))
-    oracle = verdict.evaluate(scenario, project)
-    outcome, summary = verdict.judge(call["status"], oracle, scenario.expected)
-    result = {**call, "verdict": outcome, "summary": summary.replace("AutoCode", "the agent"),
-              "deliverable_passed": oracle.passed, "deliverable": oracle.summary, "evidence": str(out),
-              "checks": [dataclasses.asdict(check) for check in oracle.checks], "oracle_error": oracle.error}
-    (out / "result.json").write_text(json.dumps({"scenario": scenario.id, **result}, indent=2))
-    return result
-
-
-def cmd_stats(args) -> int:
-    """Summarize every saved result under --out: how often each scenario ran and passed, and how long it took."""
-    rows = stats.summarize(stats.load_results(args.out), ids=set(args.ids), mode=args.mode)
-    if not rows:
-        print(f"no scenario results under {args.out}")
-        return 0
-    print(stats.format_table(rows))
-    return 0
-
-
 def finish(out: Path, result: dict, outcome: str, summary: str) -> dict:
     result.update(verdict=outcome, summary=summary)
     (out / "result.json").write_text(json.dumps(result, indent=2))
@@ -376,28 +260,6 @@ def main(argv=None) -> int:
     run.add_argument("--max-reported-tokens", type=int, help="forwarded to AutoCode: total reported-token budget")
     run.add_argument("--max-iterations", type=int, help="forwarded to AutoCode: iteration ceiling")
     run.set_defaults(func=cmd_run)
-    comparison = commands.add_parser("compare", help="run AutoCode and a plain agent on the same scenarios; "
-                                                     "judge both with the same oracle")
-    comparison.add_argument("ids", nargs="*")
-    mode = comparison.add_mutually_exclusive_group()
-    mode.add_argument("--fake", action="store_true", help="scripted model and scripted agent; no spend")
-    comparison.add_argument("--fake-solution", default="reference", metavar="DIR",
-                            help="overlay the fake AutoCode provider applies")
-    comparison.add_argument("--fake-baseline-solution", default="reference", metavar="DIR",
-                            help="overlay the fake agent applies, e.g. broken/special-case")
-    mode.add_argument("--profile", help="live model profile for AutoCode, from harness/profiles.py")
-    comparison.add_argument("--baseline", default="opencode", choices=sorted(baseline.PRESETS),
-                            help="plain agent to compare against (default: opencode, AutoCode's default engine)")
-    comparison.add_argument("--baseline-model", help="model for the agent (default: the profile's builder model "
-                                                     "for opencode; the agent's own default otherwise)")
-    comparison.add_argument("--baseline-command", help="custom agent command; {project} and {model} are "
-                                                       "substituted and the brief is sent on stdin")
-    comparison.add_argument("--i-authorize-live-model-spend", action="store_true")
-    comparison.add_argument("--out", type=Path, default=REPO / ".scenario-runs")
-    comparison.add_argument("--autocode", nargs="+", help="AutoCode command to test (default: this checkout)")
-    comparison.add_argument("--max-steps", type=int, help="override the scenario's CLI call budget")
-    comparison.add_argument("--timeout-minutes", type=int, help="override the time budget, for both sides")
-    comparison.set_defaults(func=cmd_compare)
     route = commands.add_parser("route", help="check which workflow AutoCode recognizes for each one-line prompt")
     mode = route.add_mutually_exclusive_group()
     mode.add_argument("--fake", action="store_true", help="scripted model; no spend")
@@ -407,11 +269,6 @@ def main(argv=None) -> int:
     route.add_argument("--autocode", nargs="+", help="AutoCode command to test (default: this checkout)")
     route.add_argument("--timeout-minutes", type=int, help="time budget per prompt (default 10)")
     route.set_defaults(func=cmd_route)
-    summary = commands.add_parser("stats", help="runs, passes, pass streak, time and model stages from saved results")
-    summary.add_argument("ids", nargs="*")
-    summary.add_argument("--mode", help="only this mode: fake, or a live profile name")
-    summary.add_argument("--out", type=Path, default=REPO / ".scenario-runs")
-    summary.set_defaults(func=cmd_stats)
     args = parser.parse_args(argv)
     return args.func(args)
 
