@@ -115,7 +115,11 @@ affected paths, requirements, acceptance criteria and a validation plan. The Bui
 implement, test and repair within the task; every completed handoff goes to the Validator and
 then the Plan Reviewer. A switch to a different milestone requires the Validator's passing evidence for
 **all criteria in the current milestone**, current source/contract/task identities,
-intact evidence, no blocking findings, and its required human reviews. A writer's
+intact evidence, no blocking findings, and its required human reviews. The findings
+that count are its own, a prerequisite milestone's, unscoped ones, and another
+milestone's findings recorded only against criteria the two share. Another milestone's
+finding recorded against criteria this milestone lacks stays open for that milestone and
+for completion, since this milestone's reviewer could not close it. A writer's
 self-assessment cannot authorize that switch. Later milestones may still have
 `NOT_VERIFIED` results. The full flow may also be `NOT_VERIFIED` with an explanation
 while a partial milestone or batch unlocks downstream work; a known flow failure

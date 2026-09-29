@@ -57,11 +57,27 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(['current'], [r['id'] for r in finding_scope.relevant_blockers(
             [finding('current', 'M1', ['C1'])],
             {'id': 'M3', 'acceptance_criteria': ['C3']}, milestones)])
-        # Shared approved criteria make a later finding's ownership ambiguous.
+        # A later milestone that shares a criterion: its finding recorded against its whole scope
+        # waits for it, since this milestone's reviewer could never close it (it would block
+        # forever); one recorded only against the shared criterion still blocks here.
         shared = copy.deepcopy(milestones)
         shared[1]['acceptance_criteria'].append('C1')
-        self.assertEqual(['later'], [r['id'] for r in finding_scope.relevant_blockers(
-            [rows[0]], current, shared)])
+        rows = [finding('later-whole-scope', 'M2', ['C1', 'C2']), finding('later-own', 'M2', ['C2']),
+                finding('shared-only', 'M2', ['C1'])]
+        self.assertEqual(['shared-only'], [r['id'] for r in finding_scope.relevant_blockers(
+            rows, current, shared)])
+
+    def test_a_later_milestones_finding_through_a_shared_criterion_waits_for_that_milestone(self):
+        # Hierarchical planning, 2026-09-29: an M3 review finding recorded against M3's whole scope
+        # blocked M1 through the shared AC17, and M1's reviewer was refused when it tried to close it.
+        milestones = [{'id': 'M1', 'acceptance_criteria': ['AC1', 'AC17'], 'depends_on': []},
+                      {'id': 'M3', 'acceptance_criteria': ['AC3', 'AC8', 'AC15', 'AC17'], 'depends_on': ['M1']}]
+        state = {'goal_contract': {'body': {'milestones': milestones}}, 'findings_ledger': [
+            {'id': 'F-m3', 'source': 'astra', 'status': 'open', 'blocking': True,
+             'scope': {'milestone_id': 'M3', 'criteria': ['AC15', 'AC17', 'AC3', 'AC8']}}]}
+        self.assertEqual([], findings.blocking_for_milestone(state, milestones[0]))
+        self.assertEqual(['F-m3'], [r['id'] for r in findings.blocking_for_milestone(state, milestones[1])])
+        self.assertEqual(['F-m3'], [r['id'] for r in findings.blocking_entries(state)])
 
     def test_sol_findings_open_repeat_and_close_only_by_explicit_disposition(self):
         state = {}

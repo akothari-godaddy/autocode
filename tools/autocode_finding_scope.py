@@ -3,7 +3,8 @@ from __future__ import annotations
 
 
 def relevant_blockers(blockers, current, milestones):
-    """Keep uncertain, shared, and prerequisite findings; defer only proven other work."""
+    """Keep uncertain and prerequisite findings, and another milestone's findings recorded only
+    against criteria the current milestone shares; defer the rest of other milestones' work."""
     by_id = {m.get("id"): m for m in milestones if isinstance(m, dict) and m.get("id")}
     current_ids = current.get("milestone_ids") or [current.get("id")]
     required = current.get("acceptance_criteria")
@@ -40,10 +41,14 @@ def relevant_blockers(blockers, current, milestones):
         owner_criteria = by_id[owner_id].get("acceptance_criteria")
         if not isinstance(owner_criteria, list) or not owner_criteria:
             return False
-        # Both the saved finding scope and the owner's whole approved scope
-        # must be disjoint from the current criteria. A mismatch fails closed.
+        # A saved scope that does not match the owner's approved scope fails closed.
         recorded = set(criteria)
-        declared = set(owner_criteria)
-        return bool(recorded <= declared and not (declared & current_criteria))
+        if not recorded <= set(owner_criteria):
+            return False
+        # Otherwise it blocks here only when every criterion it was recorded against is
+        # one of the current milestone's: only then can this milestone's reviewer close it
+        # (autocode_findings._covers). A finding this reviewer may not close would block
+        # forever; it stays open for its own milestone and for final completion instead.
+        return not recorded <= current_criteria
 
     return [row for row in blockers if not unrelated(row)]
