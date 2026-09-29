@@ -157,7 +157,9 @@ class CommandProvider:
             "Cite command evidence only through capture_command receipt files. Do not cite event: IDs. "
             "Use the capture_command in CURRENT HANDOFF DATA with "
             "--output .autocode/evidence/<unique-name>.json -- <command>, then cite that receipt path "
-            "in checks and criterion evidence. Never create or edit a receipt manually.\n"
+            "in checks and criterion evidence. Never create or edit a receipt manually. A check's command is "
+            "the command you gave capture after --, copied exactly: never a placeholder such as <tmpdir>, a "
+            "summary, or the capture invocation itself. The runner compares it with the receipt.\n"
             + json.dumps(schema, indent=2) + "\n")
         return prompt.replace("\nCURRENT HANDOFF DATA\n", instructions + "\nCURRENT HANDOFF DATA\n", 1)
 
