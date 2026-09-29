@@ -16,6 +16,7 @@ from . import autoplanner
 from .common import ModelRequest, capped_route, execution_request
 
 STAGE = review_job.STAGE
+PROBE_TIMEOUT = 120  # seconds per design probe; a probe checks one fact about the code, it is not a suite
 COMPLETION_REVIEW_STOP = "All required criteria already pass; request completion instead of another implementation batch"
 SEND_BACK_NOTE = ("You returned CONTINUE, but every required acceptance criterion already has current, passing, "
                   "independent evidence for this exact artifact and no finding is open. Return TASK_COMPLETE, or keep "
@@ -68,13 +69,15 @@ def job_request(state, job, role, route):
 
 def apply_job(stage, state, value, record, workspace):
     """Autopilot hands a job stage's validated report here; the job decides how the run continues."""
+    evidence_dir = Path(record.get("output") or workspace).parent
     if stage == review_job.STAGE:
         # The runner, not the Reviewer, shows each blocking finding: its test must fail on the change.
         review_job.apply(state, value, record, workspace, run_tests=lambda tests, patch: verify.scratch_run(
-            workspace, Path(record.get("output") or workspace).parent / "review-proof", patch=patch, tests=tests,
-            timeout=verify.DEFAULT_TIMEOUT))
+            workspace, evidence_dir / "review-proof", patch=patch, tests=tests, timeout=verify.DEFAULT_TIMEOUT))
         return
-    JOBS[stage].apply(state, value, record, workspace)
+    # The Architect's concerns and conflicts about today's code carry probes the runner runs itself.
+    JOBS[stage].apply(state, value, record, workspace, run_probe=lambda command: verify.scratch_run(
+        workspace, evidence_dir / "design-probes", command=command, timeout=PROBE_TIMEOUT))
 
 
 def completion_review(state, snapshot):

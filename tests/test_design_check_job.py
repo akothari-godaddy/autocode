@@ -37,7 +37,9 @@ def report(conflicts=(), constraints=("Bucket lives in ratelimit/bucket.py",), *
 
 
 CONFLICT = {"design_says": "try_acquire raises when empty", "conflicts_with": "README freezes the bool return for 1.x",
-            "files": ["README.md"], "options": ["Ship it in 2.0", "Keep bool and add a raising variant"]}
+            "files": ["README.md"], "options": ["Ship it in 2.0", "Keep bool and add a raising variant"],
+            "example": "Given a 1.x caller checking the bool; when the bucket is empty; then it gets an exception",
+            "probe": ""}
 
 
 class RecognitionTests(unittest.TestCase):
@@ -92,7 +94,7 @@ class ApplyTests(unittest.TestCase):
             state = state_for(workspace_with_design(root))
             autoreview.apply_job(check_job.STAGE, state, report([CONFLICT], constraints=()), {"output": "o"}, root)
             blockers = json.loads((Path(root) / "docs/design/rate-limiter.blockers.json").read_text())
-        self.assertEqual({"conflicts": [CONFLICT]}, blockers)
+        self.assertEqual({"conflicts": [{**CONFLICT, "proven_by": ""}]}, blockers)
         self.assertEqual((check_job.STOP_STATUS, "PAUSED_OR_BLOCKED"), (state["status"], state["phase"]))
         self.assertIn("rate-limiter.blockers.json", state["stop_reason"])
         self.assertNotIn("design_constraint", state)
@@ -150,3 +152,39 @@ class PlannerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProbeTests(unittest.TestCase):
+    """A conflict with what the code enforces today carries a probe the runner runs; no model."""
+
+    def apply(self, conflicts):
+        import subprocess
+        root = Path(tempfile.mkdtemp(prefix="design-check-probe-"))
+        workspace_with_design(root)
+        (root / "ratelimit").mkdir()
+        (root / "ratelimit" / "bucket.py").write_text("def try_acquire(key):\n    return True\n")
+        for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.test",
+                                                      "commit", "-qm", "seed"]):
+            subprocess.run(["git", *args], cwd=root, check=True)
+        state = state_for(str(root))
+        autoreview.apply_job(check_job.STAGE, state, report(conflicts, constraints=()),
+                             {"output": str(root / "o.json")}, root)
+        return state, root
+
+    def test_a_conflict_whose_probe_exits_0_is_recorded_beside_the_design(self):
+        probe = "python3 -c 'from ratelimit.bucket import try_acquire; assert try_acquire(\"k\") is True'"
+        state, root = self.apply([{**CONFLICT, "files": ["README.md", "ratelimit/bucket.py"], "probe": probe}])
+        self.assertEqual(check_job.STOP_STATUS, state["status"])
+        self.assertEqual([("try_acquire raises when empty", 0)],
+                         [(row["design_says"], row["exit_code"]) for row in state["design_check"]["probes"]])
+        blockers = json.loads((root / "docs/design/rate-limiter.blockers.json").read_text())
+        self.assertEqual(probe, blockers["conflicts"][0]["proven_by"])
+
+    def test_a_conflict_whose_probe_fails_rejects_the_report(self):
+        probe = "python3 -c 'from ratelimit.bucket import try_acquire; assert try_acquire(\"k\") is False'"
+        with self.assertRaisesRegex(ValueError, "conflicts' probes did not exit 0"):
+            self.apply([{**CONFLICT, "probe": probe}])
+
+    def test_a_conflict_needs_its_example(self):
+        with self.assertRaisesRegex(ValueError, "example of what would break"):
+            self.apply([{**CONFLICT, "example": ""}])

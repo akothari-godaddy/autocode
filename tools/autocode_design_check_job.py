@@ -6,6 +6,9 @@ with ``STAGE``. The Architect reads the design and the code it changes and repor
 either conflicts or the design's binding decisions. The runner then:
 
 - rejects the report if the stage changed anything in the workspace,
+- runs each conflict's ``probe`` when it has one: a command that exits 0 exactly
+  when the repository holds the constraint the design breaks. A failing probe
+  rejects the report (autocode_test_cases.run_probes),
 - on conflicts: writes them to ``<design>.blockers.json`` beside the design and
   STOPS the run (``PAUSED_DESIGN_CONFLICT``). No Builder runs; the user decides,
 - otherwise: saves the design's binding decisions as ``state["design_constraint"]``
@@ -13,8 +16,9 @@ either conflicts or the design's binding decisions. The runner then:
   the approved design already is the requirements, and the Planner is told the
   design is a constraint it may not redesign or ask about.
 
-Pure module: prompt, schema, transition. Imports nothing from the runner.
-State keys written: ``design_check`` and ``design_constraint``.
+Pure module: prompt, schema, transition; the unit passes in the function that
+runs probes. Imports nothing from the runner. State keys written:
+``design_check`` and ``design_constraint``.
 """
 from __future__ import annotations
 
@@ -23,8 +27,10 @@ from pathlib import Path
 
 try:
     from . import autocode_workflows as workflows
+    from .autocode_test_cases import run_probes
 except ImportError:
     import autocode_workflows as workflows
+    from autocode_test_cases import run_probes
 
 STAGE = workflows.DESIGN_CHECK_STAGE
 STOP_STATUS = "PAUSED_DESIGN_CONFLICT"
@@ -32,8 +38,12 @@ TEXT = {"type": "string"}
 TEXTS = {"type": "array", "items": TEXT}
 CONFLICT = {
     "type": "object", "additionalProperties": False,
-    "required": ["design_says", "conflicts_with", "files", "options"],
-    "properties": {"design_says": TEXT, "conflicts_with": TEXT, "files": TEXTS, "options": TEXTS},
+    "required": ["design_says", "conflicts_with", "files", "options", "example", "probe"],
+    # example: the conflict as one concrete case in plain English; probe: a shell command, run from the
+    # repository root, that exits 0 exactly when the repository holds the constraint. Both "" when the
+    # constraint lives in prose (a README rule) that no command can show.
+    "properties": {"design_says": TEXT, "conflicts_with": TEXT, "files": TEXTS, "options": TEXTS,
+                   "example": TEXT, "probe": TEXT},
 }
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -55,7 +65,13 @@ You do not write code and you do not edit anything.
    states or relies on: a frozen or published API, a documented invariant, a caller that depends on
    today's behaviour, a version or compatibility rule. For each: design_says (quote or paraphrase the
    design), conflicts_with (the constraint and why they cannot both hold), files (repository files where
-   the constraint lives), options (how the user could resolve it). Do not list style preferences, better
+   the constraint lives), options (how the user could resolve it), example (the conflict as one concrete
+   case in plain English: "Given <today's code>, when <what the design specifies happens>, then <what
+   breaks>") and, when the constraint is something the code enforces today, probe: a shell command run from
+   the repository root that exits 0 exactly when the repository holds that constraint (for example:
+   python3 -c "from ratelimit.bucket import TokenBucket; assert TokenBucket().try_acquire('k') is True").
+   The runner runs every probe in a scratch copy and rejects the report if one fails. A constraint that
+   lives only in prose (a README rule) has probe "". Do not list style preferences, better
    alternatives you would have chosen, or gaps the implementation can fill without contradicting anything:
    the design is approved, and your job is not to redesign it.
 3. constraints: the design's binding decisions the plan must follow exactly (module and file layout,
@@ -98,20 +114,29 @@ def check(state: dict, value: dict, changed_files, workspace) -> None:
         if not conflict["files"] or missing or not conflict["conflicts_with"].strip() or not conflict["options"]:
             raise ValueError("Each conflict needs the constraint it breaks, the existing files where that "
                              f"constraint lives, and options for the user; missing files: {missing}")
+        if not conflict.get("example", "").strip():
+            raise ValueError("Each conflict needs an example of what would break, in plain English: "
+                             f"{conflict['design_says']!r}")
     if not value["conflicts"] and not value["constraints"]:
         raise ValueError("With no conflicts, the check must state the design's binding decisions for the plan")
 
 
-def apply(state: dict, value: dict, record: dict, workspace) -> None:
+def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> None:
+    """``run_probe(command)`` runs a probe in a scratch copy (the unit passes autocode_verify.scratch_run);
+    without it a probed conflict is rejected rather than trusted."""
     check(state, value, record.get("changed_files"), workspace)
+    shown = run_probes(value["conflicts"], run_probe or (lambda command: {"error": "no probe runner was given"}),
+                       what="conflict", key="design_says")
     design = value["design_document"].strip()
     state["design_check"] = {"design_document": design, "conflicts": len(value["conflicts"]),
-                             "output": record.get("output")}
+                             "output": record.get("output"), "probes": shown}
     if value["conflicts"]:
         target = blockers_path(design)
         path = Path(workspace) / target
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps({"conflicts": value["conflicts"]}, indent=2) + "\n")
+        proven = {row["design_says"]: row["probe"] for row in shown}
+        path.write_text(json.dumps({"conflicts": [{**c, "proven_by": proven.get(c["design_says"], "")}
+                                                  for c in value["conflicts"]]}, indent=2) + "\n")
         state["design_check"]["blockers"] = target
         state.update(status=STOP_STATUS, phase="PAUSED_OR_BLOCKED",
                      stop_reason=f"The approved design {design} conflicts with this repository in "

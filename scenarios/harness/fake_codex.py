@@ -137,6 +137,10 @@ def check_design(data: dict) -> dict:
     design = data.get("design_document") or ""
     blockers = Path(CONFIG["reference"]) / Path(design).with_suffix(".blockers.json") if design else None
     conflicts = json.loads(blockers.read_text()).get("conflicts", []) if blockers and blockers.is_file() else []
+    conflicts = [{**{k: c.get(k, [] if k in ("files", "options") else "") for k in
+                     ("design_says", "conflicts_with", "files", "options")},
+                  "example": str(c.get("example") or "Scripted example: " + str(c.get("conflicts_with", ""))),
+                  "probe": str(c.get("probe", ""))} for c in conflicts]
     return {"design_document": design, "summary": "Scripted design check from the scenario solution",
             "constraints": [] if conflicts else [f"Implement {design} exactly as written"], "conflicts": conflicts}
 
@@ -213,7 +217,12 @@ def investigate() -> dict:
             "fix_size": (saved.get("fix_size") or "small") if reproduced else "none",
             "fix_plan": [text("fix")] if reproduced and saved.get("fix") else [],
             "questions": [str(q) for q in saved.get("questions", [])], "tests_run": ["scripted"],
-            "plan_approval_requested": bool(saved.get("plan_approval_requested"))}
+            "plan_approval_requested": bool(saved.get("plan_approval_requested")),
+            # The runner checks the reproduction: [fake] probe in scenario.toml exits 0 while the seed's
+            # bug is present; a scenario without one takes the untestable path.
+            "probe": (CONFIG.get("probe") or "") if reproduced else "",
+            "untestable": ("" if CONFIG.get("probe") else "Scripted investigation: this scenario configures "
+                           "no reproduction probe") if reproduced else ""}
 
 
 def scripted_cases() -> list[dict]:
@@ -242,7 +251,10 @@ def design() -> dict:
         return {"mode": "propose", "design_under_review": "", "verdict": "not_applicable",
                 "summary": "A new design is requested", "satisfied": [], "concerns": [], "questions": []}
     saved = json.loads(path.read_text())
-    concerns = [{key: str(c.get(key, "")) for key in ("id", "area", "severity", "summary", "evidence")}
+    # A blocking concern needs its example; a scripted review probes nothing (probe "").
+    concerns = [{**{key: str(c.get(key, "")) for key in ("id", "area", "severity", "summary", "evidence")},
+                 "example": str(c.get("example") or "Scripted example: " + str(c.get("summary", ""))),
+                 "probe": str(c.get("probe", ""))}
                 for c in saved.get("concerns", [])]
     return {"mode": "review", "design_under_review": "the design named in the request",
             "verdict": "request_changes" if any(c["severity"] == "blocking" for c in concerns) else "approve",

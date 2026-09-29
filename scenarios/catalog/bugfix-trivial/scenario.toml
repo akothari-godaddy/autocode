@@ -7,3 +7,5 @@ category = "bugfix"
 
 [fake]
 check = "python3 -m unittest discover -s tests -t ."
+# Exits 0 while the seed's bug is present; the runner checks the scripted reproduction.
+probe = 'python3 -c "from pager import page_count; assert page_count(5, 2) == 2"'

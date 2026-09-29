@@ -64,7 +64,10 @@ def apply_job(stage, state, value, record, workspace):
             timeout=PROBE_TIMEOUT))
     if stage == stuck_job.STAGE:
         return stuck_job.apply(state, value, record, workspace)
-    bug_job.apply(state, value, record, workspace)
+    # The runner, not the Investigator, shows the bug: its probe must exit 0 on the code as it is.
+    bug_job.apply(state, value, record, workspace, run_probe=lambda command: verify.scratch_run(
+        workspace, Path(record.get("output") or workspace).parent / "investigation-probe", command=command,
+        timeout=PROBE_TIMEOUT))
     if bug_job.small_correction(state):
         start_small_correction(state, workspace)
 

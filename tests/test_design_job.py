@@ -25,7 +25,9 @@ def report(mode="review", **overrides):
     value = {"mode": mode, "design_under_review": "docs/design/kafka-events.md", "verdict": "request_changes",
              "summary": "Ordering is lost", "satisfied": ["Throughput: 24 partitions cover 5,000/s"],
              "concerns": [{"id": "F1", "area": "ordering", "severity": "blocking",
-                           "summary": "Keyed by kind; per-domain order is lost", "evidence": "Producer paragraph"}],
+                           "summary": "Keyed by kind; per-domain order is lost", "evidence": "Producer paragraph",
+                           "example": "Given create and renew for one domain; when they land on two partitions; "
+                                      "then renew can be processed first", "probe": ""}],
              "questions": [{"id": "Q1", "question": "Is ordering per domain required?", "options": ["yes", "no"]}]}
     if mode == "propose":
         value.update(design_under_review="", verdict="not_applicable", satisfied=[], concerns=[], questions=[])
@@ -111,3 +113,46 @@ class ApplyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProbeTests(unittest.TestCase):
+    """A concern about today's code carries a probe the runner runs in a scratch copy; no model."""
+
+    def apply(self, concerns):
+        import subprocess
+        root = Path(tempfile.mkdtemp(prefix="design-probe-"))
+        (root / "events").mkdir()
+        (root / "events" / "processor.py").write_text("STRICT_SEQ = True\n")
+        for args in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@example.test",
+                                                      "commit", "-qm", "seed"]):
+            subprocess.run(["git", *args], cwd=root, check=True)
+        state = state_for(str(root))
+        autoreview.apply_job(design_job.STAGE, state, report(concerns=concerns),
+                             {"changed_files": [], "output": str(root / "o.json")}, root)
+        return state, root
+
+    def concern(self, probe, **overrides):
+        return {"id": "F1", "area": "ordering", "severity": "blocking", "summary": "the processor requires strict seq",
+                "evidence": "events/processor.py", "example": "Given seq 3 was processed; when seq 5 arrives; "
+                "then the processor rejects it", "probe": probe, **overrides}
+
+    def test_a_concern_whose_probe_exits_0_is_recorded_as_shown(self):
+        probe = "python3 -c 'from events.processor import STRICT_SEQ; assert STRICT_SEQ'"
+        state, root = self.apply([self.concern(probe)])
+        self.assertEqual([("F1", 0)], [(row["id"], row["exit_code"]) for row in state["design_review"]["probes"]])
+        self.assertEqual("TASK_COMPLETE", state["status"])
+
+    def test_a_concern_whose_probe_fails_rejects_the_review(self):
+        probe = "python3 -c 'from events.processor import STRICT_SEQ; assert not STRICT_SEQ'"
+        with self.assertRaisesRegex(ValueError, "concerns' probes did not exit 0.*'F1'"):
+            self.apply([self.concern(probe)])
+
+    def test_every_blocking_concern_needs_an_example(self):
+        with self.assertRaisesRegex(ValueError, "example of the problem"):
+            self.apply([self.concern("", example=" ")])
+
+    def test_an_advisory_concern_needs_no_example_and_a_text_only_concern_no_probe(self):
+        state, _ = self.apply([self.concern("", example="", severity="advisory"),
+                               self.concern("", id="F2", example="Given a switch back; when events were consumed "
+                                                                 "from Kafka; then nothing reconciles them")])
+        self.assertEqual([], state["design_review"]["probes"])

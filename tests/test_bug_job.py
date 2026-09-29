@@ -32,13 +32,13 @@ def diagnosis(outcome="reproduced", **overrides):
              "root_cause": "retries after an uncertain timeout with a fresh cl_trid",
              "affected_paths": ["epp/client.py"], "test_paths": ["tests/test_client.py"],
              "invariant": "one logical renew, at most one mutation",
-             "test_cases": [CASE],
+             "test_cases": [CASE], "probe": "", "untestable": "The fixture has no registry to replay against",
              "conclusion": "Reconcile before resending.", "fix_size": "small",
              "fix_plan": ["keep one cl_trid", "poll before resending"], "questions": [], "tests_run": ["python3 -m unittest"],
              "plan_approval_requested": False}
     if outcome == "not_reproduced":
         value.update(root_cause="", affected_paths=[], test_paths=[], invariant="", fix_size="none", fix_plan=[],
-                     test_cases=[],
+                     test_cases=[], probe="", untestable="",
                      note_path="docs/bugs/none-cells.json", conclusion="export() already writes None as empty.",
                      questions=["Which version is the reporter running?"])
     value.update(overrides)
@@ -295,3 +295,52 @@ class CaseMatchTests(unittest.TestCase):
         regression.check_cases(proof, [])
         self.assertEqual({"verdict": "PASS", "failures": [], "unverified": [], "fail_to_pass": ["x.test_a"]}, proof)
         self.assertEqual([], bug_job.test_cases({"investigation": {"outcome": "reproduced"}}))
+
+
+class ReproductionProbeTests(unittest.TestCase):
+    """The runner runs the Investigator's probe in a scratch copy; "reproduced" is not taken on trust."""
+
+    BUGGY = "def page_count(total, size):\n    return total // size\n"
+    SHOWS_BUG = "python3 -c 'from pager import page_count; assert page_count(5, 2) == 2'"
+
+    def apply(self, **overrides):
+        root = Path(tempfile.mkdtemp(prefix="bug-probe-"))
+        (root / "pager").mkdir()
+        (root / "pager" / "__init__.py").write_text(self.BUGGY)
+        for command in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "seed"]):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", *command],
+                           cwd=root, check=True)
+        state = state_for(str(root))
+        value = diagnosis(fix_size="large", affected_paths=["pager/__init__.py"], test_paths=["tests/test_pager.py"],
+                          note_path="docs/bugs/page-count.json", **overrides)
+        autoresolver.apply_job(bug_job.STAGE, state, value, {"changed_files": [], "output": str(root / "o.json")},
+                               str(root))
+        return state, root
+
+    def test_a_probe_that_shows_the_bug_is_recorded_in_the_state_and_the_note(self):
+        state, root = self.apply(probe=self.SHOWS_BUG, untestable="")
+        self.assertEqual(0, state["investigation"]["probe_result"]["exit_code"])
+        self.assertEqual(self.SHOWS_BUG, json.loads((root / "docs/bugs/page-count.json").read_text())["proven_by"])
+        self.assertEqual(("RUNNING", "astra_discovery"), (state["status"], state["next_stage"]))
+        self.assertEqual(self.BUGGY, (root / "pager" / "__init__.py").read_text())  # the workspace is untouched
+
+    def test_a_probe_that_does_not_show_the_bug_rejects_the_reproduction(self):
+        with self.assertRaisesRegex(ValueError, "reproduction claims' probes did not exit 0"):
+            self.apply(probe="python3 -c 'from pager import page_count; assert page_count(5, 2) == 3'", untestable="")
+
+    def test_a_reproduced_bug_needs_exactly_one_of_probe_and_untestable(self):
+        with self.assertRaisesRegex(ValueError, "exactly one of probe"):
+            self.apply(probe="", untestable="")
+        with self.assertRaisesRegex(ValueError, "exactly one of probe"):
+            self.apply(probe=self.SHOWS_BUG, untestable="needs a registry")
+
+    def test_an_untestable_reproduction_says_why_and_runs_nothing(self):
+        state, root = self.apply(probe="", untestable="The race needs a real registry; see tests_run")
+        self.assertIsNone(state["investigation"]["probe_result"])
+        self.assertEqual("", json.loads((root / "docs/bugs/page-count.json").read_text())["proven_by"])
+
+    def test_a_report_that_did_not_reproduce_carries_no_probe(self):
+        root = Path(tempfile.mkdtemp())
+        with self.assertRaisesRegex(ValueError, "must not propose a fix"):
+            bug_job.apply(state_for(str(root)), diagnosis("not_reproduced", untestable="x"),
+                          {"changed_files": []}, str(root))
