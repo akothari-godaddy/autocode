@@ -61,7 +61,10 @@ def execute(state, directory, workspace, mode):
         prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", test_cases.builder_note(state) + assignment.BUILD_OUTPUT_NOTE
                                 + "\nCURRENT HANDOFF DATA\n", 1)
         metrics = {**metrics, "estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4}
-        prompt = ("\nYou are one isolated Builder in a parallel milestone batch. Write only within "
+        prompt = ("\nYou are one isolated Builder in a parallel milestone batch. Your worktree is "
+                   f"{workspace}: every path you read or write is relative to it, and absolute paths "
+                   "start with it. The directory above .autocode/builders/ is the shared workspace: "
+                   "never write there, and never cd there. Write only within "
                    "current_task.affected_paths. Other Builders own the other milestones. Do not "
                    "treat a missing assigned output file as a missing prerequisite: create new "
                    "files and parent directories inside your assigned paths when the task requires them. "
