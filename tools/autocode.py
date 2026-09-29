@@ -2226,8 +2226,7 @@ def configure(args, state):
         roles[role]["model_pinned"] = True
     settings = {"roles": roles, "transport_identity": local, "engine": engine, "provider": provider_name,
             'budget_origins': budget_origins(args),
-            "builder_retry": {**autopilot.builder_policy.DEFAULTS,
-                "strong_model": getattr(args, 'builder_strong_model', None) or autopilot.builder_policy.DEFAULTS['strong_model']},
+            "builder_retry": autopilot.builder_policy.configured(getattr(args, 'builder_strong_model', None)),
             "orchestration": {"enabled": joint or getattr(args, "max_parallel_builders", None) is not None,
                               "max_parallel": getattr(args, "max_parallel_builders", None) or 2},
             "report_repair": {"max_attempts": 2},

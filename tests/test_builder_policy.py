@@ -79,6 +79,32 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(self.default_routes()['settings']['roles'], state['settings']['roles'])
         dispatch.enforce_cross_model_verification(state)
 
+    def test_a_run_saved_before_checker_model_existed_still_moves_its_checkers(self):
+        state = self.default_routes()
+        del state['settings']['builder_retry']['checker_model']
+        policy.failure(state, 'e1', 'f')
+        self.assertEqual('escalate', policy.failure(state, 'e2', 'f'))
+        roles = state['settings']['roles']
+        self.assertEqual(policy.DEFAULTS['checker_model'], roles['sol']['model'])
+        self.assertEqual(policy.DEFAULTS['checker_model'], roles['completion']['model'])
+        dispatch.enforce_cross_model_verification(state)
+
+    def test_checkers_are_not_moved_onto_the_strong_model_itself(self):
+        state = self.default_routes()
+        state['settings']['builder_retry']['checker_model'] = policy.DEFAULTS['strong_model']
+        policy.failure(state, 'e1', 'f')
+        self.assertEqual('escalate', policy.failure(state, 'e2', 'f'))
+        self.assertNotIn('checker_models', state['builder_retry_decisions'][-1])
+        with self.assertRaises(policy.s.Paused) as raised:
+            dispatch.enforce_cross_model_verification(state)
+        self.assertEqual('PAUSED_CROSS_MODEL', raised.exception.status)
+
+    def test_a_new_run_refuses_a_strong_model_that_is_its_checker_model(self):
+        self.assertEqual(policy.DEFAULTS, policy.configured())
+        self.assertEqual('openai/gpt-6-luna', policy.configured('openai/gpt-6-luna')['strong_model'])
+        with self.assertRaisesRegex(ValueError, 'checked by its own model'):
+            policy.configured(policy.DEFAULTS['checker_model'])
+
     def test_a_climbed_checker_moves_to_a_glm_effort(self):
         state = self.default_routes()
         state['settings']['roles']['sol']['reasoning_effort'] = 'max'

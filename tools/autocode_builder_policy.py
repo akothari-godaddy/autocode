@@ -26,6 +26,16 @@ def _bare(model):
     return model.split('/', 1)[1] if isinstance(model, str) and model.startswith('openai/') else model
 
 
+def configured(strong_model=None):
+    """A new run's retry policy. Its checkers move to checker_model, so the strong model cannot be it."""
+    config = {**DEFAULTS, 'strong_model': strong_model or DEFAULTS['strong_model']}
+    if _bare(config['strong_model']) == _bare(config['checker_model']):
+        raise ValueError(f"--builder-strong-model {config['strong_model']} is the model the checkers move to "
+                         "when the Builder escalates, so the escalated work would be checked by its own model; "
+                         "choose another model")
+    return config
+
+
 def enabled(state):
     return (state.get('settings', {}).get('builder_retry', {}).get('enabled') is True
             and not state.get('settings', {}).get('workflow'))
@@ -118,9 +128,10 @@ def swap_checkers(state, current, config, model):
     custom-provider and bare-name (Codex engine) checkers are left alone; the dispatch
     cross-model guard still pauses if one of them collides.
     """
-    replacement = config.get('checker_model')
+    # Runs saved before checker_model existed use the default rather than check their own work.
+    replacement = config.get('checker_model') or DEFAULTS['checker_model']
     swapped = {}
-    for role in colliding_checkers(state, model) if replacement else ():
+    for role in colliding_checkers(state, model) if _bare(replacement) != _bare(model) else ():
         route = state['settings']['roles'][role]
         if (route.get('model_pinned') or route.get('provider') not in (None, 'openai')
                 or '/' not in str(route.get('model'))):
