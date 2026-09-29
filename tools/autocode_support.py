@@ -18,10 +18,12 @@ try:
     from . import autocode_evidence_snapshot as evidence_snapshot
     from .autocode_util import (Paused, atomic_json, changed_paths, digest, file_hash, model_output_schema, now,
                                 read, run_lock, snapshot, validate_schema, workspace_lock)
+    from . import autocode_receipts as receipts
 except ImportError:
     import autocode_evidence_snapshot as evidence_snapshot
     from autocode_util import (Paused, atomic_json, changed_paths, digest, file_hash, model_output_schema, now,
                                read, run_lock, snapshot, validate_schema, workspace_lock)
+    import autocode_receipts as receipts
 
 
 def duplicate_runner_command(command):
@@ -379,7 +381,6 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
     tool_outputs = [e["item"] for e in rows
                     if e.get("type") == "item.completed"
                     and e.get("item", {}).get("type") in ("command_execution", "tool_output")]
-    import shlex
     normalized = copy.deepcopy(checks)
     for check in normalized:
         if not isinstance(check, dict) or not isinstance(check.get('command'), str) or not isinstance(check.get('evidence_ref'), str):
@@ -425,9 +426,9 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
         if (not isinstance(receipt.get('command'), list)
                 or not all(isinstance(part, str) for part in receipt['command'])
                 or type(receipt.get('exit_code')) is not int
-                or shlex.join(receipt['command']) != check['command']
+                or not receipts.adopt_command(check, receipt['command'])
                 or (not missing_exit and receipt['exit_code'] != check['exit_code'])):
-            raise ValueError("Check command/result differs from receipt")
+            raise ValueError(receipts.mismatch(check, receipt))
         raw = Path(receipt["full_output"])
         if not raw.resolve().is_relative_to(Path(workspace).resolve() / ".autocode") or file_hash(raw) != receipt["full_output_sha256"]:
             raise ValueError("Full check output missing or changed")
@@ -787,7 +788,6 @@ def context_packet(state, stage, state_path):
             proof_note = ""
     else:
         proof_note = ""
-    import shlex
     import sys
     base["capture_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "capture"])
     base["baseline_compare_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "compare-baseline"])
