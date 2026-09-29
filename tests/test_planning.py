@@ -13,6 +13,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_opencode as oc
 import autocode_planning as planning
 import autopilot
@@ -45,22 +46,22 @@ class PlanningTests(unittest.TestCase):
             {"id": "M2", "objective": "Build component", "acceptance_criteria": ["C1"], "depends_on": ["M1"]},
         ]
         state = self.state()
-        goals.validate_body(state, draft)
+        lifecycle.validate_body(state, draft)
         cyclic = copy.deepcopy(draft)
         cyclic["milestones"][0]["depends_on"] = ["M2"]
         with self.assertRaisesRegex(ValueError, "cycle"):
-            goals.validate_body(state, cyclic)
+            lifecycle.validate_body(state, cyclic)
         missing = copy.deepcopy(draft)
         missing["milestones"][1].pop("depends_on")
         with self.assertRaisesRegex(ValueError, "Every milestone"):
-            goals.validate_body(state, missing)
+            lifecycle.validate_body(state, missing)
         initial = {"objective": "Build component", "affected_paths": ["greet.py"], "kind": "implement",
                    "milestone_id": "M2", "requirements": ["Real flow"], "acceptance_criteria": ["C1"],
                    "validation_plan": ["Run the CLI"]}
         blocked = {**copy.deepcopy(draft), "initial_task": initial}
         with self.assertRaisesRegex(ValueError, "initial_task milestone M2 has unmet prerequisites"):
-            goals.validate_body(state, blocked)
-        goals.validate_body(state, {**copy.deepcopy(draft), "initial_task": {**initial, "milestone_id": "M1"}})
+            lifecycle.validate_body(state, blocked)
+        lifecycle.validate_body(state, {**copy.deepcopy(draft), "initial_task": {**initial, "milestone_id": "M1"}})
         state["settings"]["roles"] = {"plan_reviewer": {"engine": "opencode"}}
         bare = body()
         bare["milestones"][0].pop("depends_on")
@@ -123,7 +124,7 @@ class PlanningTests(unittest.TestCase):
         contract=copy.deepcopy(state['goal_contract']['body'])
         contract['accepted_assumptions'].append({'text':'Kubernetes','basis':'user_feedback','answer_id':'conversation-demo'})
         with self.assertRaisesRegex(ValueError,'actual saved feedback event'):
-            goals.validate_body(state,contract)
+            lifecycle.validate_body(state,contract)
 
     def test_requirements_handoff_is_separate_from_plan_and_preserves_questions(self):
         state = {"version": 3, "task": "Build greeting", "settings": {
@@ -160,8 +161,8 @@ class PlanningTests(unittest.TestCase):
 
     def state(self):
         state = {"version": 2, "task": "Greeting", "settings": {"joint_planning": True}, "acceptance_criteria": []}
-        goals.migrate(state)
-        goals.install_draft(state, body(), origin="glm_draft")
+        lifecycle.migrate(state)
+        lifecycle.install_draft(state, body(), origin="glm_draft")
         return state
 
     def test_planning_handoff_keeps_all_review_ids_beyond_six(self):
@@ -186,18 +187,18 @@ class PlanningTests(unittest.TestCase):
         state = self.state()
         self.assertEqual("astra_challenge", state["next_stage"])
         draft_token = goals.token(state["goal_contract"])
-        goals.human.evaluate(state)
-        goals.present(state)
+        lifecycle.human.evaluate(state)
+        lifecycle.present(state)
         # AutoResolver defers goal approval until joint planning finishes, so
         # no approval token is displayed for the unreviewed draft.
         self.assertNotIn("displayed_goal", state)
         with self.assertRaises(ValueError):
-            goals.approve(state, draft_token)
+            lifecycle.approve(state, draft_token)
         # Even a displayed exact token cannot bypass the joint-planning gate.
         state["status"] = "AWAITING_GOAL_APPROVAL"
         state["displayed_goal"] = draft_token
         with self.assertRaisesRegex(ValueError, "final plan"):
-            goals.approve(state, draft_token)
+            lifecycle.approve(state, draft_token)
 
     def test_astra_budget_includes_failed_attempts_and_requires_explicit_new_cycle(self):
         state = self.state()
@@ -210,7 +211,7 @@ class PlanningTests(unittest.TestCase):
         state["status"] = "PAUSED_PLANNING_BUDGET"
         goals.feedback(state, "Resolve this with a simpler approach")
         self.assertEqual(2, state["planning"]["astra_calls"])
-        goals.install_draft(state, body(), origin="glm_draft")
+        lifecycle.install_draft(state, body(), origin="glm_draft")
         self.assertEqual(0, state["planning"]["astra_calls"])
         self.assertEqual(2, state["planning_history"][-1]["astra_calls"])
 
@@ -253,7 +254,7 @@ class PlanningTests(unittest.TestCase):
         saved = copy.deepcopy(state)
         planning.set_review_call_limit(state, 3)
         self.assertEqual(saved, state)
-        self.assertIn("2/3 plan-review calls used", goals.render(state))
+        self.assertIn("2/3 plan-review calls used", lifecycle.render(state))
         state.update(workspace="/fixture")
         state["settings"]["roles"] = {"astra": {}}
         prompt, _ = planning.context(state, "astra_finalize", Path("/fixture/state.json"))
@@ -263,7 +264,7 @@ class PlanningTests(unittest.TestCase):
             planning.charge(state, "astra_finalize")
         self.assertEqual(3, state["planning"]["astra_calls"])
         goals.feedback(state, "Start a genuinely new cycle")
-        goals.install_draft(state, body(), origin="glm_draft")
+        lifecycle.install_draft(state, body(), origin="glm_draft")
         self.assertEqual(2, planning.review_call_limit(state))
         self.assertEqual(0, state["planning"]["astra_calls"])
         self.assertEqual(3, state["planning_history"][-1]["review_call_limit"])
@@ -306,9 +307,9 @@ class PlanningTests(unittest.TestCase):
             planning.charge(state, 'astra_finalize')
         self.assertEqual(17, state['planning']['astra_calls'])
         self.assertEqual(contract, state['goal_contract'])
-        self.assertIn('17 plan-review calls used; unlimited', goals.render(state))
+        self.assertIn('17 plan-review calls used; unlimited', lifecycle.render(state))
         goals.feedback(state, 'Start a genuinely new cycle')
-        goals.install_draft(state, body(), origin='glm_draft')
+        lifecycle.install_draft(state, body(), origin='glm_draft')
         self.assertEqual(0, planning.review_call_limit(state))
         self.assertEqual('user_explicit', state['planning']['review_call_limit_origin'])
         self.assertEqual(17, state['planning_history'][-1]['astra_calls'])

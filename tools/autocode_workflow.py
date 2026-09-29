@@ -6,9 +6,11 @@ from pathlib import Path
 
 try:
     from . import autocode_support as support, autocode_goals as goals
+    from . import autocode_goal_lifecycle as lifecycle
 except ImportError:
     import autocode_support as support
     import autocode_goals as goals
+    import autocode_goal_lifecycle as lifecycle
 
 MODE = "glm_first_v1"
 FINAL_MODE = "glm_final_audit_v2"
@@ -122,7 +124,7 @@ def apply_implementation(runner,state,value,record,workspace,run_dir):
         spec=c['next_task']
         decision={'status':'CONTINUE','next_objective':spec['objective'],'affected_paths':spec['affected_paths'],
                   'next_task':{k:v for k,v in spec.items() if k not in ('objective','affected_paths')}}
-        goals.assign_task(state,decision,{'revision':record['source_revision']})
+        lifecycle.assign_task(state,decision,{'revision':record['source_revision']})
         state.update(next_stage='terra',next_action=spec['objective'],affected_paths=spec['affected_paths'])
         state['iteration']+=1
         goals.record_decision(state,decision)

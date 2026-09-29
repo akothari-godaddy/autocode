@@ -9,6 +9,7 @@ from . import test_autocode, test_subprocess
 import autocode as runner
 import autocode_support as s
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_workflow as workflow
 from goal_fixtures import approve_fixture, envelope
 
@@ -124,14 +125,14 @@ class WorkflowTests(unittest.TestCase):
         self.enable()
         # Use native draft/approval so no test relies on an unsealed contract.
         body=copy.deepcopy(self.state['goal_contract']['body']);body['acceptance_criteria'][0]['human_review']=True
-        goals.install_draft(self.state,body,origin='test');goals.human.evaluate(self.state); goals.present(self.state)
-        goals.approve(self.state,goals.token(self.state['goal_contract']))
+        lifecycle.install_draft(self.state,body,origin='test');lifecycle.human.evaluate(self.state); lifecycle.present(self.state)
+        lifecycle.approve(self.state,goals.token(self.state['goal_contract']))
         self.state['settings'].pop('workflow');self.state['status']='PAUSED_REQUESTED'
         workflow.activate(self.state,approval_source='yes');self.state['status']='RUNNING'
         self.apply()
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the review request
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the review request
         self.assertEqual('WAITING_FOR_USER',self.state['status'])
-        self.assertEqual('human_review',goals.human.current(self.state)['scope'])
+        self.assertEqual('human_review',lifecycle.human.current(self.state)['scope'])
 
     def test_targeted_sol_consultation_preserves_task_and_cannot_complete(self):
         self.enable();report=self.report()

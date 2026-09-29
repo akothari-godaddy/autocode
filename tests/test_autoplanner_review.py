@@ -5,14 +5,15 @@ import copy
 import unittest
 
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 from goal_fixtures import body
 from .test_autoplanner_step2 import EpisodeCase, clarification_only, discovery, question, requirements
 from .test_autoplanner_step3 import ObligationCase, decision_question, plan
 
 
 def shown(state):
-    goals.human.evaluate(state)
-    goals.present(state)
+    lifecycle.human.evaluate(state)
+    lifecycle.present(state)
     return goals.token(state["goal_contract"])
 
 
@@ -45,7 +46,7 @@ class InvestigationReviewTests(EpisodeCase):
         self.apply("astra_discovery", discovery(clarification_only([question("Q2", "decision")]),
                    machine_resolutions=[{"question_id": "Q1", "resolution": "Set in config.py",
                                          "source_refs": ["config.py:1"], "handoff_hash": handoff_hash}]))
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the clarification
         self.assertEqual(["Q2"], [q["id"] for q in self.state["pending_questions"]])
         goals.answer(self.state, "Q2", "Use the default route")
         self.apply("astra_discovery", discovery(body()))
@@ -115,7 +116,7 @@ class DelegationReviewTests(ObligationCase):
         self.state["settings"]["joint_planning"] = False
         contract = body()
         contract["open_blocking_questions"] = list(questions)
-        goals.install_draft(self.state, contract, origin="glm_draft")
+        lifecycle.install_draft(self.state, contract, origin="glm_draft")
 
     def test_4_bulk_delegation_refuses_protected_or_unclassified_categories(self):
         for category in ("cost", "quota", "permission", "external_side_effect", "requested_outcome", None):

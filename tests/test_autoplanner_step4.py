@@ -4,6 +4,7 @@ import copy
 import unittest
 
 import autocode_goals as goals, autocode_support as support
+import autocode_goal_lifecycle as lifecycle
 from goal_fixtures import body
 from .test_planner_invariants import state as base_state
 
@@ -34,10 +35,10 @@ class PreviewCase(unittest.TestCase):
         contract["open_blocking_questions"] = [question("Q1", "CLI", delegable=True), question("Q2")]
         contract["accepted_assumptions"].append({"text": "CLI invocation is sufficient",
                                                  "basis": "agent_proposed", "answer_id": ""})
-        goals.install_draft(self.state, contract, origin="glm_draft")
+        lifecycle.install_draft(self.state, contract, origin="glm_draft")
         # The clarification stop exists once the runner's writer boundary publishes it.
         self.assertEqual("RESOLVER_PENDING", self.state["status"])
-        goals.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
 
     def preview(self):
         return "\n".join(goals.plan_preview(self.state))
@@ -47,7 +48,7 @@ class PlanPreviewTests(PreviewCase):
     def test_preview_shows_known_assumed_and_undecided_at_a_clarification_stop(self):
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
         self.assertEqual("clarification", self.state["resolver_human_request"]["scope"])
-        text = goals.present(self.state)
+        text = lifecycle.present(self.state)
         self.assertIn("PLAN PREVIEW for " + goals.token(self.state["goal_contract"]), text)
         handoff = support.digest(self.state["requirements_handoff"]["report"])[:12]
         self.assertIn(f"requirements handoff {handoff}", text)
@@ -77,15 +78,15 @@ class PlanPreviewTests(PreviewCase):
         # The answer retired the published request; the runner asks the remaining question again.
         remaining = self.state["goal_contract"]["body"]["open_blocking_questions"]
         self.assertEqual(["Q2"], [q["id"] for q in remaining])
-        goals.human.queue(self.state, "clarification", {"stage": "astra_discovery"}, questions=remaining)
-        goals.human.evaluate(self.state)
+        lifecycle.human.queue(self.state, "clarification", {"stage": "astra_discovery"}, questions=remaining)
+        lifecycle.human.evaluate(self.state)
         self.assertEqual("WAITING_FOR_USER", self.state["status"])
-        goals.present(self.state)
+        lifecycle.present(self.state)
         goals.reject_assumption(self.state, "A2", goals.token(self.state["goal_contract"]))
         contract = body()
         contract["open_blocking_questions"] = [question("Q3")]
-        goals.install_draft(self.state, contract, origin="glm_draft")
-        goals.human.evaluate(self.state)
+        lifecycle.install_draft(self.state, contract, origin="glm_draft")
+        lifecycle.human.evaluate(self.state)
         text = self.preview()
         self.assertNotIn("[Q1]", text)
         self.assertNotIn("Names are ASCII", text)
@@ -105,7 +106,7 @@ class PlanPreviewTests(PreviewCase):
                 current = copy.deepcopy(self.state)
                 current.update(change)
                 self.assertEqual([], goals.plan_preview(current))
-                self.assertNotIn("PLAN PREVIEW", goals.render(current))
+                self.assertNotIn("PLAN PREVIEW", lifecycle.render(current))
 
     def test_run_without_a_handoff_still_previews_safely(self):
         self.state.pop("requirements_handoff")
@@ -116,7 +117,7 @@ class PlanPreviewTests(PreviewCase):
 
     def test_empty_contract_render_is_unchanged(self):
         self.assertEqual("No contract yet; resume to interview with the Requirements Gatherer.",
-                         goals.render({"status": "WAITING_FOR_USER"}))
+                         lifecycle.render({"status": "WAITING_FOR_USER"}))
 
 
 if __name__ == "__main__":

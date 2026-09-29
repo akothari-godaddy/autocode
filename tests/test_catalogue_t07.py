@@ -19,6 +19,7 @@ import autocode_escalation as escalation
 import autocode_failures as failures
 import autocode_findings as findings
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from . import test_catalogue_t06 as t06
 from goal_fixtures import body, envelope
@@ -196,7 +197,7 @@ class RepairScenarios(RepairCase):
                                 {"output": str(output),
                                  "source_revision": support.snapshot(self.root)["revision"]},
                                 self.root, self.run)
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the request
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the request
         self.check("waiting_for_user", "WAITING_FOR_USER", self.state["status"])
         self.check("specific_permission_request", "Provide the fixture credential",
                    self.state["user_request"]["decision_needed"])
@@ -262,11 +263,11 @@ class RepairScenarios(RepairCase):
         case_state = {"version": 2, "workspace": str(self.root), "task": "Slow fixture",
                       "status": "RUNNING", "iteration": 1, "sessions": {}, "stages": [], "history": [],
                       "acceptance_criteria": [], "settings": dict(self.state["settings"])}
-        goals.migrate(case_state)
-        goals.install_draft(case_state, body(), origin="test")
-        goals.human.evaluate(case_state)
-        goals.present(case_state)
-        goals.approve(case_state, goals.token(case_state["goal_contract"]))
+        lifecycle.migrate(case_state)
+        lifecycle.install_draft(case_state, body(), origin="test")
+        lifecycle.human.evaluate(case_state)
+        lifecycle.present(case_state)
+        lifecycle.approve(case_state, goals.token(case_state["goal_contract"]))
         case_state["settings"]["limits"] = {"iteration_ceiling": 5, "max_seconds": None,
                                             "max_reported_tokens": None, "no_progress_batches": 3,
                                             "automatic_retries": 0}

@@ -16,6 +16,7 @@ import autopilot_testkit as kit
 import autocode as runner
 import autocode_dispatch as dispatch
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from . import test_catalogue_t06 as t06
 from goal_fixtures import body, envelope
@@ -189,10 +190,10 @@ class ParallelScenarios(ParallelCase):
         old_decision = super().decision("CONTINUE")
         revised = body()
         revised["required_behaviors"].append("Accept Unicode names")
-        goals.install_draft(self.state, revised, origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, revised, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         before = dict(self.state)
         self.expect_raises("superseded_plan_result_refused", support.Paused,
                            runner.apply_result, self.state, "astra_review", old_decision,

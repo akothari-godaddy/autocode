@@ -271,7 +271,7 @@ class SolControllerCase(kit.CatalogueCase):
         first["next_task"] = {"kind": "implement", "milestone_id": "M1", "requirements": ["Greet names"],
                               "acceptance_criteria": ["C1"], "validation_plan": ["Run both cases"], "findings": []}
         first["next_objective"] = "Implement greeting"
-        runner.goals.assign_task(self.state, first, support.snapshot(self.root))
+        runner.lifecycle.assign_task(self.state, first, support.snapshot(self.root))
 
     def decision(self, status="CONTINUE"):
         criteria = [{**c, "status": "verified" if status == "COMPLETE" else "unverified",

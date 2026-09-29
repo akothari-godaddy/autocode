@@ -102,9 +102,9 @@ class FinalWorkflowTests(unittest.TestCase):
         self.implement(value)
         # The request is queued, then published by the runner's writer boundary.
         self.assertEqual('RESOLVER_PENDING',self.state['status'])
-        runner.goals.human.evaluate(self.state)
+        runner.lifecycle.human.evaluate(self.state)
         self.assertEqual('WAITING_FOR_USER',self.state['status'])
-        self.assertEqual('permission',runner.goals.human.current(self.state)['scope'])
+        self.assertEqual('permission',runner.lifecycle.human.current(self.state)['scope'])
 
     def test_final_audit_cannot_dispatch_sol(self):
         self.enable();self.implement(self.implementation('REQUEST_FINAL_AUDIT'))

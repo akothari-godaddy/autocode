@@ -11,6 +11,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_planning as planning
 import autopilot
 import autocode_resolver_human as human
@@ -51,24 +52,24 @@ class V2FlowTests(unittest.TestCase):
         invalid = requirements()
         invalid["acceptance_criteria"] = []
         with self.assertRaisesRegex(ValueError, "stable ID, behavior and verification method"):
-            goals.apply_requirements(state, invalid, artifact_sha256="empty")
+            lifecycle.apply_requirements(state, invalid, artifact_sha256="empty")
         self.assertNotIn("requirements_artifact_token", state)
         self.assertNotIn("next_stage", state)
 
         invalid_plan = body()
         invalid_plan["acceptance_criteria"] = []
         with self.assertRaisesRegex(ValueError, "stable ID, behavior and verification method"):
-            goals.validate_body(self.state(), invalid_plan)
+            lifecycle.validate_body(self.state(), invalid_plan)
 
         valid_state = self.state()
-        goals.apply_requirements(valid_state, requirements(), artifact_sha256="valid")
+        lifecycle.apply_requirements(valid_state, requirements(), artifact_sha256="valid")
         self.assertEqual("plan", valid_state["next_stage"])
         self.assertNotIn("goal_contract", valid_state)
         pending = requirements()
         pending["open_blocking_questions"] = [{"id": "Q1", "question": "Which?", "why": "Scope",
                                                  "options": [], "proposed_default": ""}]
         pending_state = self.state()
-        goals.apply_requirements(pending_state, pending, artifact_sha256="pending")
+        lifecycle.apply_requirements(pending_state, pending, artifact_sha256="pending")
         self.assertEqual("RESOLVER_PENDING", pending_state["status"])
         self.assertEqual([], pending_state["pending_questions"])
         self.assertEqual(pending["open_blocking_questions"], human.internal_questions(pending_state))
@@ -77,9 +78,9 @@ class V2FlowTests(unittest.TestCase):
     def test_no_contract_answer_feedback_and_render_use_requirements_token(self):
         state = self.state(); value = requirements()
         value["open_blocking_questions"] = [{"id": "Q1", "question": "Which?", "why": "Scope", "options": [], "proposed_default": ""}]
-        goals.apply_requirements(state, value, artifact_sha256="abc")
+        lifecycle.apply_requirements(state, value, artifact_sha256="abc")
         self.assertEqual("escalate", human.evaluate(state))
-        self.assertIn("Q1", goals.render(state))
+        self.assertIn("Q1", lifecycle.render(state))
         goals.answer(state, "Q1", "CLI")
         self.assertEqual("requirements:abc", state["answers"]["Q1"]["contract_token"])
         goals.feedback(state, "Clarify output")
@@ -91,7 +92,7 @@ class V2FlowTests(unittest.TestCase):
 
     def test_non_v2_no_contract_render_remains_byte_identical(self):
         self.assertEqual("No contract yet; resume to interview with the Requirements Gatherer.",
-                          goals.render({"settings": {}, "status": "RUNNING"}))
+                          lifecycle.render({"settings": {}, "status": "RUNNING"}))
 
     def test_v2_is_explicit_opt_in_and_default_stage_role_contract_is_unchanged(self):
         default = {"settings": {"joint_planning": True, "roles": {

@@ -8,6 +8,7 @@ from unittest.mock import patch
 from . import test_goals
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as s
 import autocode_milestones as m
 import autocode_findings as findings
@@ -26,10 +27,10 @@ class MilestoneCheckpointTests(unittest.TestCase):
         draft['milestones'][0]['acceptance_criteria'] = ['C1', 'C2']
         draft['milestones'].append({'id': 'M2', 'objective': 'Unicode flow', 'acceptance_criteria': ['C3'],
                                     'depends_on': ['M1'] if dependent else []})
-        goals.install_draft(self.state, draft, origin='test')
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, self.state['displayed_goal'])
+        lifecycle.install_draft(self.state, draft, origin='test')
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state['displayed_goal'])
         self.state['settings']['milestone_checkpoints'] = copy.deepcopy(m.DEFAULTS)
         self.assign()
 
@@ -81,10 +82,10 @@ class MilestoneCheckpointTests(unittest.TestCase):
             {'id': 'M1', 'objective': 'Greeting flow', 'acceptance_criteria': ['C1'], 'depends_on': []},
             {'id': 'M2', 'objective': 'Unicode flow', 'acceptance_criteria': ['C3'], 'depends_on': ['M3']},
             {'id': 'M3', 'objective': 'Usage help', 'acceptance_criteria': ['C4'], 'depends_on': []}]
-        goals.install_draft(self.state, draft, origin='test')
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, self.state['displayed_goal'])
+        lifecycle.install_draft(self.state, draft, origin='test')
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, self.state['displayed_goal'])
         self.state['settings']['milestone_checkpoints'] = copy.deepcopy(m.DEFAULTS)
 
         def assign(milestone, criteria):
@@ -181,7 +182,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
                    'impact': 'M2 cannot start while M1 is unaccepted',
                    'options': ['Mark M1 accepted'],
                    'proposed_delta': 'No change to the approved goal; runner-owned milestone-acceptance state: record M1 as accepted'}
-        goals.wait_for_user(self.state, request, origin={
+        lifecycle.wait_for_user(self.state, request, origin={
             'stage': 'astra_review', 'task_id': self.state['current_task']['id'],
             'source_revision': current['revision']}, next_stage='astra_review')
         runner.normalize_human_boundary(self.state, self.run)
@@ -202,7 +203,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
         request = {'kind': 'permission', 'decision_needed': 'Allow deployment to staging?',
                    'impact': 'Deployment needs account access', 'options': ['Allow', 'Do not allow'],
                    'proposed_delta': 'Deploy to staging'}
-        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review'}, next_stage='astra_review')
+        lifecycle.wait_for_user(self.state, request, origin={'stage': 'astra_review'}, next_stage='astra_review')
         runner.normalize_human_boundary(self.state, self.run)
         self.assertEqual('WAITING_FOR_USER', self.state['status'])
         self.assertEqual(request, self.state['user_request'])
@@ -246,13 +247,13 @@ class MilestoneCheckpointTests(unittest.TestCase):
                           'options': [choice]})
         before = copy.deepcopy(self.state)
         with self.assertRaisesRegex(ValueError, 'explicit saved choice'):
-            goals.resolve_passing_checkpoint(self.state, question['id'], 'Resume anyway')
+            lifecycle.resolve_passing_checkpoint(self.state, question['id'], 'Resume anyway')
         self.assertEqual(before, self.state)
         self.state['validation']['end_to_end_result']['status'] = 'FAIL'
         with self.assertRaisesRegex(ValueError, 'independent evidence'):
-            goals.resolve_passing_checkpoint(self.state, question['id'], choice)
+            lifecycle.resolve_passing_checkpoint(self.state, question['id'], choice)
         self.state['validation']['end_to_end_result']['status'] = 'NOT_VERIFIED'
-        goals.resolve_passing_checkpoint(self.state, question['id'], choice)
+        lifecycle.resolve_passing_checkpoint(self.state, question['id'], choice)
         self.assertTrue(goals.approved(self.state))
         self.assertEqual('RUNNING', self.state['status'])
         self.assertEqual('astra_review', self.state['next_stage'])
@@ -340,11 +341,11 @@ class MilestoneCheckpointTests(unittest.TestCase):
 
     def test_human_review_blocks_only_current_milestone_and_resumes_after_approval(self):
         self.start(human=True); self.validate(); self.assign('M2')
-        goals.human.evaluate(self.state)  # the runner's writer boundary publishes the review request
+        lifecycle.human.evaluate(self.state)  # the runner's writer boundary publishes the review request
         self.assertEqual('WAITING_FOR_USER', self.state['status'])
         self.assertEqual(['C1'], self.state['user_request']['criteria'])
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         goals.approve_review(self.state, 'C1', goals.review_token(self.state), s.snapshot(self.root))
         self.assertEqual('RUNNING', self.state['status'])
         self.assertIn('C3', goals.missing_human_reviews(self.state))
@@ -369,9 +370,9 @@ class MilestoneCheckpointTests(unittest.TestCase):
         output.write_text(json.dumps(decision))
         findings.record_decision(self.state, decision, {'stage': 'astra_review', 'output': str(output)})
         self.assertEqual([], findings.open_entries(self.state, 'astra'))
-        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
-        goals.human.evaluate(self.state)
-        self.assertEqual('human_review', goals.human.current(self.state)['scope'])
+        lifecycle.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
+        lifecycle.human.evaluate(self.state)
+        self.assertEqual('human_review', lifecycle.human.current(self.state)['scope'])
         self.assertEqual(['C1'], self.state['user_request']['criteria'])
         self.assertEqual({}, self.state['human_reviews'])
 
@@ -388,7 +389,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
         stale.write_text('{}')
         self.state['validation']['evidence_hashes'][str(stale)] = s.file_hash(stale)
         stale.write_text('{"updated":true}')
-        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
+        lifecycle.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
         self.assertEqual(('RUNNING', 'sol'), (self.state['status'], self.state['next_stage']))
         self.assertFalse(self.state.get('pending_questions'))
 
@@ -406,12 +407,12 @@ class MilestoneCheckpointTests(unittest.TestCase):
         self.state['validation']['evidence_hashes'][str(stale)] = s.file_hash(stale)
         stale.write_text('{"updated":true}')
         self.state['run_dir'] = str(self.run.resolve())
-        goals.human.queue(self.state, 'permission', {'stage': 'astra_review', 'output': str(output)},
+        lifecycle.human.queue(self.state, 'permission', {'stage': 'astra_review', 'output': str(output)},
                           request=request, questions=[{'id': 'old', 'question': request['decision_needed'],
                                                       'why': request['impact'], 'options': request['options']}],
                           next_stage='astra_review')
-        goals.human.evaluate(self.state)
-        old = goals.human.current(self.state)['request_id']
+        lifecycle.human.evaluate(self.state)
+        old = lifecycle.human.current(self.state)['request_id']
         self.assertTrue(m.route_review_only_request_preview(self.state, request,
                         {'stage': 'astra_review', 'output': str(output)}))
         self.assertFalse(m.fresh_validation(self.state, s.snapshot(self.root)))
@@ -424,7 +425,7 @@ class MilestoneCheckpointTests(unittest.TestCase):
         runner.normalize_human_boundary(self.state, self.run)
         self.assertEqual(('RUNNING', 'sol'), (self.state['status'], self.state['next_stage']))
         self.assertEqual('superseded', self.state['resolver']['human_escalations'][old]['status'])
-        self.assertIsNone(goals.human.current(self.state))
+        self.assertIsNone(lifecycle.human.current(self.state))
         self.assertFalse(self.state.get('answers'))
 
     def test_material_permission_remains_a_human_decision(self):
@@ -436,9 +437,9 @@ class MilestoneCheckpointTests(unittest.TestCase):
         decision = {**self.decision(status='BLOCKED'), 'findings': [], 'user_request': request}
         output = self.run / 'material-permission.json'
         output.write_text(json.dumps(decision))
-        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
-        goals.human.evaluate(self.state)
-        self.assertEqual('permission', goals.human.current(self.state)['scope'])
+        lifecycle.wait_for_user(self.state, request, origin={'stage': 'astra_review', 'output': str(output)})
+        lifecycle.human.evaluate(self.state)
+        self.assertEqual('permission', lifecycle.human.current(self.state)['scope'])
 
     def test_operator_activation_preserves_contract_and_routes_existing_work_to_sol(self):
         self.start()

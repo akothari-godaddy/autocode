@@ -24,6 +24,7 @@ import autopilot_testkit as kit
 import autocode as runner
 import autocode_findings as findings
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from . import test_catalogue_t08 as t08
 from goal_fixtures import envelope
@@ -32,7 +33,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS = REPO_ROOT / "tools"
 
 MUTATIONS = [
-    ("M01", "tools/autocode_goals.py",
+    ("M01", "tools/autocode_goal_lifecycle.py",
      'or selected != token(contract) or state.get("displayed_goal") != selected):',
      '):',
      ["tests.test_catalogue_t01"]),
@@ -91,6 +92,7 @@ SUPPLEMENTS = {
 import sys, unittest
 sys.path.insert(0, ".")
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 
 class M02Detector(unittest.TestCase):
     def test_open_questions_invalidate_recorded_approval(self):
@@ -98,11 +100,11 @@ class M02Detector(unittest.TestCase):
         import autocode_support as s
         state = {"version": 2, "workspace": ".", "task": "t", "status": "AWAITING_GOAL_APPROVAL",
                  "sessions": {}, "stages": [], "history": [], "settings": {}}
-        goals.migrate(state)
-        goals.install_draft(state, body(), origin="test")
-        goals.human.evaluate(state)
-        goals.present(state)
-        goals.approve(state, goals.token(state["goal_contract"]))
+        lifecycle.migrate(state)
+        lifecycle.install_draft(state, body(), origin="test")
+        lifecycle.human.evaluate(state)
+        lifecycle.present(state)
+        lifecycle.approve(state, goals.token(state["goal_contract"]))
         state["goal_contract"]["body"]["open_blocking_questions"] = [
             {"id": "Q1", "question": "Unanswered?", "why": "w", "options": ["a"], "proposed_default": "a"}]
         # Re-seal so only the open-question clause can decide validity.

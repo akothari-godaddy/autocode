@@ -6,6 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import autocode as runner, autopilot, autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as milestones, autocode_resolver_human as human
 import autocode_support as support, autocode_util as util, autocode_workflow as workflow
 from goal_fixtures import body, envelope
@@ -37,14 +38,14 @@ class ResolverProducerTests(unittest.TestCase):
                 'options': ['Investigate', 'Leave paused'], 'proposed_delta': ''}
 
     def ready(self, *, human_review=False):
-        goals.install_draft(self.state, body(human=human_review), origin='fixture')
+        lifecycle.install_draft(self.state, body(human=human_review), origin='fixture')
         # Simulate the external serialized publication boundary, never a producer.
         human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state['goal_contract']))
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state['goal_contract']))
         self.state.pop(human.PUBLIC, None)
         decision = self.decision('CONTINUE')
-        goals.assign_task(self.state, decision, {'revision': 'source-one'})
+        lifecycle.assign_task(self.state, decision, {'revision': 'source-one'})
         self.state['next_stage'] = 'astra_review'
 
     def decision(self, status='BLOCKED', kind='blocker'):
@@ -76,12 +77,12 @@ class ResolverProducerTests(unittest.TestCase):
 
     def test_draft_questions_stay_sealed_and_unissued_until_external_publication(self):
         draft = body(questions=True)
-        goals.install_draft(self.state, draft, origin='astra_discovery')
+        lifecycle.install_draft(self.state, draft, origin='astra_discovery')
         contract = copy.deepcopy(self.state['goal_contract'])
         self.assert_private()
         self.assertEqual(draft['open_blocking_questions'], human.internal_questions(self.state))
         with patch.object(human, 'evaluate', side_effect=AssertionError('Renderer cannot publish')):
-            rendered = goals.present(self.state)
+            rendered = lifecycle.present(self.state)
         self.assertIn('Unissued proposal', rendered)
         self.assertNotIn('Answer ID:', rendered)
         self.assertNotIn('Approval token:', rendered)
@@ -89,26 +90,26 @@ class ResolverProducerTests(unittest.TestCase):
         self.assertEqual(contract, self.state['goal_contract'])
         self.assertTrue(goals.sealed(contract))
         self.assertEqual('escalate', human.evaluate(self.state))
-        self.assertIn('Answer ID: Q1', goals.present(self.state))
+        self.assertIn('Answer ID: Q1', lifecycle.present(self.state))
 
     def test_intermediate_joint_drafts_and_migration_do_not_queue_approval(self):
         self.state['settings']['joint_planning'] = True
         for origin, next_stage in (('glm_draft', 'astra_challenge'), ('glm_revise', 'astra_finalize')):
-            goals.install_draft(self.state, body(), origin=origin)
+            lifecycle.install_draft(self.state, body(), origin=origin)
             self.assertEqual('RUNNING', self.state['status'])
             self.assertEqual(next_stage, self.state['next_stage'])
             self.assertNotIn(human.PRIVATE, self.state)
         final = self.record('astra_finalize', {'contract': body()})
-        goals.install_draft(self.state, body(), origin='astra_finalize', record=final)
+        lifecycle.install_draft(self.state, body(), origin='astra_finalize', record=final)
         self.assert_private()
         self.assertEqual('defer', human.evaluate(self.state))
         self.state['planning']['final_token'] = goals.token(self.state['goal_contract'])
         self.state['planning']['reports']['astra_finalize'] = {'output': final['output']}
         self.state['stages'].append(final)
         self.assertEqual('escalate', human.evaluate(self.state))
-        self.assertIn('Approval token:', goals.present(self.state))
+        self.assertIn('Approval token:', lifecycle.present(self.state))
         self.state['version'] = 2
-        goals.migrate(self.state)
+        lifecycle.migrate(self.state)
         self.assertEqual('RUNNING', self.state['status'])
         self.assertNotIn(human.PRIVATE, self.state)
         self.assertNotIn(human.PUBLIC, self.state)
@@ -146,12 +147,12 @@ class ResolverProducerTests(unittest.TestCase):
                   'text': 'No, keep the excluded file unchanged', 'contract_token': goals.token(self.state['goal_contract'])}
         self.state['answers']['permission-one'] = answer
         self.state['user_events'].append(answer)
-        goals.wait_for_user(self.state, request, origin={'stage': 'astra_review'})
+        lifecycle.wait_for_user(self.state, request, origin={'stage': 'astra_review'})
         self.assertEqual('RUNNING', self.state['status'])
         self.assertEqual(answer['text'], self.state['permission_reuse_context']['answer'])
         self.assertNotIn(human.PRIVATE, self.state)
         with self.assertRaisesRegex(support.Paused, 'already returned'):
-            goals.wait_for_user(self.state, request)
+            lifecycle.wait_for_user(self.state, request)
 
     def test_ordinary_blockers_require_real_diagnosis_before_human_proposal(self):
         self.ready()
@@ -276,11 +277,11 @@ class ResolverProducerTests(unittest.TestCase):
         self.assert_private()
         self.assertEqual(token, self.state[human.PRIVATE]['evidence']['review_token'])
         self.assertEqual(['C1'], self.state[human.PRIVATE]['evidence']['criteria'])
-        self.assertNotIn('Review token', goals.present(self.state))
+        self.assertNotIn('Review token', lifecycle.present(self.state))
         self.assertEqual('escalate', human.evaluate(self.state))
-        self.assertIn('Review token', goals.present(self.state))
+        self.assertIn('Review token', lifecycle.present(self.state))
         milestones.handle_gate(self.state, support.Paused('PAUSED_MILESTONE_HUMAN_REVIEW', 'Human review required'),
-                               {'revision': 'source-one'})
+                               {'revision': 'source-one'}, ask_user=lifecycle.wait_for_user)
         self.assert_private()
         self.assertEqual(token, self.state[human.PRIVATE]['evidence']['review_token'])
 
@@ -308,12 +309,12 @@ class ResolverProducerTests(unittest.TestCase):
         self.assertEqual(before, self.state)
 
     def test_stale_receipt_removes_display_controls_without_republication(self):
-        goals.install_draft(self.state, body(), origin='astra_discovery')
+        lifecycle.install_draft(self.state, body(), origin='astra_discovery')
         human.evaluate(self.state)
-        self.assertIn('Approval token:', goals.present(self.state))
+        self.assertIn('Approval token:', lifecycle.present(self.state))
         self.state['settings']['changed'] = True
         with patch.object(human, 'evaluate', side_effect=AssertionError('Presentation cannot publish')):
-            rendered = goals.present(self.state)
+            rendered = lifecycle.present(self.state)
         self.assertNotIn('Approval token:', rendered)
         self.assertNotIn('Resolver request token:', rendered)
         self.assertNotIn('displayed_goal', self.state)

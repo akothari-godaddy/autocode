@@ -225,7 +225,7 @@ class OperationalRecoveryTests(unittest.TestCase):
                 self.assertFalse(self.boundary())
                 self.assertEqual(before, self.state)
         self.state = copy.deepcopy(pristine)
-        runner.goals.wait_for_user(self.state, {
+        runner.lifecycle.wait_for_user(self.state, {
             'kind': 'permission', 'decision_needed': 'Allow external access?',
             'impact': 'Exceeds the workspace-only permission boundary',
             'discovered': 'External access needed', 'options': ['allow', 'deny'], 'proposed_delta': ''})

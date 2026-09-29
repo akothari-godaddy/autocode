@@ -97,13 +97,13 @@ class ResolverRuntimeTests(unittest.TestCase):
 
     def test_permissions_goal_changes_and_untyped_blockers_remain_user_owned(self):
         original = copy.deepcopy(self.state)
-        human = runner.goals.human
+        human = runner.lifecycle.human
         for kind in ('permission', 'goal_change', 'clarification', 'blocker'):
             with self.subTest(kind=kind):
                 self.state = copy.deepcopy(original)
                 request = {'kind': kind, 'decision_needed': 'Make a material decision', 'impact': 'Changes work',
                            'discovered': 'Needs decision', 'options': ['yes', 'no'], 'proposed_delta': ''}
-                runner.goals.wait_for_user(self.state, request)
+                runner.lifecycle.wait_for_user(self.state, request)
                 # A queued request is not yet answerable and the runtime boundary cannot act on it.
                 self.assertEqual('RESOLVER_PENDING', self.state['status'])
                 queued = copy.deepcopy(self.state)

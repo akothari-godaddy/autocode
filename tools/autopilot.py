@@ -6,7 +6,7 @@ import json
 import re
 from pathlib import Path
 try:
-    from . import autocode_support as support, autocode_goals as goals, autocode_jobs as jobs
+    from . import autocode_support as support, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_jobs as jobs
     from . import autocode_stuck_job as stuck
     from . import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
@@ -18,7 +18,7 @@ try:
 except ImportError:
     import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
     import autocode_support as support, autocode_jobs as jobs
-    import autocode_stuck_job as stuck, autocode_goals as goals
+    import autocode_stuck_job as stuck, autocode_goals as goals, autocode_goal_lifecycle as lifecycle
     import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
     import autocode_workflow as workflow
     import autocode_milestones as milestones
@@ -203,7 +203,7 @@ def _bind_plan(state, value, origin, record):
     goals.check_requirement_trace(state, value, value["contract"], coverage=planning_unit.traces_coverage(value["contract"]))
     if origin in ("glm_draft", "glm_revise"):
         _check_code_refs(state, value.get("code_refs") or [])
-    goals.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [], record=record)
+    lifecycle.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [], record=record)
 
 
 # Only a technical fact, or one with no policy weight, can be read from the
@@ -455,7 +455,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
         prepared = planning_artifacts.prepare(state, stage, value, origin=stage,
                                               run_dir=run_dir, record=False)
         if stage == "requirements":
-            goals.apply_requirements(state, value["requirements"],
+            lifecycle.apply_requirements(state, value["requirements"],
                                      artifact_sha256=prepared["artifact"]["sha256"], record=record)
             planning = state.setdefault("planning", {"astra_calls": 0, "reports": {}, "final_token": None})
         else:
@@ -463,7 +463,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
             reports = planning["reports"]
             if stage == "plan":
                 derived = planning_graph.validate(value["contract"])
-                goals.install_draft(state, value["contract"], origin="plan", record=record)
+                lifecycle.install_draft(state, value["contract"], origin="plan", record=record)
                 planning["derived_graph"] = derived
             elif stage == "plan_review":
                 concerns = value["concerns"]
@@ -479,7 +479,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
                 if any(not response["evidence_refs"] for response in value["responses"]):
                     raise ValueError("Planner responses must cite investigated evidence")
                 derived = planning_graph.validate(value["contract"])
-                goals.install_draft(state, value["contract"], origin="plan_revise", record=record)
+                lifecycle.install_draft(state, value["contract"], origin="plan_revise", record=record)
                 planning["derived_graph"] = derived
             elif stage == "plan_finalize":
                 planning_unit._coverage(value["decisions"], reports["plan_review"]["report"]["concerns"])
@@ -489,7 +489,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
                 if not value["contract"]["open_blocking_questions"] and "initial_task" not in value["contract"]:
                     raise ValueError("Final plan needs an initial_task before approval")
                 derived = planning_graph.validate(value["contract"])
-                goals.install_draft(state, value["contract"], origin="plan_finalize", record=record)
+                lifecycle.install_draft(state, value["contract"], origin="plan_finalize", record=record)
                 planning["derived_graph"] = derived
                 planning["final_token"] = goals.token(state["goal_contract"])
                 planning_artifacts.prepare_final_outputs(state, prepared)
@@ -599,7 +599,7 @@ def apply_planning_result(state, stage, value, record, *, run_dir=None):
     schema = support.read(Path(record["schema"])) if record.get("schema") else goals.DISCOVERY_SCHEMA
     support.validate_schema(value, schema)
     legacy = not any(key in schema["properties"]["contract"]["properties"] for key in goals.BRIEF_FIELDS)
-    goals.install_draft(state, value["contract"], origin="astra_discovery", allow_legacy=legacy, record=record)
+    lifecycle.install_draft(state, value["contract"], origin="astra_discovery", allow_legacy=legacy, record=record)
     state["discovery_summary"] = value["summary"]
 
 
@@ -907,7 +907,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                 if request['kind'] in ('blocker', 'clarification'):
                     queue_resolution(state, value, record, source_stage=stage, source_report=True)
                 else:
-                    goals.wait_for_user(state, request, origin=origin,
+                    lifecycle.wait_for_user(state, request, origin=origin,
                                         evidence={'provenance': 'source_report_not_accepted_review'})
                 save_record(state,record)
                 return
@@ -931,7 +931,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                                     'hashes': dict(state['resolution_request']['evidence_hashes'])}
                         evidence['hashes'][record['output']] = support.file_hash(Path(record['output']))
                         state['resolution_request']['diagnosis_output'] = record['output']
-                    goals.wait_for_user(state, request, origin=origin, evidence=evidence,
+                    lifecycle.wait_for_user(state, request, origin=origin, evidence=evidence,
                                         next_stage='astra_review')
                 goals.record_decision(state, value)
                 state.pop("agent_request", None)
@@ -976,7 +976,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             if modern and goals.missing_human_reviews(state):
                 if not support.completion_ready(state, value, current, require_human_reviews=False):
                     raise support.Paused("PAUSED_COMPLETION_GATE", "Artifact review requires current passing independent evidence first")
-                goals.wait_for_user(state,
+                lifecycle.wait_for_user(state,
                     {"kind": "human_review", "criteria": goals.missing_human_reviews(state),
                      "decision_needed": "Review the current artifact and explicitly approve the listed criteria",
                      "impact": "Completion requires the declared human acceptance of this validated artifact",
@@ -1035,11 +1035,11 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                     return
             current = support.snapshot(workspace)
             try:
-                kind = goals.assign_task(state, value, current) if modern else "implement"
+                kind = lifecycle.assign_task(state, value, current) if modern else "implement"
             except support.Paused as error:
                 if not error.status.startswith("PAUSED_MILESTONE_"):
                     raise
-                milestones.handle_gate(state, error, current, origin={'stage': stage, 'output': record['output']})
+                milestones.handle_gate(state, error, current, origin={'stage': stage, 'output': record['output']}, ask_user=lifecycle.wait_for_user)
                 goals.record_decision(state, value)
                 save_record(state, record)
                 return

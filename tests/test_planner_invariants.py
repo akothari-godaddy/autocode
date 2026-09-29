@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+import autocode_goal_lifecycle as lifecycle
 import autocode_planning as planning
 import autopilot
 from . import test_autocode as base
@@ -21,19 +22,19 @@ def state(task="Build a greeting CLI"):
 class RevisionGuardTests(unittest.TestCase):
     def test_revision_cannot_drop_a_behavior_or_exclusion_or_widen_permissions(self):
         current = state("Print Hello, NAME. Don't touch auth.")
-        goals.install_draft(current, body(), origin="glm_draft")
+        lifecycle.install_draft(current, body(), origin="glm_draft")
         dropped = body()
         dropped["required_behaviors"] = ["Print a greeting"]
         with self.assertRaisesRegex(ValueError, "without a user-backed"):
-            goals.install_draft(current, dropped, origin="glm_revise")
+            lifecycle.install_draft(current, dropped, origin="glm_revise")
         excluded = body()
         excluded["scope_exclusions"] = ["Web service"]
         with self.assertRaisesRegex(ValueError, "Do not touch auth|without a user-backed"):
-            goals.install_draft(current, excluded, origin="glm_revise")
+            lifecycle.install_draft(current, excluded, origin="glm_revise")
         wider = body()
         wider["permission_boundaries"] = ["May write outside the workspace and call external services"]
         with self.assertRaisesRegex(ValueError, "without a user-backed"):
-            goals.install_draft(current, wider, origin="glm_revise")
+            lifecycle.install_draft(current, wider, origin="glm_revise")
         self.assertEqual(["Print Hello, NAME for a nonempty name"], current["goal_contract"]["body"]["required_behaviors"])
 
     def install_with_tab_text(self):
@@ -42,7 +43,7 @@ class RevisionGuardTests(unittest.TestCase):
         first["acceptance_criteria"][0].update(criterion="Output is NAME\\tCOUNT",
                                                verification_method="Run it and compare with a real\\ttab")
         current = state()
-        goals.install_draft(current, first, origin="glm_draft")
+        lifecycle.install_draft(current, first, origin="glm_draft")
         return current
 
     def test_writing_an_escape_as_its_character_is_not_a_change_of_protected_text(self):
@@ -52,7 +53,7 @@ class RevisionGuardTests(unittest.TestCase):
         revised["required_behaviors"] = ["Print the fields separated by a literal \t"]
         revised["acceptance_criteria"][0].update(criterion="Output is NAME\tCOUNT",
                                                  verification_method="Run it and compare with a real\ttab")
-        goals.install_draft(current, revised, origin="glm_revise")
+        lifecycle.install_draft(current, revised, origin="glm_revise")
         saved = current["goal_contract"]["body"]
         # The contract keeps the text the user approved, not the respelling.
         self.assertEqual(["Print the fields separated by a literal \\t"], saved["required_behaviors"])
@@ -68,48 +69,48 @@ class RevisionGuardTests(unittest.TestCase):
             revised["acceptance_criteria"][0].update(criterion="Output is NAME\\tCOUNT",
                                                      verification_method="Run it and compare with a real\\ttab")
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "without a user-backed"):
-                goals.install_draft(current, revised, origin="glm_revise")
+                lifecycle.install_draft(current, revised, origin="glm_revise")
         changed = body()
         changed["required_behaviors"] = ["Print the fields separated by a literal \\t"]
         changed["acceptance_criteria"][0].update(criterion="Output is NAME\tCOUNT and a header",
                                                  verification_method="Run it and compare with a real\\ttab")
         with self.assertRaisesRegex(ValueError, "without a user-backed"):
-            goals.install_draft(current, changed, origin="glm_revise")
+            lifecycle.install_draft(current, changed, origin="glm_revise")
 
     def test_user_edit_and_backed_reword_are_allowed(self):
         current = state()
-        goals.install_draft(current, body(), origin="glm_draft")
+        lifecycle.install_draft(current, body(), origin="glm_draft")
         edited = body()
         edited["required_behaviors"] = ["Print a greeting"]
-        goals.install_draft(current, edited, origin="user_cli_edit")
+        lifecycle.install_draft(current, edited, origin="user_cli_edit")
         self.assertEqual(["Print a greeting"], current["goal_contract"]["body"]["required_behaviors"])
         current = state()
-        goals.install_draft(current, body(), origin="glm_draft")
+        lifecycle.install_draft(current, body(), origin="glm_draft")
         reworded = body()
         reworded["required_behaviors"] = ["Print Hello, NAME"]
         with self.assertRaisesRegex(ValueError, "saved user answer"):
-            goals.install_draft(current, reworded, origin="glm_revise", changes=[{
+            lifecycle.install_draft(current, reworded, origin="glm_revise", changes=[{
                 "item": "Print Hello, NAME for a nonempty name", "change": "reworded",
                 "basis": "agent_proposed", "answer_id": "", "replacement": "Print Hello, NAME"}])
         current["answers"]["Q1"] = {"id": "Q1", "text": "Use the shorter wording"}
-        goals.install_draft(current, reworded, origin="glm_revise", changes=[{
+        lifecycle.install_draft(current, reworded, origin="glm_revise", changes=[{
             "item": "Print Hello, NAME for a nonempty name", "change": "reworded",
             "basis": "user_answer", "answer_id": "Q1", "replacement": "Print Hello, NAME"}])
         self.assertIn("reworded", current["goal_contract"]["declared_changes"][0]["change"])
-        self.assertIn("Declared contract changes", goals.render(current))
+        self.assertIn("Declared contract changes", lifecycle.render(current))
 
     def test_plan_review_changes_plan_without_rewriting_protected_requirements(self):
         current = state()
         original = body()
-        goals.install_draft(current, original, origin="glm_draft")
+        lifecycle.install_draft(current, original, origin="glm_draft")
         revised = copy.deepcopy(original)
         revised["technical_approach"] = ["Use a smaller parser and run its tests"]
-        goals.install_draft(current, revised, origin="glm_revise", changes=[])
+        lifecycle.install_draft(current, revised, origin="glm_revise", changes=[])
         self.assertEqual(original["required_behaviors"], current["goal_contract"]["body"]["required_behaviors"])
         self.assertEqual(original["acceptance_criteria"], current["goal_contract"]["body"]["acceptance_criteria"])
         current["answers"]["Q1"] = {"id": "Q1", "text": "Use the shorter wording"}
         with self.assertRaisesRegex(ValueError, "not changed"):
-            goals.install_draft(current, revised, origin="glm_revise", changes=[{
+            lifecycle.install_draft(current, revised, origin="glm_revise", changes=[{
                 "item": original["required_behaviors"][0], "change": "reworded",
                 "basis": "user_answer", "answer_id": "Q1", "replacement": "Print Hello, NAME"}])
 
@@ -203,7 +204,7 @@ class PlanEvidenceTests(unittest.TestCase):
             {"id": "M2", "objective": "Caller", "acceptance_criteria": ["C1"], "depends_on": [], "affected_paths": ["shared.py"]}]
         # Overlap stays a valid plan. Dispatch runs those milestones one at a time
         # instead of treating missing order as a planning error.
-        goals.validate_body(state(), hidden)
+        lifecycle.validate_body(state(), hidden)
 
 
 if __name__ == "__main__":

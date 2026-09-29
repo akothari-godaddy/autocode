@@ -6,15 +6,17 @@ from pathlib import Path
 
 try:
     from . import autocode_support as support
+    from .autocode_goals import RESOLVER_PROPOSAL_KEY, RESOLVER_REQUEST_KEY
 except ImportError:
     import autocode_support as support
+    from autocode_goals import RESOLVER_PROPOSAL_KEY, RESOLVER_REQUEST_KEY
 
 
 VERSION = 1
 SCOPES = frozenset({'clarification', 'goal_approval', 'permission', 'goal_change',
                     'human_review', 'blocker', 'operational_exhaustion', 'intake'})
-PRIVATE = 'resolver_human_proposal'
-PUBLIC = 'resolver_human_request'
+PRIVATE = RESOLVER_PROPOSAL_KEY
+PUBLIC = RESOLVER_REQUEST_KEY
 
 
 def _contract(state):

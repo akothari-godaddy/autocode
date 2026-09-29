@@ -11,12 +11,14 @@ import json
 from pathlib import Path
 try:
     from .. import autocode_util as util, autocode_goals as goals, autocode_bug_job as bug_job
+    from .. import autocode_goal_lifecycle as lifecycle
     from .. import autocode_discuss_job as discuss_job, autocode_stuck_job as stuck_job, autocode_failures as failures
     from .. import autocode_providers, autocode_verify as verify
 except ImportError:
     import autocode_verify as verify
     import autocode_util as util
     import autocode_goals as goals
+    import autocode_goal_lifecycle as lifecycle
     import autocode_bug_job as bug_job
     import autocode_discuss_job as discuss_job
     import autocode_stuck_job as stuck_job
@@ -109,7 +111,7 @@ def wait_on_existing_diagnosis(state, decision, record, request, *, source_stage
         evidence["hashes"][output] = util.file_hash(Path(output))
     origin = {"stage": source_stage, **{key: record[key] for key in ("output", "source_revision", "task_id")
                                         if key in record}}
-    goals.wait_for_user(state, asked, origin=origin, evidence=evidence, next_stage="astra_review")
+    lifecycle.wait_for_user(state, asked, origin=origin, evidence=evidence, next_stage="astra_review")
 
 
 def start_small_correction(state, workspace):
@@ -121,8 +123,8 @@ def start_small_correction(state, workspace):
         import autocode_dispatch as dispatch
     body = bug_job.correction_contract(state)
     # Approved here under the recorded policy, so no approval request is queued for the user.
-    goals.install_draft(state, body, origin=bug_job.ORIGIN, queue_human=False)
-    goals.validate_body(state, body, ready=True)
+    lifecycle.install_draft(state, body, origin=bug_job.ORIGIN, queue_human=False)
+    lifecycle.validate_body(state, body, ready=True)
     contract = state["goal_contract"]
     event = {"kind": "goal_approval", "actor": "workflow_policy", "policy": bug_job.SMALL_FIX_POLICY,
              "at": util.now(), "token": goals.token(contract)}
@@ -130,7 +132,7 @@ def start_small_correction(state, workspace):
     contract.update(approval_status="approved", approval_event=event)
     state.update(phase="READY_TO_EXECUTE", status="RUNNING", pending_questions=[])
     decision = goals.initial_decision(body)
-    goals.assign_task(state, decision, util.snapshot(Path(workspace)))
+    lifecycle.assign_task(state, decision, util.snapshot(Path(workspace)))
     state.update(next_action=decision["next_objective"], affected_paths=decision["affected_paths"],
                  next_stage=dispatch.build_stage(state))
     goals.record_decision(state, decision)

@@ -9,6 +9,7 @@ import unittest
 from unittest.mock import patch
 
 from tools import autocode_goals as goals
+from tools import autocode_goal_lifecycle as lifecycle
 from tools import autocode_tasks as tasks
 from tools.goal_fixtures import body
 from . import test_subprocess
@@ -53,9 +54,9 @@ class TaskFlows(unittest.TestCase):
                  'stages': [], 'history': [], 'next_stage': 'terra', 'acceptance_criteria': [],
                  'settings': {'roles': {r: {'model': r, 'reasoning_effort': 'high'} for r in ('astra', 'terra', 'sol')},
                               'headroom': {'enabled': False}, 'context_soft_tokens': 10000}}
-        goals.migrate(state)
-        goals.install_draft(state, body(), origin='test')
-        self.assertEqual('escalate', goals.human.evaluate(state))
+        lifecycle.migrate(state)
+        lifecycle.install_draft(state, body(), origin='test')
+        self.assertEqual('escalate', lifecycle.human.evaluate(state))
         self.assertEqual('AWAITING_GOAL_APPROVAL', state['status'])
         return state
 

@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
 import autocode as runner
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 from goal_fixtures import body, envelope
 
@@ -80,16 +81,16 @@ class ApprovalCase(kit.CatalogueCase):
                                    "context_soft_tokens": 10000,
                                    "limits": {"iteration_ceiling": 5, "max_seconds": None,
                                               "max_reported_tokens": None, "no_progress_batches": 3}}}
-        goals.migrate(self.state)
+        lifecycle.migrate(self.state)
 
     def draft(self, **kwargs):
-        goals.install_draft(self.state, body(**kwargs), origin="test")
+        lifecycle.install_draft(self.state, body(**kwargs), origin="test")
 
     def approve_now(self, **kwargs):
         self.draft(**kwargs)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
 
     def decision(self, status="CONTINUE"):
         criteria = [{**c, "status": "verified", "evidence": "event:check"}
@@ -159,9 +160,9 @@ class ApprovalScenarios(ApprovalCase):
         # Recovery: answering and approving the exact plan starts the build path.
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
         self.draft()  # answered question incorporated; no open blockers remain
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("recovery_approval_opens_execution", goals.approved(self.state))
         self.compare_with_oracle()
         self.finish(summary="AWAITING_APPROVAL: read-only clarification, no writer, approval never inferred")
@@ -184,9 +185,9 @@ class ApprovalScenarios(ApprovalCase):
         self.check("no_source_mutation", True, self.source_clean())
         self.compare_with_oracle()
         # Recovery: authentic approval admits exactly one build path.
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         try:
             goals.execution_guard(self.state)
             self.check("recovered_execution_authorized", True, True)
@@ -197,15 +198,15 @@ class ApprovalScenarios(ApprovalCase):
     def test_app03_approve_exact_displayed_plan_once(self):
         """APP-03. Existing: test_goals.test_approval_requires_displayed_exact_revision."""
         self.draft()
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         selected = goals.token(self.state["goal_contract"])
-        goals.approve(self.state, selected)
+        lifecycle.approve(self.state, selected)
         self.compare_with_oracle()
         revision = self.state["goal_contract"]["revision"]
         self.check("approval_binds_current_revision", f"r{revision}:",
                    self.state["goal_contract"]["approval_event"]["token"][:len(f"r{revision}:")])
-        goals.assign_task(self.state, self.decision(), support.snapshot(self.root))
+        lifecycle.assign_task(self.state, self.decision(), support.snapshot(self.root))
         first_task = self.state["current_task"]["id"]
         self.check("one_build_assignment", True, bool(first_task))
         self.check("no_stage_dispatch_yet", 0, len(self.state["stages"]))
@@ -219,16 +220,16 @@ class ApprovalScenarios(ApprovalCase):
         stale = goals.token(self.state["goal_contract"])
         revised = body()
         revised["required_behaviors"].append("Support Unicode names")
-        goals.install_draft(self.state, revised, origin="user_edit")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        self.expect_raises("stale_token_rejected", ValueError, goals.approve, self.state, stale)
+        lifecycle.install_draft(self.state, revised, origin="user_edit")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        self.expect_raises("stale_token_rejected", ValueError, lifecycle.approve, self.state, stale)
         self.check("r2_remains_unapproved", False, goals.approved(self.state))
         self.compare_with_oracle()
         self.expect_raises("no_task_admitted_by_stale_event", support.Paused,
                            goals.execution_guard, self.state)
         # Recovery: approving the displayed R2 token admits work again.
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("r2_approval_recovers", goals.approved(self.state))
         self.compare_with_oracle()
         self.finish(summary="AWAITING_APPROVAL: stale R1 token cannot approve R2")
@@ -242,12 +243,12 @@ class ApprovalScenarios(ApprovalCase):
         # A re-delivered approval is explicitly refused (not silently re-applied):
         # an equivalent trace with unchanged authorization state.
         self.expect_raises("duplicate_delivery_refused", ValueError,
-                           goals.approve, self.state, selected)
+                           lifecycle.approve, self.state, selected)
         self.check("duplicate_left_state_unchanged", before_duplicate, self.state)
         self.check("still_approved", True, goals.approved(self.state))
         self.compare_with_oracle()
         self.check("single_effective_approval_event", events_after_first, len(self.state["user_events"]))
-        goals.assign_task(self.state, self.decision(), support.snapshot(self.root))
+        lifecycle.assign_task(self.state, self.decision(), support.snapshot(self.root))
         self.check("one_assignment_only", True, bool(self.state["current_task"]["id"]))
         self.check("no_writer_duplicated", 0, len(self.state["stages"]))
         self.finish(summary="READY_BUILD: duplicate approval delivery is a no-op")
@@ -256,7 +257,7 @@ class ApprovalScenarios(ApprovalCase):
         """APP-06. Existing: test_goals.test_answer_is_never_approval_and_resume_does_not_bypass..."""
         draft = body(questions=True)
         draft["open_blocking_questions"].append({**draft["open_blocking_questions"][0], "id": "Q2"})
-        goals.install_draft(self.state, draft, origin="test")
+        lifecycle.install_draft(self.state, draft, origin="test")
         # The runner's writer boundary publishes the draft questions before they can be answered.
         self.assertEqual(2, self.invoke())
         self.assertEqual(0, self.invoke("--answer", "Q1=CLI"))
@@ -297,7 +298,7 @@ class ApprovalScenarios(ApprovalCase):
         forged = body()
         forged["delegated_decisions"] = [{"text": "Use web", "basis": "delegated", "answer_id": "invented"}]
         self.expect_raises("agent_forged_answer_id_rejected", ValueError,
-                           goals.install_draft, self.state, forged, origin="agent")
+                           lifecycle.install_draft, self.state, forged, origin="agent")
         self.finish(summary="PAUSED_SAFE: fabricated receipts and forged answer ids rejected")
 
     def test_app09_scope_revision_requires_new_approval(self):
@@ -305,22 +306,22 @@ class ApprovalScenarios(ApprovalCase):
         and test_edit_invalidates_approval_validation_and_human_review."""
         self.approve_now()
         old_token = goals.token(self.state["goal_contract"])
-        goals.wait_for_user(self.state, {"kind": "goal_change", "decision_needed": "Allow Unicode?",
+        lifecycle.wait_for_user(self.state, {"kind": "goal_change", "decision_needed": "Allow Unicode?",
                                          "impact": "Changes scope", "discovered": "Non-ASCII names",
                                          "options": ["Yes", "No"], "proposed_delta": "Accept Unicode"})
-        goals.human.evaluate(self.state)
+        lifecycle.human.evaluate(self.state)
         goals.answer(self.state, self.state["pending_questions"][0]["id"], "Yes")
         revised = body()
         revised["required_behaviors"].append("Accept Unicode")
         prior_revision = self.state["goal_contract"]["revision"]
-        goals.install_draft(self.state, revised, origin="astra_discovery")
+        lifecycle.install_draft(self.state, revised, origin="astra_discovery")
         self.check("r2_versioned", prior_revision + 1, self.state["goal_contract"]["revision"])
         self.check("old_approval_does_not_cover_r2", False, goals.approved(self.state))
-        self.expect_raises("old_token_cannot_approve_r2", ValueError, goals.approve, self.state, old_token)
+        self.expect_raises("old_token_cannot_approve_r2", ValueError, lifecycle.approve, self.state, old_token)
         self.check("history_explains_change", True, bool(self.state.get("contract_history")))
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("r2_approval_recovers", goals.approved(self.state))
         self.compare_with_oracle()
         self.finish(summary="AWAITING_APPROVAL: authorized scope change produces versioned R2 needing approval")
@@ -332,21 +333,21 @@ class ApprovalScenarios(ApprovalCase):
         request = {"kind": "permission", "decision_needed": "Repair the fallback test?",
                    "impact": "The exact test is excluded", "options": ["Repair", "Keep excluded"],
                    "discovered": "An assertion races navigation", "proposed_delta": "Only the fallback test"}
-        goals.wait_for_user(self.state, request)
-        goals.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, request)
+        lifecycle.human.evaluate(self.state)
         qid = self.state["pending_questions"][0]["id"]
         goals.resolve_permission(self.state, qid, "No, leave it excluded")  # denial
         self.check("denial_recorded", "No, leave it excluded", self.state["answers"][qid]["text"])
-        goals.wait_for_user(self.state, copy.deepcopy(request))
-        goals.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, copy.deepcopy(request))
+        lifecycle.human.evaluate(self.state)
         self.check("denial_reused_not_escalated", "RUNNING", self.state["status"])
         self.check("denial_answer_bound", "No, leave it excluded",
                    self.state["permission_reuse_context"]["answer"])
         original_contract = copy.deepcopy(self.state["goal_contract"])
         wider = copy.deepcopy(request)
         wider["proposed_delta"] = "Change production navigation too"
-        goals.wait_for_user(self.state, wider)
-        goals.human.evaluate(self.state)
+        lifecycle.wait_for_user(self.state, wider)
+        lifecycle.human.evaluate(self.state)
         self.check("wider_scope_not_authorized_by_qualification", "WAITING_FOR_USER", self.state["status"])
         self.check("contract_untouched_by_permission_flow", original_contract,
                    self.state["goal_contract"])
@@ -364,8 +365,8 @@ class ApprovalScenarios(ApprovalCase):
         self.check("prior_answer_retained", "CLI", self.state["answers"]["Q1"]["text"])
         draft = body(questions=True)
         draft["open_blocking_questions"][0].update(id="Q9", question="A materially different question?")
-        goals.install_draft(self.state, draft, origin="test")
-        goals.human.evaluate(self.state)
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
         self.check("distinct_new_question_allowed", ["Q9"],
                    [q["id"] for q in self.state["pending_questions"]])
         self.finish(summary="SCOPED_PROGRESS: exact answers reused; genuinely new questions still asked")
@@ -373,7 +374,7 @@ class ApprovalScenarios(ApprovalCase):
     def test_app12_tracked_requirement_survives_handoff(self):
         """APP-12. Existing: test_goals.test_stale_role_result_and_criterion_weakening..."""
         self.approve_now()
-        goals.assign_task(self.state, self.decision(), support.snapshot(self.root))
+        lifecycle.assign_task(self.state, self.decision(), support.snapshot(self.root))
         tracked = {c["id"] for c in self.state["acceptance_criteria"]}
         self.check("criteria_tracked", {"C1"}, tracked)
         for label, mutate in (

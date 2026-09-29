@@ -24,6 +24,7 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
 import autocode_goals as goals  # noqa: E402
+import autocode_goal_lifecycle as lifecycle
 import autocode_program as program  # noqa: E402
 import goal_fixtures  # noqa: E402
 import task_scenarios  # noqa: E402
@@ -153,7 +154,7 @@ class DeriveTests(unittest.TestCase):
                                    "context_soft_tokens": 10000,
                                    "limits": {"iteration_ceiling": 5, "max_seconds": None, "max_reported_tokens": None,
                                               "no_progress_batches": 3}}}
-        goals.migrate(self.state)
+        lifecycle.migrate(self.state)
 
     def two_milestones(self):
         body = goal_fixtures.body()
@@ -164,15 +165,15 @@ class DeriveTests(unittest.TestCase):
         return body
 
     def test_unapproved_plan_cannot_become_a_program(self):
-        goals.install_draft(self.state, self.two_milestones(), origin="test")
+        lifecycle.install_draft(self.state, self.two_milestones(), origin="test")
         with self.assertRaisesRegex(ValueError, "approved plan"):
             program.derive_manifest(self.state)
 
     def test_approved_milestones_become_workstreams_plus_integration(self):
-        goals.install_draft(self.state, self.two_milestones(), origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, self.two_milestones(), origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         value = program.derive_manifest(self.state, source_run=self.root / "run")
         ids = [row["id"] for row in value["workstreams"]]
         self.assertEqual(["M1", "M2", "integration"], ids)
@@ -189,10 +190,10 @@ class DeriveTests(unittest.TestCase):
 
     def test_every_child_receives_the_complete_approved_contract(self):
         body = goal_fixtures.body(human=True)
-        goals.install_draft(self.state, body, origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, body, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         value = program.derive_manifest(self.state)
         self.assertEqual(body, value["contract"]["body"])
         for row in value["workstreams"]:
@@ -208,10 +209,10 @@ class DeriveTests(unittest.TestCase):
     def test_generated_integration_id_does_not_collide_with_an_approved_milestone(self):
         body = goal_fixtures.body()
         body["milestones"][0]["id"] = "integration"
-        goals.install_draft(self.state, body, origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, body, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         value = program.derive_manifest(self.state)
         self.assertEqual(["integration", "integration-final"], [r["id"] for r in value["workstreams"]])
         self.assertEqual(["integration"], value["workstreams"][-1]["depends_on"])

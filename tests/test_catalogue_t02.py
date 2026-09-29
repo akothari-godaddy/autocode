@@ -17,6 +17,7 @@ import autopilot_testkit as kit
 import autocode as runner
 import autocode_dispatch as dispatch
 import autocode_goals as goals
+import autocode_goal_lifecycle as lifecycle
 import autocode_milestones as milestones
 import autocode_support as support
 from . import test_catalogue_t01 as t01
@@ -72,10 +73,10 @@ def diamond():
 class DagCase(t01.ApprovalCase):
     def start_diamond(self):
         draft = diamond()
-        goals.install_draft(self.state, draft, origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
         self.state["settings"]["orchestration"] = {"max_parallel": 2}
         self.oracle = ReadySetOracle(draft["milestones"])
@@ -176,7 +177,7 @@ class DagScenarios(DagCase):
                     if milestone["id"] in edges:
                         milestone["depends_on"] = edges[milestone["id"]]
                 self.expect_raises(f"[{label}] cyclic_graph_rejected", ValueError,
-                                   goals.install_draft, self.state, draft, origin="test")
+                                   lifecycle.install_draft, self.state, draft, origin="test")
         self.check("no_builder_from_invalid_graph", 0, len(self.state.get("stages", [])))
         self.finish(summary="PAUSED_SAFE: cycles and self-edges cannot become executable")
 
@@ -185,14 +186,14 @@ class DagScenarios(DagCase):
         draft = diamond()
         draft["milestones"][2]["depends_on"] = ["MZ"]  # C depends on a nonexistent task
         try:
-            goals.install_draft(self.state, draft, origin="test")  # may pass draft validation...
+            lifecycle.install_draft(self.state, draft, origin="test")  # may pass draft validation...
         except ValueError:
             self.check_true("unknown_dependency_rejected_at_draft", True)
             self.finish(summary="PAUSED_SAFE: unknown prerequisite rejected at draft validation")
             return
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
         self.assign("MA")
         self.validate({"C1"})
@@ -216,7 +217,7 @@ class DagScenarios(DagCase):
                 draft = diamond()
                 mutate(draft)
                 self.expect_raises(f"[{label}] duplicate_ids_rejected", ValueError,
-                                   goals.install_draft, self.state, draft, origin="test")
+                                   lifecycle.install_draft, self.state, draft, origin="test")
         self.check("draft_untouched_by_rejections", before, self.state)
         self.finish(summary="PAUSED_SAFE: duplicate milestone/criterion/question ids rejected")
 
@@ -251,10 +252,10 @@ class DagScenarios(DagCase):
         """DAG-07. Existing: dispatch wave selection in test_assignment_scenarios."""
         draft = diamond()
         next(row for row in draft["milestones"] if row["id"] == "MC")["affected_paths"] = ["server/"]
-        goals.install_draft(self.state, draft, origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, draft, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.state["settings"]["milestone_checkpoints"] = copy.deepcopy(milestones.DEFAULTS)
         self.state["settings"]["orchestration"] = {"max_parallel": 2}
         self.oracle = ReadySetOracle(draft["milestones"])
@@ -270,10 +271,10 @@ class DagScenarios(DagCase):
         # without MC ownership still cannot form a parallel wave.
         revised = diamond()
         next(row for row in revised["milestones"] if row["id"] == "MC").pop("affected_paths")
-        goals.install_draft(self.state, revised, origin="test")
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.install_draft(self.state, revised, origin="test")
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.oracle = ReadySetOracle(revised["milestones"])
         self.check("mc_never_ready_without_ownership", False,
                    any("MC" in self.oracle.ready(accepted)
@@ -336,12 +337,12 @@ class DagScenarios(DagCase):
         """DAG-10. Existing: test_planning.test_requirements_handoff_is_separate... and
         test_goals answer-preservation tests."""
         self.draft(questions=True)
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
         self.check("q1_tracked", ["Q1"],
                    [q["id"] for q in self.state.get("pending_questions", [])])
         self.expect_raises("approve_refused_with_open_question", ValueError,
-                           goals.approve, self.state, goals.token(self.state["goal_contract"]))
+                           lifecycle.approve, self.state, goals.token(self.state["goal_contract"]))
         # While Q1 is unanswered the runner launches no planner at all, so the
         # planner cannot drop what it is never allowed to touch.
         support.atomic_json(self.run / "state.json", self.state)
@@ -361,9 +362,9 @@ class DagScenarios(DagCase):
         # Answering Q1 and redrafting without it is the legitimate resolution.
         goals.answer(self.state, "Q1", "Use a CLI")
         self.draft()
-        goals.human.evaluate(self.state)
-        goals.present(self.state)
-        goals.approve(self.state, goals.token(self.state["goal_contract"]))
+        lifecycle.human.evaluate(self.state)
+        lifecycle.present(self.state)
+        lifecycle.approve(self.state, goals.token(self.state["goal_contract"]))
         self.check_true("answered_resolution_recovers", goals.approved(self.state))
         self.bundle.log("scoped_note", note="a direct install_draft call on an unapproved draft can "
                        "replace open questions (revision_guard bypasses unapproved-draft swaps); the "
