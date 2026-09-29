@@ -11,12 +11,31 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import run  # noqa: E402
 from harness import baseline, catalog, compare, oracle, routing, stats, verdict  # noqa: E402
 from harness.driver import leaves_for_person, metrics, split_by_turn, turn_state  # noqa: E402
+
+
+class EvidenceDirectoryTests(unittest.TestCase):
+    def test_simultaneous_runs_with_the_same_timestamp_have_separate_evidence(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(run, "datetime") as clock:
+            clock.now.return_value.strftime.return_value = "20260929T003743Z"
+            parent = Path(root).resolve() / "results"
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                rows = list(pool.map(lambda _: run.evidence_directory(parent, "review-live"), range(16)))
+            self.assertEqual(16, len({path for _, path in rows}))
+            for index, (stamp, path) in enumerate(rows):
+                self.assertEqual("20260929T003743Z", stamp)
+                self.assertEqual(parent, path.parent)
+                self.assertTrue(path.name.startswith(stamp + "-review-live-"))
+                (path / "result.json").write_text(str(index))
+            for index, (_, path) in enumerate(rows):
+                self.assertEqual(str(index), (path / "result.json").read_text())
 
 
 class CatalogTests(unittest.TestCase):
@@ -387,7 +406,7 @@ class CompareRunTests(unittest.TestCase):
     def compare(self, *extra):
         with tempfile.TemporaryDirectory(prefix="compare-test-") as out:
             self.assertEqual(0, run.main(["compare", "bugfix-iso-weeks", "--fake", "--out", out, *extra]))
-            [report] = Path(out).glob("*-compare-fake/comparison.json")
+            [report] = Path(out).glob("*-compare-fake-*/comparison.json")
             self.assertTrue((report.parent / "comparison.md").is_file())
             return json.loads(report.read_text())
 

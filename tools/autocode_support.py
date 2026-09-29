@@ -527,11 +527,8 @@ def same_command(event_command, check_command):
 
 
 def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_context=None):
-    """Verify checks and fill only absent exit codes from unique evidence.
-
-    Event providers require executed tool evidence. Report-file providers use
-    receipts bound to the saved attempt, with the complete output hash checked.
-    """
+    """Verify checks against executed events or attempt-bound, output-hashed receipts.
+    Fill only absent exit codes from unique evidence."""
     rows = [] if receipt_only else events(event_path)
     tool_outputs = [e["item"] for e in rows
                     if e.get("type") == "item.completed"
@@ -575,7 +572,10 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
         path = path if path.is_absolute() else Path(workspace) / path
         if not path.resolve().is_relative_to(Path(workspace).resolve() / ".autocode"):
             raise ValueError("Executed check receipt must be captured under project .autocode")
-        receipt = read(path)
+        try:
+            receipt = read(path)
+        except OSError as error:
+            raise ValueError(f"Cannot read check receipt {path}: {error}. Cite the exact captured receipt path.") from error
         if (not isinstance(receipt.get('command'), list)
                 or not all(isinstance(part, str) for part in receipt['command'])
                 or type(receipt.get('exit_code')) is not int
@@ -705,7 +705,7 @@ probe, rerun the complete corrected probe; do not count an unexecuted correction
 a pass. Source diff exit 1 means files differ, not a successful verification command.
 Return exact command/exit_code and evidence_ref='event:<id>' from a completed shell
 tool event (also usable in criterion and end-to-end evidence_refs). Follow the
-execution engine's evidence instructions and copy command text verbatim.
+execution engine's evidence instructions; for capture receipts copy command_text verbatim into checks[].command.
 event: IDs refer only to completed shell commands in this stage's event log.
 For criterion and end-to-end evidence from image/MCP calls or retained earlier
 stages, cite the exact existing artifact path (including the owning JSONL log),

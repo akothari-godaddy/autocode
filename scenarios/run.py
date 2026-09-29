@@ -115,11 +115,17 @@ def caps_flags(args) -> list[str]:
     return caps
 
 
+def evidence_directory(root: Path, label: str) -> tuple[str, Path]:
+    """Allocate fresh evidence atomically, including simultaneous same-scenario runs."""
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    root = root.resolve()
+    root.mkdir(parents=True, exist_ok=True)
+    return stamp, Path(tempfile.mkdtemp(prefix=f"{stamp}-{label}-", dir=root))
+
+
 def run_one(scenario, args) -> dict:
     mode = ("fake" if args.fake_solution == "reference" else f"fake-{Path(args.fake_solution).name}") if args.fake else args.profile
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = (args.out / f"{stamp}-{scenario.id}-{mode}").resolve()
-    out.mkdir(parents=True)
+    stamp, out = evidence_directory(args.out, f"{scenario.id}-{mode}")
     result = {"scenario": scenario.id, "title": scenario.title, "category": scenario.category, "mode": mode,
               "autocode": autocode_revision(), "started_at": stamp, "evidence": str(out)}
     skip = [f"requires {tool}" for tool in scenario.missing_tools()]
@@ -207,9 +213,7 @@ def cmd_route(args) -> int:
     require_mode(args)
     table = routing.load()
     seed_scenario = catalog.load(table["seed"])
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = (args.out / f"{stamp}-routing-{'fake' if args.fake else args.profile}").resolve()
-    out.mkdir(parents=True)
+    _, out = evidence_directory(args.out, f"routing-{'fake' if args.fake else args.profile}")
     rows = []
     for number, prompt in enumerate(table["prompts"], start=1):
         root = out / f"prompt-{number:02d}"
@@ -259,9 +263,7 @@ def cmd_compare(args) -> int:
         if not baseline.available(probe):
             sys.exit(f"baseline agent {probe[0]!r} is not installed; install it or pass --baseline-command")
     mode = "fake" if args.fake else args.profile
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    root = (args.out / f"{stamp}-compare-{mode}").resolve()
-    root.mkdir(parents=True)
+    stamp, root = evidence_directory(args.out, f"compare-{mode}")
     autocode_args = argparse.Namespace(**{**vars(args), "out": root})
     rows = []
     for scenario in selected(args.ids):
