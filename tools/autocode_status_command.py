@@ -10,6 +10,10 @@ def render(runner, state, args, workspace, run_dir):
     stale = bool(active and state.get("status") == "RUNNING"
                  and worker_state and worker_state.get("checked")
                  and not worker_state.get("alive") and not active_finished)
+    check = state.get("active_runner_check")
+    check_workers = runner.processes.recorded_worker_state(check) if check else None
+    stale_check = bool(check and not active and state.get("status") == "RUNNING"
+                       and check_workers.get("checked") and not check_workers.get("alive"))
     current = runner.support.snapshot(workspace) if state["status"] == "TASK_COMPLETE" else None
     completion_current = (runner.completion_gate.completion_ready(state, state.get("final_decision", {}), current)
                           if state["status"] == "TASK_COMPLETE" else None)
@@ -17,10 +21,14 @@ def render(runner, state, args, workspace, run_dir):
         print(f"STALE CHECKPOINT: saved status is RUNNING but the recorded "
               f"{active.get('stage')} workers are gone and no terminal report was saved. "
               "AutoResolver must reconcile the retained attempt before any further provider call.", file=sys.stderr)
+    if stale_check:
+        print("STALE CHECKPOINT: the runner executing the regression check is gone. "
+              "Inspect the retained test output before resuming the run.", file=sys.stderr)
     print(json.dumps({"run_dir":str(run_dir), "workspace":str(workspace), "project_workspace":state.get("project_workspace", str(workspace)), "task_branch":state.get("task_branch"), "status":state["status"], "iteration":state["iteration"],
-                      "stale":stale,
+                      "stale":stale or stale_check,
                       "next_action": (f"AutoResolver must reconcile retained attempt {runner.attempt_id(active)} before any provider call"
-                                      if stale else None),
+                                      if stale else "Inspect the retained runner check and resume the run" if stale_check else None),
+                      "runner_check_workers":check_workers,
                       "active_stage_workers":worker_state,
                       "active_stage_finished":active_finished,
                       "engine":state.get("settings", {}).get("engine", "codex" if args.run_dir else args.engine or runner.DEFAULT_ENGINE),

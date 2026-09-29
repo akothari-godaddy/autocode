@@ -21,6 +21,9 @@ def view(state: dict) -> dict:
     status = state.get("status", "")
     task = state.get("current_task") or {}
     return {
+        "runner_check": {key: state["active_runner_check"].get(key) for key in
+                         ("stage", "summary", "started_at", "updated_at", "command", "output")}
+                        if state.get("active_runner_check") else None,
         "dependency": state.get("dependency_wait"),
         "schema": SCHEMA,
         "status": status,
