@@ -214,7 +214,7 @@ def _bind_plan(state, value, origin, record):
                  or value["contract"].get("initial_task", {}).get("kind") in ("implement", "validate"))):
         raise ValueError("Unresolved blocking questions require a clarification-only draft: "
                          "technical_approach=[] and milestones=[]; no executable initial_task")
-    goals.check_requirement_trace(state, value, value["contract"])
+    goals.check_requirement_trace(state, value, value["contract"], coverage=planning_unit.traces_coverage(value["contract"]))
     if origin in ("glm_draft", "glm_revise"):
         _check_code_refs(state, value.get("code_refs") or [])
     goals.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [], record=record)
