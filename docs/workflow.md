@@ -315,10 +315,15 @@ approval, orchestrator, Builder, Validator and Completion Owner.
   test in the project's own suite. The same stages run; they review less.
 - **Runner-owned proof, no model call.** Just before the Validator runs, the
   runner executes `regression_proof` against the run's base commit (the commit
-  the run started from). The new or changed tests must fail on the original
-  code and pass on the current code, and every test that passed on base must
-  still pass (not fail, be skipped or disappear). The checks run in clean scratch
-  worktrees, never in the task workspace. The result is bound to the exact
+  the run started from; for a run created before that commit was saved, the
+  commit its first stage recorded, if the source still descends from it). Each
+  suite run may take as long as the run's tool-call limit, at least 900 seconds
+  and with no limit when the run turned that limit off;
+  `settings.regression.test_timeout` overrides it. The new or changed tests
+  must fail on the original code and pass on the current code, and every test
+  that passed on base must still pass (not fail, be skipped or disappear). The
+  checks run in clean scratch worktrees, never in the task workspace. The result
+  is bound to the exact
   source revision and appears as a runner-owned step with zero tokens in the
   stage history.
 - **Reviewers use it instead of repeating it.** The Validator and the Completion

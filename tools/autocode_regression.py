@@ -58,13 +58,28 @@ def cases(state):
 
 
 def base_commit(state, workspace):
-    """The revision the run started from: saved at run creation, else the task worktree's base."""
+    """The revision the run started from: saved at run creation, else the task worktree's base,
+    else the HEAD its first stage recorded (runs created before base_commit was saved)."""
     if state.get("base_commit"):
         return state["base_commit"]
     try:
-        return (workspaces.metadata(workspace) or {}).get("base_commit")
+        saved = (workspaces.metadata(workspace) or {}).get("base_commit")
     except ValueError:
+        saved = None
+    return saved or _first_recorded_head(state, workspace)
+
+
+def _first_recorded_head(state, workspace):
+    first = next((record["before_ref"] for record in state.get("stages") or [] if record.get("before_ref")), None)
+    try:
+        start = util.read(first).get("head") if first else None
+    except (OSError, ValueError, AttributeError):
         return None
+    # A commit the current source no longer descends from (a rebase, a reset) cannot be its base.
+    if start and subprocess.run(["git", "-C", str(workspace), "merge-base", "--is-ancestor", start, "HEAD"],
+                                capture_output=True).returncode == 0:
+        return start
+    return None
 
 
 def head(workspace):
@@ -77,13 +92,27 @@ def settings(state):
     return state.get("settings", {}).get("regression") or {}
 
 
+def suite_timeout(state):
+    """Seconds the runner lets one suite run take, or None for no limit.
+
+    An explicit settings.regression.test_timeout wins. Otherwise the proof follows the run's
+    own tool-call limit, never below the default, and has none when the run turned that off:
+    a full suite routinely outlasts the 900-second default.
+    """
+    if "test_timeout" in settings(state):
+        return settings(state)["test_timeout"]
+    limit = (state.get("settings", {}).get("limits") or {}).get("tool_timeout_seconds")
+    if limit is None:
+        return verify.DEFAULT_TIMEOUT
+    return max(limit, verify.DEFAULT_TIMEOUT) if limit else None
+
+
 def _baseline(state, workspace, run_dir, base, framework, suite, dependencies):
     cached = state.get("regression_baseline") or {}
     if cached.get("base") == base and cached.get("command") == suite and Path(cached.get("path", "")).is_file():
         return util.read(cached["path"])
     result = verify.baseline(workspace, base, Path(run_dir) / "regression", framework=framework,
-                             suite_command=suite, dependencies_from=dependencies,
-                             timeout=settings(state).get("test_timeout", verify.DEFAULT_TIMEOUT))
+                             suite_command=suite, dependencies_from=dependencies, timeout=suite_timeout(state))
     path = Path(run_dir) / "regression" / "baseline.json"
     util.atomic_json(path, result)
     state["regression_baseline"] = {"base": base, "command": suite, "path": str(path), "health": result["health"]}
@@ -120,7 +149,7 @@ def prove(state, workspace, run_dir):
         result = verify.verify(workspace, base, out, framework=framework, suite_command=options.get("test_command"),
                                regression_command=options.get("regression_command"),
                                reported=None, base_suite=base_suite, dependencies_from=dependencies,
-                               timeout=options.get("test_timeout", verify.DEFAULT_TIMEOUT),
+                               timeout=suite_timeout(state),
                                new_behavior=goals.task_kind(state) != "bugfix")
         path = out / "verification.json"
         util.atomic_json(path, result)

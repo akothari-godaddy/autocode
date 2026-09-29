@@ -4,6 +4,7 @@ The approved one-milestone plan marks a criterion ``verification_method: "test: 
 the runner's proof then requires that test to pass with the change and not without it.
 See autocode_test_cases and docs/workflow.md.
 """
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -189,6 +190,41 @@ class FeatureProofTests(unittest.TestCase):
         self.assertEqual("FAIL", proof["verdict"])
         self.assertEqual([], proof["case_tests"]["C3"])
         self.assertTrue(any("C3: Given calc.mul" in failure and "test_c3_" in failure for failure in proof["failures"]))
+
+
+class BaseAndTimeoutTests(unittest.TestCase):
+    """Runs created before base_commit was saved, and suites that outlast the default timeout."""
+
+    def recorded(self, project, head):
+        snapshot = Path(tempfile.mkdtemp(prefix="first-stage-")) / "before.json"
+        snapshot.write_text(json.dumps({"head": head, "files": {}, "revision": "r"}))
+        state = feature_state(project, [ORDINARY, EXAMPLE])
+        del state["base_commit"]
+        state["stages"] = [{"stage": "requirements_gather", "before_ref": str(snapshot)}]
+        return state
+
+    def test_a_run_without_a_saved_base_is_proven_against_the_head_its_first_stage_recorded(self):
+        project = Project(SEED)
+        self.addCleanup(project.close)
+        project.write(FEATURE)
+        proof = regression.prove(self.recorded(project, project.base), project.root,
+                                 Path(tempfile.mkdtemp(prefix="feature-proof-")))
+        self.assertEqual((project.base, "PASS"), (proof["base"], proof["verdict"]), proof["unverified"])
+
+    def test_a_recorded_head_the_source_does_not_descend_from_is_not_a_base(self):
+        project = Project(SEED)
+        self.addCleanup(project.close)
+        self.assertIsNone(regression.base_commit(self.recorded(project, "0" * 40), project.root))
+        self.assertIsNone(regression.base_commit({"stages": []}, project.root))
+
+    def test_the_suite_timeout_follows_the_runs_tool_limit(self):
+        def timeout(regression_settings=None, **limits):
+            return regression.suite_timeout({"settings": {"regression": regression_settings, "limits": limits}})
+        self.assertEqual(3600, timeout(tool_timeout_seconds=3600))
+        self.assertIsNone(timeout(tool_timeout_seconds=0))
+        self.assertEqual(verify.DEFAULT_TIMEOUT, timeout(tool_timeout_seconds=60))
+        self.assertEqual(verify.DEFAULT_TIMEOUT, timeout())
+        self.assertEqual(7200, timeout({"test_timeout": 7200}, tool_timeout_seconds=0))
 
 
 class PromptTests(unittest.TestCase):
