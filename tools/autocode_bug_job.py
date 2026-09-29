@@ -46,7 +46,10 @@ OUTCOMES = ("reproduced", "not_reproduced")
 TEXT = {"type": "string"}
 TEXTS = {"type": "array", "items": TEXT}
 CASE = {"type": "object", "additionalProperties": False, "required": ["id", "given", "when", "then"],
-        "properties": {"id": TEXT, "given": TEXT, "when": TEXT, "then": TEXT}}
+        "properties": {"id": TEXT, "given": TEXT, "when": TEXT, "then": TEXT,
+                       # restore (default): behavior the fix restores. preserve: behavior that
+                       # already worked and must keep working (its test passes before and after).
+                       "kind": {"type": "string", "enum": ["restore", "preserve"]}}}
 CASE_ID = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,63}")
 SCHEMA = {
     "type": "object", "additionalProperties": False,
@@ -94,7 +97,12 @@ What to do:
      call or command) and then (the exact expected result, with literal values: "returns 1", "prints
      'Hello, Ada'", "exits 2"). No vague words such as "correctly" or "gracefully". The Builder writes one
      test per case named test_<id>_<what it checks> (for example test_t1_new_year_week_is_one_row), and
-     the runner checks that each case's test fails on the original code and passes after the fix.
+     the runner checks that each case's test fails on the original code and passes after the fix. A case
+     may carry kind (restore by default, or preserve): restore is behavior the fix restores; preserve is
+     behavior that already worked and must keep working (for example "an exact multiple still gives the
+     same page count") — its test must pass on the original code and after the fix, and a preserve case
+     whose test fails on the original code is mis-tagged and fails the proof. Use preserve sparingly:
+     only for a guard worth its own named test.
    - fix_size: small when the cause is obvious and the fix is one bounded change in one or two files;
      large otherwise. A small fix goes straight to a Builder and an independent Validator without a
      planning round, so say large whenever the fix needs design choices or touches several modules.
@@ -167,6 +175,9 @@ def check_cases(cases: list) -> None:
     empty = [case["id"] for case in cases if not all(case[key].strip() for key in ("given", "when", "then"))]
     if empty:
         raise ValueError(f"Every test case needs given, when and then: {empty}")
+    bad_kinds = sorted({case.get("kind", "restore") for case in cases} - {"restore", "preserve"})
+    if bad_kinds:
+        raise ValueError(f"A test case kind is restore or preserve: {bad_kinds}")
 
 
 def safe_path(path: str) -> bool:

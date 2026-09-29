@@ -786,6 +786,9 @@ def _judge_regression(on_candidate, on_base, fail, unverified, notes, proof, rev
         # the code it tests) and passes now. A bug fix needs a test that ran and failed.
         flipped = sorted(passed - set(base["passed"])) if new_behavior else sorted(ran_and_failed & passed)
         proof["fail_to_pass"] = flipped
+        # Tests that ran and passed on the original code and still pass: the proof
+        # preserve cases are matched against (autocode_regression.check_cases).
+        proof["pass_to_pass"] = sorted(set(base["passed"]) & passed)
         if not flipped and new_behavior:
             fail.append("No new or changed test passes with the change and did not pass without it, "
                         "so the tests do not show the new behavior")

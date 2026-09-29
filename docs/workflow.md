@@ -327,11 +327,20 @@ approval, orchestrator, Builder, Validator and Completion Owner.
   - **Named tests.** The Builder writes one test per case, named after the case
     id: `test_t1_<what it checks>`.
   - **The runner's check.** The regression proof also requires every case to
-    have a test with its id in the name, among the tests that fail on the
-    original code and pass after the fix. A case without one fails the proof,
-    which names the case. The link is by name, so no model is involved. Names
-    match as whole words, so `T1` matches `test_t1_…` and `TestT1…` but not
-    `test_t12_…`.
+    have a test with its id in the name. The link is by name, so no model is
+    involved. Names match as whole words, so `T1` matches `test_t1_…` and
+    `TestT1…` but not `test_t12_…`.
+  - **Restore and preserve cases.** A case is `kind: restore` by default (and a
+    case with no `kind` is one): behavior the fix restores, proven by a test
+    that fails on the original code and passes after the fix. A case may
+    instead be `kind: preserve`: behavior that already worked and must keep
+    working — for example *"an exact multiple still gives the same page
+    count"* — proven by a test that passes on the original code **and** after
+    the fix. A preserve case without a test, or whose test fails on the
+    original code (it describes restored behavior and is mis-tagged), fails
+    the proof, which names the case. Nothing else is relaxed: a restore case
+    whose test passes on the original code still fails, and every case needs
+    its own named test.
   - **Without per-test results** (exit codes only), the cases cannot be matched
     and the proof is `UNVERIFIED`.
   - **The Validator's check.** The Validator reads each case's test
