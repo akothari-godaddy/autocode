@@ -142,10 +142,20 @@ def check_subscription_routes(roles, workspace=None):
     if any(key in os.environ for key in ("OPENAI_API_KEY", "CODEX_API_KEY", "OPENAI_BASE_URL")):
         raise RuntimeError("OpenAI API-key or endpoint environment overrides are present; "
                            "subscription selection will not silently change billing routes")
-    try:
-        result = subprocess.run(["opencode", "auth", "list"], cwd=workspace,
-                                capture_output=True, text=True, timeout=15)
-    except (OSError, subprocess.TimeoutExpired) as error:
+    # `opencode auth list` is a full CLI cold start (7-15 s observed inside
+    # containers, worse under load). A single slow start must not read as a
+    # missing OAuth connection, so a transport-level failure retries a couple
+    # of times; a completed check is never retried -- its verdict stands.
+    result, error = None, None
+    for attempt in range(3):
+        try:
+            result = subprocess.run(["opencode", "auth", "list"], cwd=workspace,
+                                    capture_output=True, text=True, timeout=15)
+            error = None
+            break
+        except (OSError, subprocess.TimeoutExpired) as caught:
+            error = caught
+    if error is not None:
         raise RuntimeError("Cannot verify OpenCode's OpenAI OAuth connection; no provider request was launched") from error
     summary = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.stdout + result.stderr)
     modes = re.findall(r"^\s*[●•]\s+OpenAI\s+(\S+)\s*$", summary, re.MULTILINE)
