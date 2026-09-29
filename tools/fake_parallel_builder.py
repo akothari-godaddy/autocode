@@ -111,6 +111,13 @@ def main():
                 p.chmod(0o755)
     if os.environ.get("AUTOCODE_BUILDER_ESCAPE") == task["milestone_id"]:
         Path("outside.txt").write_text("out of scope")
+    if os.environ.get("AUTOCODE_BUILDER_STRAY") == task["milestone_id"]:
+        # A live Builder resolved its paths against the shared parent workspace (the directory
+        # above .autocode/builders/) instead of its worktree: the same file lands in both.
+        parent = Path.cwd().resolve().parents[3]
+        for name in paths:
+            (parent / name).parent.mkdir(parents=True, exist_ok=True)
+            (parent / name).write_text("stray " + task["milestone_id"] + "\n")
     evidence = Path(data["state_file"]).parent / (task["id"] + "-evidence.txt")
     evidence.write_text("Fixture outputs written: " + ", ".join(paths))
     result = {"summary": "Fixture built " + task["milestone_id"], "changed_files": paths,

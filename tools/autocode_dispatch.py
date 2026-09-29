@@ -379,6 +379,61 @@ def deferred_worker(batch, row):
     return child
 
 
+def stray_builder_writes(workspace, batch):
+    """Files a Builder wrote into the parent workspace instead of its worktree, by worker.
+
+    A worker's worktree lives under the parent (.autocode/builders/<batch>/<n>), so a Builder that
+    resolves paths against the shared root, or runs `cd <parent> && ...`, writes into the parent. The
+    provider's snapshot of the worktree never sees that write, so the attempt is rejected for having
+    changed nothing, and the retry writes into the worktree properly. The stray copy stays in the parent,
+    where integration later finds the baseline changed and refuses (a live parallel-diamond run,
+    2026-09-29). A parent-tree delta since the batch baseline is stray when every path is new, and
+    inside one worker's declared milestone paths; anything else is not this batch's to touch.
+    Returns {milestone_id: [paths]} or None when the delta has a path no worker owns."""
+    baseline = batch["baseline"]["files"]
+    current = s.snapshot(workspace)["files"]
+    added = [name for name, value in current.items() if name not in baseline or baseline[name] == "deleted"]
+    changed = [name for name in current.keys() | baseline.keys() if name not in added
+               and current.get(name) != baseline.get(name)]
+    if changed:
+        return None
+    stray = {}
+    for name in added:
+        owner = [row for row in batch["workers"] if any(contains(p, name) for p in row["task"]["affected_paths"])]
+        if len(owner) != 1:
+            return None
+        stray.setdefault(owner[0]["milestone_id"], []).append(name)
+    return stray
+
+
+def remove_stray_builder_writes(state, workspace, run_dir, batch):
+    """Put the parent back to the batch baseline when the only changes are Builders' stray writes.
+
+    Each stray file is removed (its accepted version lives in the worker's worktree and patch) and
+    recorded on the batch, so the run's record shows the Builder misbehaved. A delta that is not
+    only stray writes is left alone for integrate's own drift check."""
+    if s.snapshot(workspace) == batch["baseline"]:
+        return
+    stray = stray_builder_writes(workspace, batch)
+    if not stray:
+        return
+    for milestone_id, names in stray.items():
+        for name in names:
+            path = workspace / name
+            if path.is_file() and not path.is_symlink():
+                path.unlink()
+                parent = path.parent
+                while parent != workspace and parent.is_dir() and not any(parent.iterdir()):
+                    parent.rmdir()
+                    parent = parent.parent
+    batch["stray_builder_writes"] = stray
+    print("orchestrator: removed files Builders wrote into the parent workspace instead of their worktrees: "
+          + "; ".join(f"{mid}: {', '.join(names)}" for mid, names in stray.items()), flush=True)
+    if s.snapshot(workspace) != batch["baseline"]:
+        raise s.Paused("PAUSED_ORCHESTRATOR_DRIFT", "Integration workspace changed; Builder branches and patch retained")
+    autocode_status.persist(run_dir / "state.json", state)
+
+
 def collect(state, workspace, run_dir, batch):
     account_workers(state, run_dir, batch)
     patches = []
@@ -444,6 +499,7 @@ def collect(state, workspace, run_dir, batch):
         state["next_stage"] = "terra"
         autocode_status.persist(run_dir / "state.json", state)
         return
+    remove_stray_builder_writes(state, workspace, run_dir, batch)
     expected["revision"] = s.digest({"head": expected["head"], "files": expected["files"]})
     batch.update(expected=expected, changed_files=sorted(changed))
     patch_file = Path(batch["directory"]) / "combined.patch"
