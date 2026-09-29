@@ -1,9 +1,14 @@
 """Derive only missing check metadata from unique, verified execution evidence."""
 import copy
+import contextlib
+import io
 import json
 from pathlib import Path
+import shlex
+import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from .test_autocode import runner, s as support
 
@@ -67,6 +72,42 @@ class ValidationMetadataTests(unittest.TestCase):
         support.verify_checks(checks, self.workspace, self.log, receipt_only=True, capture_context=self.context)
         self.assertEqual(3, checks[0]['exit_code'])
         self.assertFalse(self.log.exists())
+
+    def test_missing_receipt_is_repairable_without_searching_other_directories(self):
+        actual, _ = self.receipt()
+        missing = self.run / 'evidence' / actual.name
+        checks = [{'command': 'python test.py', 'evidence_ref': str(missing)}]
+        for receipt_only in (False, True):
+            with self.subTest(receipt_only=receipt_only), self.assertRaises(ValueError) as caught:
+                support.verify_checks(checks, self.workspace, self.log,
+                                      receipt_only=receipt_only, capture_context=self.context)
+            self.assertIn(str(missing), str(caught.exception))
+            self.assertIn('exact captured receipt path', str(caught.exception))
+            self.assertIsInstance(caught.exception.__cause__, FileNotFoundError)
+        self.assertTrue(actual.is_file())
+        self.assertNotIn('exit_code', checks[0])
+
+    def test_capture_exposes_canonical_command_without_relaxing_verification(self):
+        path = self.run / 'quoted.json'
+        command = [sys.executable, '-c', 'import sys; print(sys.argv[1])', 'spaces; "quotes" and \'apostrophes\'']
+        output = io.StringIO()
+        with patch.object(Path, 'cwd', return_value=self.workspace), \
+                patch.dict('os.environ', {'AUTOCODE_CAPTURE_CONTEXT': json.dumps(self.context)}), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(0, runner.capture_command(['--output', str(path), '--', *command]))
+        receipt = json.loads(output.getvalue())
+        self.assertEqual(receipt, support.read(path))
+        self.assertEqual(shlex.join(command), receipt['command_text'])
+        self.assertEqual(command, shlex.split(receipt['command_text']))
+        check = {'command': receipt['command_text'], 'evidence_ref': str(path)}
+        support.verify_checks([check], self.workspace, self.log,
+                              receipt_only=True, capture_context=self.context)
+        self.assertEqual(0, check['exit_code'])
+        receipt['command_text'] = ' '.join(command)
+        path.write_text(json.dumps(receipt))
+        with self.assertRaisesRegex(ValueError, 'command/result differs'):
+            support.verify_checks([{**check, 'command': receipt['command_text']}], self.workspace, self.log,
+                                  receipt_only=True, capture_context=self.context)
 
     def test_receipt_rejects_wrong_attempt_conflict_tampering_and_boolean_exit(self):
         for mutation in ('context', 'hash', 'command', 'exit', 'boolean'):

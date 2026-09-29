@@ -34,3 +34,23 @@ assignment. An earlier attempt whose snapshot cannot be read pauses the run rath
 counting as an empty delta. Restoring the stray file lets the next attempt through. The
 saved no-progress route to validation (`recover_retained_candidate`) uses the same check.
 Tests: the `test_serial_retry_*` cases in `tests/test_assignment_scenarios.py`.
+
+## 3. A retained new file from an empty starting tree triggered another Builder retry
+
+The assignment's starting snapshot can legitimately contain `files={}`. If an earlier
+Builder left an in-scope new file and a later retry made no further edits, the saved
+snapshots showed the retained file, but the no-diff path required an earlier Validator
+PASS before it would send the file to validation. A new file from an interrupted or
+rejected attempt has no such PASS, so the run spent another Builder retry.
+
+Fix: for a no-diff retry, compare the earliest assignment snapshot with the current
+saved after-snapshot. When the current source revision matches and the retained paths
+are nonempty and entirely inside the approved assignment, send the actual retained
+paths to the independent Validator as an unverified candidate. Preserve the Builder's
+empty reported path list in the handoff receipt. An empty or missing candidate still
+takes the existing no-progress path; the assignment scope gate still pauses on stray
+edits or missing starting evidence. This route never declares the work accepted.
+
+Test: `test_empty_starting_tree_retains_new_file_for_validation` in
+`tests/test_assignment_scenarios.py` drives two fake Builder attempts through the
+runner, including an initially empty source tree and a retained new file.

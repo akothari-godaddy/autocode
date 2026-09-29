@@ -93,6 +93,7 @@ What to do:
    the test in the workspace as review/tests/test_<name>.py: a standard unittest file that runs from
    the repository root and imports the project's own packages. review/tests/ is the only place you may
    write in the workspace. List every delivered file in delivered_tests (empty when you delivered none).
+   delivered_tests contains workspace-relative file paths, not dotted test IDs or test method names.
 4. Report findings, each with a severity:
    - blocking: must be fixed before merge. A behavior that regresses, an invariant that breaks, a
      compatibility change, a defect the change's tests do not catch.
@@ -101,14 +102,17 @@ What to do:
    the rule that is broken, the command you ran and what it printed, the scenario that fails.
    Give every blocking finding an example: the defect as one concrete case in plain English, "Given
    <exact starting data>, when <exact action>, then <what happens> (expected <what should happen>)".
-6. Prove every blocking finding with a test, unless no test can show it. Deliver it under review/tests/
-   as above, named after the finding's id (F1 -> test_f1_<what it shows>). The runner applies the change
+5. Prove every blocking finding with a test, unless no test can show it. Deliver it under review/tests/
+   as above. Name the actual test function or method after the finding's id (F1 -> test_f1_behavior).
+   Naming only the file or class is not enough: the runner matches the function or method name only.
+   Keep finding IDs stable; correct the test method name rather than renaming the finding to a filename.
+   The runner applies the change
    in a scratch copy of its own and runs your delivered tests: each blocking finding's test must FAIL on
    the changed code, or your report is rejected. Name the patch file in change_patch (for example
    pr-184.patch), or "" when the change is already in the workspace. When a test really cannot show a
    blocking finding (a documented compatibility rule, a missing document), say why in untestable;
    otherwise untestable is "". Advisory findings need no test.
-7. Verdict: request_changes when there is at least one blocking finding, otherwise approve. Do not
+6. Verdict: request_changes when there is at least one blocking finding, otherwise approve. Do not
    invent problems to look thorough: a correct change gets approve and, at most, advisory notes.
 
 Return JSON only, matching the schema the runner gives you. The runner saves your report as
@@ -182,7 +186,10 @@ def prove(value: dict, delivered: list[str], run_tests) -> dict:
     unproven = [f["id"] for f in findings if not matched[f["id"]]]
     if unproven:
         raise ValueError("These blocking findings have no delivered test, named after them, that fails on the "
-                         f"changed code: {unproven} (failing tests: {failing or 'none'})")
+                         f"changed code: {unproven} (failing tests: {failing or 'none'}). "
+                         "Name the actual test function or method after the finding ID, not just the file or class "
+                         "(F1 -> test_f1_behavior). Keep finding IDs stable and update the delivered test methods; "
+                         "delivered_tests must still list file paths, not dotted test IDs.")
     return {"finding_tests": matched, "command": run.get("command", ""), "tail": run.get("tail", "")[-1500:]}
 
 

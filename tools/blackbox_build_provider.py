@@ -27,6 +27,8 @@ def main():
     task = data.get('current_task') or {}
     mid = task.get('milestone_id', '')
     mode = os.environ.get('BUILD_AUDIT_FAULT', '')
+    # Milestones the retry faults and no_change apply to.
+    stuck = os.environ.get('BUILD_AUDIT_FAULT_MILESTONES', 'M1').split(',')
     log = Path(os.environ['BUILD_AUDIT_LOG'])
     def record(event, **extra):
         with log.open('a') as stream:
@@ -66,7 +68,7 @@ def main():
     elif data['stage'] == 'astra_discovery':
         result = dict(contract=spec['contract'], summary='Handwritten fixture plan; no model planning')
     elif data['stage'] == 'terra':
-        if mid == 'M1' and mode in ('retry_success', 'escalate_success', 'retry_exhausted'):
+        if mid in stuck and mode in ('retry_success', 'escalate_success', 'retry_exhausted'):
             count = sum(r.get('stage') == 'terra' and r.get('event') == 'start' and r.get('milestone') == mid
                         for r in map(json.loads, log.read_text().splitlines()))
             required = {'retry_success': 2, 'escalate_success': 3, 'retry_exhausted': 99}[mode]
@@ -87,7 +89,7 @@ def main():
         # Keep independent worker intervals overlapping without requiring scheduler internals.
         time.sleep(.3)
         changed = []
-        if not (mid == 'M1' and mode in ('no_change', 'permission', 'infeasible')):
+        if not (mid in stuck and mode == 'no_change' or mid == 'M1' and mode in ('permission', 'infeasible')):
             for name, content in spec['payloads'][mid].items():
                 if mode == 'validation_fails':
                     count = sum(r.get('stage') == 'terra' and r.get('event') == 'start'

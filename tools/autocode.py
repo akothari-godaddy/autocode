@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """A durable plan-review → build → validate → completion loop.
 
-The completion owner requests completion; the runner enforces approved-goal and
-current-evidence gates. The Builder is the only designated writer; review roles are
-checked for source drift.
+The completion owner requests completion; the runner enforces goal and evidence gates.
+The Builder is the only designated writer; review roles are checked for source drift.
 """
 
 from __future__ import annotations
@@ -14,6 +13,7 @@ import errno
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -2009,7 +2009,7 @@ def capture_command(argv):
         compact = support.compact_output(full, enabled=not args.no_compress)
     except Exception as error:
         compact = {"format": "text", "content": full, "compression_error": type(error).__name__, "fallback": "complete_original"}
-    receipt = {"command": command, "exit_code": result.returncode, "duration_seconds": time.monotonic()-started,
+    receipt = {"command": command, "command_text": shlex.join(command), "exit_code": result.returncode, "duration_seconds": time.monotonic()-started,
                "full_output": str(raw), "full_output_sha256": support.file_hash(raw), "summary": compact}
     if capture_context:
         receipt['capture_context'] = capture_context

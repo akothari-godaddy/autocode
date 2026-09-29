@@ -12,6 +12,7 @@ try:
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
     from . import autocode_resolver_human as human, autocode_failures as failures, autocode_assignment as assignment
+    from . import autocode_retained_work as retained_work
     from .units import autoplanner as planning_unit
     from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
 except ImportError:
@@ -26,6 +27,7 @@ except ImportError:
     import autocode_builder_policy as builder_policy
     import autocode_resolver_human as human
     import autocode_failures as failures, autocode_assignment as assignment
+    import autocode_retained_work as retained_work
     from units import autoplanner as planning_unit
 
 SKIP = object()
@@ -637,28 +639,9 @@ def assert_within_assignment(state, record):
 
 
 def retained_validated_candidate(state, value, record, workspace):
-    """Recognize preserved work only to route it through fresh validation."""
-    if record.get('changed_files') or not isinstance(value.get('changed_files'), list):
-        return None
-    declared = set(value['changed_files'])
-    affected = set((state.get('current_task') or {}).get('affected_paths') or [])
-    if (not declared or not affected or not declared <= affected
-            or not value.get('commands_run') or not value.get('evidence_refs')
-            or any(not (Path(workspace) / path).is_file() for path in declared)
-            or assignment.outside(list(affected), state.get('stages', []), record) != []):
-        return None
-    revision = support.snapshot(workspace)['revision']
-    criteria = {row['id'] for row in (state.get('goal_contract') or {}).get('body', {}).get('acceptance_criteria', [])}
-    if not criteria or (state.get('current_task') or {}).get('source_revision') != revision:
-        return None
-    for archived in reversed(state.get('validation_archive', [])):
-        validation = archived.get('validation') or {}
-        results = {row.get('id'): row.get('status') for row in validation.get('criterion_results', [])}
-        if (validation.get('verdict') == 'PASS' and validation.get('source_revision') == revision
-                and criteria <= {cid for cid, status in results.items() if status == 'PASS'}):
-            return {'source_revision': revision, 'validation_output': validation.get('output'),
-                    'criteria': sorted(criteria), 'declared_paths': sorted(declared)}
-    return None
+    """Compatibility entry point for previously validated retained work."""
+    return retained_work.validated_candidate(state, value, record, workspace,
+                                             support.snapshot(workspace)['revision'])
 
 
 def recover_retained_candidate(state, workspace):
@@ -704,6 +687,20 @@ def apply_build_result(runtime, state, value, record, workspace, run_dir):
             state.setdefault('retained_candidate_handoffs', []).append({
                 'at': support.now(), 'task_id': (state.get('current_task') or {}).get('id'),
                 'builder_output': record['output'], **retained})
+            state['next_stage'] = workflow.review_stage(state)
+            return
+        fresh = retained_work.fresh_candidate(state, record, support.snapshot(workspace)['revision'])
+        if fresh:
+            # The runner's snapshots, rather than this attempt's empty report,
+            # identify the files left by an earlier Builder. They are a candidate
+            # for independent review, never proof that the work passes.
+            state['changed_files'] = fresh['retained_paths']
+            state['implementation']['changed_files'] = fresh['retained_paths']
+            state['no_progress_batches'] = 0
+            state.setdefault('retained_candidate_handoffs', []).append({
+                'at': support.now(), 'task_id': (state.get('current_task') or {}).get('id'),
+                'builder_output': record['output'], 'previously_validated': False,
+                'reported_changed_files': value.get('changed_files'), **fresh})
             state['next_stage'] = workflow.review_stage(state)
             return
         state["no_progress_batches"] = state.get("no_progress_batches", 0) + 1

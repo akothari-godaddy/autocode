@@ -99,15 +99,53 @@ class PolicyTests(unittest.TestCase):
             dispatch.enforce_cross_model_verification(state)
         self.assertEqual('PAUSED_CROSS_MODEL', raised.exception.status)
 
-    def test_a_parallel_builder_pauses_rather_than_be_checked_by_its_strong_model(self):
-        state = self.default_routes()
-        state['parent_run'] = '/runs/parent'
-        policy.failure(state, 'e1', 'f')
-        self.assertEqual('pause', policy.failure(state, 'e2', 'f'))
-        self.assertEqual('zai-coding-plan/glm-5.3', state['settings']['roles']['terra']['model'])
-        self.assertEqual('openai/gpt-6-sol', state['settings']['roles']['sol']['model'])
-        self.assertEqual('PAUSED_BUILDER_RETRY_LIMIT', state['status'])
-        self.assertIn('also checks this batch', state['stop_reason'])
+    def test_a_parallel_builder_defers_its_stronger_attempt_to_the_parent(self):
+        parent = self.default_routes()
+        worker = copy.deepcopy(parent)
+        worker['parent_run'] = '/runs/parent'
+        policy.failure(worker, 'e1', 'f')
+        self.assertEqual('defer', policy.failure(worker, 'e2', 'f'))
+        self.assertEqual(self.default_routes()['settings']['roles'], worker['settings']['roles'])
+        self.assertEqual(policy.SERIAL, worker['status'])
+        self.assertIn('makes that attempt serially', worker['stop_reason'])
+        # Restarting or retrying the worker cannot make the attempt there.
+        worker = json.loads(json.dumps(worker))
+        with self.assertRaises(policy.s.Paused) as raised:
+            policy.guard(worker)
+        self.assertEqual(policy.SERIAL, raised.exception.status)
+        # The parent's own lane for the milestone was opened before the batch ran.
+        policy.guard(parent)
+        policy.adopt(parent, worker)
+        policy.adopt(parent, worker)
+        self.assertEqual(['retry', 'defer'], [d['action'] for d in parent['builder_retry_decisions']])
+        self.assertTrue(policy.failed_before(parent, 'M1'))
+        self.assertFalse(policy.failed_before(parent, 'M2'))
+        parent = json.loads(json.dumps(parent))
+        policy.guard(parent)
+        roles = parent['settings']['roles']
+        self.assertEqual(('openai/gpt-6-sol', 'xhigh'), (roles['terra']['model'], roles['terra']['reasoning_effort']))
+        self.assertEqual('zai-coding-plan/glm-5.3', roles['sol']['model'])
+        self.assertEqual('zai-coding-plan/glm-5.3', roles['completion']['model'])
+        dispatch.enforce_cross_model_verification(parent)
+        policy.guard(parent)
+        self.assertEqual(['retry', 'defer', 'escalate'], [d['action'] for d in parent['builder_retry_decisions']])
+        # The budget carried over: the next failure pauses, and the next milestone restores the routes.
+        self.assertEqual('pause', policy.failure(parent, 'e3', 'f'))
+        parent['current_task'] = {'id': 'task2', 'milestone_id': 'M2'}
+        policy.guard(parent)
+        self.assertEqual(self.default_routes()['settings']['roles'], parent['settings']['roles'])
+
+    def test_a_deferred_attempt_does_not_override_a_builder_pinned_since(self):
+        parent, worker = self.default_routes(), self.default_routes()
+        worker['parent_run'] = '/runs/parent'
+        policy.failure(worker, 'e1', 'f'); policy.failure(worker, 'e2', 'f')
+        policy.adopt(parent, worker)
+        parent['settings']['roles']['terra']['model_pinned'] = True
+        with self.assertRaises(policy.s.Paused) as raised:
+            policy.guard(parent)
+        self.assertEqual('PAUSED_BUILDER_RETRY_LIMIT', raised.exception.status)
+        self.assertEqual(self.default_routes()['settings']['roles']['sol'], parent['settings']['roles']['sol'])
+        self.assertEqual('zai-coding-plan/glm-5.3', parent['settings']['roles']['terra']['model'])
 
     def test_configured_strong_model_retains_opencode_transport(self):
         state=self.state(); state['settings']['engine']='opencode'
@@ -137,6 +175,61 @@ class PolicyBlackbox(unittest.TestCase):
         strong = policy.DEFAULTS['strong_model']
         self.assertEqual(['gpt-6-luna','gpt-6-luna',strong],[r['model'] for r in self.events() if r['milestone']=='M1'])
         self.assertNotEqual('TASK_COMPLETE',self.state()['status'])
+
+    def after_parallel_pair(self):
+        """M1 and M2 can be built in parallel; M3 needs both. The checkers run the strong model."""
+        spec = bb.independent()
+        spec['contract']['milestones'][2]['depends_on'] = ['M1', 'M2']
+        self.seed(spec, checker=policy.DEFAULTS['strong_model'])
+        self.env['BUILD_AUDIT_FAULT'] = 'escalate_success'
+        return self.state()['settings']['roles']
+
+    def review(self):
+        self.invoke('autoreview', ['--run-dir', str(self.run), '--no-chat'])
+
+    def models(self, milestone):
+        return [e['model'] for e in self.events() if e['milestone'] == milestone]
+
+    def checkers(self, stage):
+        return [(e['milestone'], e['model']) for e in self.events(stage=stage)]
+
+    def test_parallel_strong_retry_runs_serially_after_its_siblings_and_another_model_checks_it(self):
+        strong, glm = policy.DEFAULTS['strong_model'], policy.DEFAULTS['checker_model']
+        routes = self.after_parallel_pair()
+        self.build()
+        # M2 is integrated on its own; M1 left its stronger attempt to the parent run.
+        self.assertEqual(1, len(self.candidate()['implementation']['builder_reports']))
+        batch = self.state()['orchestration_history'][-1]
+        self.assertEqual(['M1'], batch['deferred'])
+        self.assertEqual({'M1': policy.SERIAL, 'M2': 'BUILT'}, {w['milestone_id']: w['status'] for w in batch['workers']})
+        self.assertFalse((self.project / 'server/health.py').exists())
+        self.review()
+        self.build(); self.candidate()
+        self.assertEqual(['gpt-6-luna', 'gpt-6-luna', strong], self.models('M1'))
+        self.assertEqual(['retry', 'defer', 'escalate'], [d['action'] for d in self.state()['builder_retry_decisions']])
+        self.review()
+        self.build(); self.candidate()
+        self.assertEqual(['gpt-6-luna'], self.models('M3'))
+        self.assertEqual(routes, self.state()['settings']['roles'])
+        self.review()
+        # No model checked its own work: GPT-6 Sol checked Luna's builds, GLM checked GPT-6 Sol's.
+        for stage in ('sol', 'astra_review'):
+            self.assertEqual([('M2', strong), ('M1', glm), ('M3', strong)], self.checkers(stage))
+
+    def test_when_every_parallel_builder_defers_the_parent_builds_each_serially(self):
+        strong, glm = policy.DEFAULTS['strong_model'], policy.DEFAULTS['checker_model']
+        self.after_parallel_pair()
+        self.env['BUILD_AUDIT_FAULT_MILESTONES'] = 'M1,M2'
+        self.build(); self.candidate()
+        batch = self.state()['orchestration_history'][-1]
+        self.assertEqual(('DEFERRED', ['M1', 'M2']), (batch['status'], batch['deferred']))
+        self.assertEqual((['gpt-6-luna', 'gpt-6-luna', strong], ['gpt-6-luna'] * 2), (self.models('M1'), self.models('M2')))
+        self.review()
+        self.build(); self.candidate()
+        self.assertEqual(['gpt-6-luna', 'gpt-6-luna', strong], self.models('M2'))
+        self.review()
+        for stage in ('sol', 'astra_review'):
+            self.assertEqual([('M1', glm), ('M2', glm)], self.checkers(stage))
 
     def test_exhaustion_resume_cannot_reset_budget_or_claim_built(self):
         self.seed(); self.env['BUILD_AUDIT_FAULT']='retry_exhausted'; self.build(2)

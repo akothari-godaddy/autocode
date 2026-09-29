@@ -1,6 +1,12 @@
 # Bug 003: --no-chat mode exits on WAITING_FOR_USER instead of waiting
 
 **Severity:** Medium
+**Status:** Fixed (closed as #26, 2026-09-28). A non-interactive stop at `WAITING_FOR_USER`
+prints the rendered checkpoint — the pending questions with their `Answer ID`s and the
+AutoResolver request id/token needed to respond — and exits 2.
+**Regression test:** `tests/test_planning.py::JointFlow::test_bug003_regression_no_chat_prints_why_it_is_waiting`
+— runs the real CLI with `--no-chat` to a question checkpoint and asserts the output names
+the question (`Answer ID: Q1`) and the response route (`AutoResolver token:`).
 **Found:** 2026-09-25 stress test on bounded-repair-tasks feature
 
 ## Summary

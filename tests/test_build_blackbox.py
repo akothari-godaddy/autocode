@@ -124,13 +124,13 @@ class BuildBlackbox(unittest.TestCase):
         return [e for e in map(json.loads, (self.root/'events.jsonl').read_text().splitlines())
                 if e['event'] == kind and e['stage'] == stage]
 
-    def seed(self, spec=None):
+    def seed(self, spec=None, checker='gpt-5.6-sol'):
         self.spec = spec or independent()
         (self.root/'plan.json').write_text(json.dumps(self.spec, indent=2))
         self.invoke('autoplanner', [self.spec['contract']['intended_outcome'], '--engine','codex','--in-place',
             '--terra-model','gpt-6-luna','--terra-reasoning-effort','medium',
-            '--sol-model','gpt-5.6-sol','--sol-reasoning-effort','high',
-            '--completion-model','gpt-5.6-sol','--completion-reasoning-effort','medium',
+            '--sol-model',checker,'--sol-reasoning-effort','high',
+            '--completion-model',checker,'--completion-reasoning-effort','medium',
             '--max-parallel-builders','3','--no-chat'], 2)
         self.run = next((self.project/'.autocode/runs').iterdir())
         token = self.state()['displayed_goal']
