@@ -76,6 +76,42 @@ def apply_job(stage, state, value, record, workspace):
         start_small_correction(state, workspace)
 
 
+def wait_on_existing_diagnosis(state, decision, record, request, *, source_stage):
+    """The Completion Owner blocks again on a task and source the AutoResolver already diagnosed.
+
+    One diagnosis per task and source stays the rule. Refusing the second one by raising made the
+    runner treat a valid review as invalid output: report repair could never fix it, and a run whose
+    code was done could not move (live greenfield-greeting-cli and port-policy-go, 2026-09-29, after
+    the user had answered the diagnosis's question and the source was unchanged). The review is
+    accepted instead, and the run waits for the user with the existing diagnosis attached: the
+    source is unchanged, so only a person, a changed setting or new code can move it. While the
+    diagnosis's own question is still unanswered, a second one is not asked; the caller refuses.
+    """
+    diagnosis = ""
+    output = request["diagnosis_output"]
+    try:
+        diagnosis = str(json.loads(Path(output).read_text()).get("diagnosis") or "")
+    except (OSError, ValueError, AttributeError):
+        pass
+    asked = decision.get("user_request") or {}
+    if (asked.get("kind", "none") == "none" or not str(asked.get("decision_needed", "")).strip()
+            or not str(asked.get("impact", "")).strip()):
+        asked = {"kind": "blocker", "discovered": "The Completion Owner still does not accept this source after "
+                                                  "the AutoResolver's diagnosis, and the source has not changed.",
+                 "impact": "Another automatic round would review the same source and reach the same result.",
+                 "decision_needed": "How should the blocker in the existing diagnosis be resolved?",
+                 "options": ["Change the setting or source the diagnosis names, then resume",
+                             "Give feedback that changes the plan", "Leave the run paused"],
+                 "proposed_delta": ""}
+    evidence = {"diagnosis": diagnosis, "output": output, "repeated_on_unchanged_source": True,
+                "hashes": dict(request.get("evidence_hashes") or {})}
+    if Path(output).is_file():
+        evidence["hashes"][output] = support.file_hash(Path(output))
+    origin = {"stage": source_stage, **{key: record[key] for key in ("output", "source_revision", "task_id")
+                                        if key in record}}
+    goals.wait_for_user(state, asked, origin=origin, evidence=evidence, next_stage="astra_review")
+
+
 def start_small_correction(state, workspace):
     """Install the diagnosis as a one-task contract, approve it under the recorded policy
     (never as the user), and assign the Builder task exactly as a user approval would."""

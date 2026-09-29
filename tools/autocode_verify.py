@@ -219,7 +219,11 @@ class Framework:
 def detect_framework(root, *, python=None) -> Framework | None:
     """Best-effort detection from the project's own configuration files."""
     root = Path(root)
-    files = [p for p in _git(root, "ls-files", "-z", check=False).split("\0") if p]
+    # Untracked files count: AutoCode never commits, so in a new project every file the Builder wrote,
+    # tests included, is untracked (a live greenfield run found no test command and could not prove its
+    # tests, 2026-09-29). Ignored files, such as .autocode/, do not.
+    files = [p for p in _git(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard",
+                             check=False).split("\0") if p]
     names = {PurePosixPath(p).name for p in files}
     has_python = any(p.endswith(".py") for p in files)
     if has_python:

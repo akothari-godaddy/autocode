@@ -217,3 +217,35 @@ class PromptTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DesignOnlyTests(unittest.TestCase):
+    """A design job delivers documents: a live one planned every criterion as a test and added tests/."""
+
+    def state(self, kind):
+        return {"workflow": {"kind": kind}, "settings": {"joint_planning": True, "roles": {"plan_reviewer": {}}},
+                "goal_contract": {"body": {"task_kind": "build", "milestones": [{"id": "M1"}],
+                                           "acceptance_criteria": [EXAMPLE]}}}
+
+    def test_a_design_job_has_no_test_cases_and_needs_no_proof(self):
+        design = self.state("design")
+        self.assertTrue(test_cases.design_only(design))
+        self.assertEqual([], test_cases.contract_cases(design))
+        self.assertEqual("", test_cases.builder_note(design))
+        self.assertFalse(regression.required(design))
+        build = self.state("build")
+        self.assertFalse(test_cases.design_only(build))
+        self.assertEqual(["C2"], [case["id"] for case in test_cases.contract_cases(build)])
+        self.assertTrue(regression.required(build))
+
+    def test_the_planner_gets_the_design_rule_instead_of_the_test_rule(self):
+        from units import autoplanner
+        from tests.test_bug_job import state_for
+        for kind, present, absent in (("design", autoplanner.DESIGN_DELIVERABLES_RULE, autoplanner.EXAMPLE_CRITERIA_RULE),
+                                      ("build", autoplanner.EXAMPLE_CRITERIA_RULE, autoplanner.DESIGN_DELIVERABLES_RULE)):
+            state = {**state_for(), "workflow": {"kind": kind}, "answers": {}, "user_events": []}
+            state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+            prompt, _ = autoplanner.context(state, "astra_discovery", Path("/tmp/state.json"))
+            with self.subTest(kind=kind):
+                self.assertIn(present, prompt)
+                self.assertNotIn(absent, prompt)

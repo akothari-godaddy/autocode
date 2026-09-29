@@ -71,9 +71,41 @@ def retained_changes(stages, record):
     return sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
 
 
-def outside(owned, stages, record):
-    """Paths changed outside ``owned`` since the assignment began; None when unprovable."""
+BUILD_OUTPUT_NOTE = """
+BUILD OUTPUT: do not leave compiled programs or other build output in the workspace. Build to a scratch path
+under .autocode/ or discard the output (for example `go build -o .autocode/build/app ./...`, `go vet ./...`,
+`cargo build --target-dir .autocode/target`), not `go build .`, which writes a binary into the repository root.
+"""
+
+# Headers of native executables: ELF (Linux), Mach-O (macOS, both byte orders, 32/64-bit and fat), PE (Windows).
+EXECUTABLE_HEADERS = (b"\x7fELF", b"\xfe\xed\xfa\xce", b"\xfe\xed\xfa\xcf", b"\xce\xfa\xed\xfe",
+                      b"\xcf\xfa\xed\xfe", b"\xca\xfe\xba\xbe", b"MZ")
+
+
+def build_output(workspace, name, stages, record):
+    """A compiled program a build left behind, such as `go build .` writing ./policy: a file the assignment
+    created (absent from its starting snapshot) whose first bytes are a native executable header. It is not
+    source the Builder wrote, as __pycache__/*.pyc are not (autocode_support.snapshot skips those). Only new
+    files qualify; changing or deleting an existing file, executable or not, always counts."""
+    if workspace is None:
+        return False
+    before = _snapshot(stages, starting_attempt(stages, record), "before_ref")
+    path = Path(workspace) / name
+    if before is None or name in before or path.is_symlink() or not path.is_file():
+        return False
+    try:
+        with path.open("rb") as handle:
+            head = handle.read(4)
+    except OSError:
+        return False
+    return head.startswith(EXECUTABLE_HEADERS)
+
+
+def outside(owned, stages, record, workspace=None):
+    """Paths changed outside ``owned`` since the assignment began; None when unprovable.
+    With ``workspace``, new compiled executables a build left behind are not counted (``build_output``)."""
     changed = retained_changes(stages, record)
     if changed is None:
         return None
-    return [name for name in changed if not any(contains(root, name) for root in owned)]
+    return [name for name in changed if not any(contains(root, name) for root in owned)
+            and not build_output(workspace, name, stages, record)]

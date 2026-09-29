@@ -45,6 +45,27 @@ class RetainedChangesTests(unittest.TestCase):
         retry = self.attempt("t2", str(self.dir / "gone"), self.snapshot("b.after", {}), changed_files=[])
         self.assertIsNone(assignment.outside(["src"], [first], retry))
 
+    def test_a_new_compiled_program_a_build_left_behind_is_not_a_scope_violation(self):
+        # A live Go run's Builder ran `go build .`, which wrote ./policy; the stage was refused for it.
+        workspace = Path(tempfile.mkdtemp())
+        (workspace / "policy").write_bytes(b"\x7fELF\x02\x01\x01" + b"\0" * 64)
+        (workspace / "notes.txt").write_text("stray")
+        (workspace / "script.sh").write_text("#!/bin/sh\necho hi\n")
+        start = self.snapshot("a.before", {"src/a.go": "1"})
+        after = self.snapshot("a.after", {"src/a.go": "2", "policy": "executable:x", "notes.txt": "n",
+                                          "script.sh": "executable:y"})
+        first = self.attempt("t1", start, after)
+        self.assertEqual(["notes.txt", "script.sh"], assignment.outside(["src"], [], first, workspace=workspace))
+        # Without the workspace nothing can be read, so nothing is excused.
+        self.assertEqual(["notes.txt", "policy", "script.sh"], assignment.outside(["src"], [], first))
+
+    def test_changing_an_existing_executable_still_counts(self):
+        workspace = Path(tempfile.mkdtemp())
+        (workspace / "tool").write_bytes(b"\x7fELF" + b"\0" * 64)
+        start = self.snapshot("a.before", {"src/a.go": "1", "tool": "executable:old"})
+        first = self.attempt("t1", start, self.snapshot("a.after", {"src/a.go": "2", "tool": "executable:new"}))
+        self.assertEqual(["tool"], assignment.outside(["src"], [], first, workspace=workspace))
+
     def test_a_first_attempt_without_snapshots_falls_back_to_its_measured_delta(self):
         only = {"stage": "terra", "changed_files": ["src/a.py", "other.txt"]}
         self.assertEqual(["other.txt"], assignment.outside(["src"], [], only))

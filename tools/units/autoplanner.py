@@ -10,8 +10,9 @@ import uuid
 
 try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
-    from .. import autocode_bug_job as bug_job, autocode_workflows as workflows
+    from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
 except ImportError:
+    import autocode_test_cases as test_cases
     import autocode_goals as goals
     import autocode_planning_artifacts as artifacts
     import autocode_support as s
@@ -60,6 +61,16 @@ affected_paths: the scheduler serializes milestones that share criterion IDs. Sc
 own milestone; put cross-component integration checks in a dependent milestone. Do not weaken coverage or
 rename protected criteria in an existing contract without the required user-backed change.
 """
+# A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
+# example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
+DESIGN_DELIVERABLES_RULE = """
+DESIGN DELIVERABLES: this job delivers a design, not code. Deliver exactly the files the request names and
+nothing else: no application code, no test files, no scripts. Every milestone's affected_paths and the
+initial_task's affected_paths list only those files (or their directory). Never mark a verification_method
+"test:". Verify each criterion by what the Validator can check directly in the delivered files: read them,
+and run read-only commands against them (for example python3 -c that loads a JSON file and checks a field),
+without adding any file to the repository.
+"""
 # Planning is otherwise never told how execution captures test evidence, so plans invented
 # scratch copies outside the workspace and reviewers blocked them for a "missing capture
 # command" (bugfix-cent-drift, 2026-09-28: three planning rounds).
@@ -77,6 +88,14 @@ CONTRACT DELTA: contract_changes describes only changes from the current goal_co
 handoff, not cumulative history. A permission already incorporated into that revision is not a new change:
 retain its approved text, cite the saved authorization in the summary, and omit it from contract_changes.
 If no protected item changes against the current revision, return contract_changes=[].
+"""
+CONTRACT_FIELDS_RULE = """
+CONTRACT LISTS: when open_blocking_questions is empty, the runner refuses a contract whose deliverables,
+required_behaviors or permission_boundaries is an empty list, and the report is sent back for repair. Give each at
+least one entry: deliverables are the files or artifacts produced; required_behaviors is what the finished work must
+do; permission_boundaries is what it may and may not touch (for example "Edit only pager/ and tests/; no network; no
+writes outside the workspace"). important_failure_cases, scope_exclusions and constraints may be empty when there is
+nothing to say: do not invent entries. While open_blocking_questions is non-empty, empty lists are allowed.
 """
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
@@ -152,6 +171,32 @@ SCHEMAS.update({
     "plan_finalize": obj({"contract": goals.PLANNING_BODY_SCHEMA, "summary": S,
                            "decisions": {"type": "array", "items": DECISION}}),
 })
+# Live planning reports were rejected, each costing a report repair, for a contract whose deliverables,
+# required_behaviors or permission_boundaries was an empty list (VALIDATION.md 2026-09-26; two Claude-model
+# trials, 2026-09-29). The field was present, so requiring it changes nothing, and a hard minItems would refuse a
+# draft that still has open_blocking_questions, where empty lists are legitimate. The model is told what each
+# list is for, in the schema it is given and in CONTRACT_FIELDS_RULE. Descriptions do not affect validation.
+CONTRACT_FIELD_NOTES = {
+    "deliverables": "The files or artifacts the work produces. At least one unless open_blocking_questions is non-empty.",
+    "required_behaviors": "What the finished work must do. At least one unless open_blocking_questions is non-empty.",
+    "permission_boundaries": "What the work may and may not touch, for example: Edit only pager/ and tests/; no "
+                             "network; no writes outside the workspace. At least one unless open_blocking_questions "
+                             "is non-empty.",
+    "important_failure_cases": "Failure cases that matter. May be empty; do not invent entries.",
+    "scope_exclusions": "Work that is explicitly out of scope. May be empty; do not invent entries.",
+    "constraints": "Constraints the user or the project imposes. May be empty; do not invent entries.",
+}
+
+
+def _described(body):
+    body = copy.deepcopy(body)
+    for key, note in CONTRACT_FIELD_NOTES.items():
+        body["properties"][key] = {**body["properties"][key], "description": note}
+    return body
+
+
+for _stage in ("astra_discovery", "glm_revise", "astra_finalize", "plan", "plan_revise", "plan_finalize"):
+    SCHEMAS[_stage]["properties"]["contract"] = _described(SCHEMAS[_stage]["properties"]["contract"])
 # Optional for old saved reports; new prompts require this whenever intent must change.
 SCHEMAS["requirements_gather"]["properties"]["proposed_reframes"] = {
     "type": "array", "items": obj({"requirement_id": S, "proposal": S, "question_id": S})}
@@ -724,7 +769,8 @@ def context(state, stage, state_path):
         import autocode_figma as figma
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
-        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY + EVIDENCE_FACTS)
+        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY + EVIDENCE_FACTS
+        + ("" if stage in ("astra_challenge", "plan_review") else CONTRACT_FIELDS_RULE))
     if stage != "requirements_gather":
         packet["capture_command"] = capture_command()
     clarification_policy = ("" if stage == "astra_challenge" else QUESTION_POLICY) + (
@@ -741,7 +787,7 @@ def context(state, stage, state_path):
         clarification_policy += INVESTIGATION_POLICY
     design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
     if stage != "requirements_gather":
-        design_rule += EXAMPLE_CRITERIA_RULE
+        design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))

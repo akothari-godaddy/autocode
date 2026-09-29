@@ -249,3 +249,41 @@ class LegacyCompatibilityTests(EpisodeCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ContractListTests(EpisodeCase):
+    """Live discovery reports were sent back for repair for an empty deliverables, required_behaviors or
+    permission_boundaries list (two Claude-model trials, 2026-09-29): the model is told what each list is for."""
+
+    STAGES = ("astra_discovery", "glm_revise", "astra_finalize")
+
+    def test_the_schema_the_model_gets_says_what_each_list_is_for(self):
+        for stage in (*self.STAGES, "plan", "plan_revise", "plan_finalize"):
+            fields = planner.SCHEMAS[stage]["properties"]["contract"]["properties"]
+            for key in ("deliverables", "required_behaviors", "permission_boundaries"):
+                with self.subTest(stage=stage, key=key):
+                    self.assertIn("At least one", fields[key]["description"])
+            self.assertIn("do not invent", fields["scope_exclusions"]["description"])
+        # The shared contract schema itself is unchanged.
+        self.assertNotIn("description", goals.BODY_SCHEMA["properties"]["deliverables"])
+
+    def test_the_planning_prompts_carry_the_rule_and_the_review_does_not(self):
+        for stage in self.STAGES:
+            prompt, _ = planner.context(self.state, stage, Path("/tmp/state.json"))
+            self.assertIn(planner.CONTRACT_FIELDS_RULE, prompt, stage)
+        review, _ = planner.context(self.state, "astra_challenge", Path("/tmp/state.json"))
+        self.assertNotIn(planner.CONTRACT_FIELDS_RULE, review)
+
+    def test_validation_is_unchanged(self):
+        schema = planner.SCHEMAS["astra_discovery"]
+        from autocode_support import validate_schema
+        validate_schema(discovery(body(), conflict_resolutions=[]), schema)
+        # A draft that still has questions may leave the lists empty, as before.
+        draft = clarification_only([{"id": "Q1", "question": "CLI or web?", "why": "Interface",
+                                     "options": ["CLI", "Web"], "proposed_default": "CLI"}])
+        draft.update(deliverables=[], required_behaviors=[], permission_boundaries=[])
+        goals.validate_body(self.state, draft)
+        ready = body()
+        ready["permission_boundaries"] = []
+        with self.assertRaisesRegex(ValueError, "missing permission_boundaries"):
+            goals.validate_body(self.state, ready)
