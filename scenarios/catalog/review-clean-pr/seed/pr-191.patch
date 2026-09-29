@@ -1,3 +1,20 @@
+diff --git a/README.md b/README.md
+index 691ba25..2edea1d 100644
+--- a/README.md
++++ b/README.md
+@@ -18,8 +18,10 @@ code as retryable (`regclient/policies.py`).
+ - **.de (DENIC)** rejects a repeated command with the same transaction id and
+   may suspend the account after repeated duplicates. The client never retries
+   against .de: one attempt, then the error goes to the caller.
+-- Every other registry currently uses the default policy: `SERVER_BUSY` and
+-  `RATE_LIMITED` are retried, three attempts in total.
++- **.com and .net** retry `SERVER_BUSY` and `RATE_LIMITED`, four attempts in
++  total, 0.5 s apart. **.org** retries the same errors, three attempts, 1 s apart.
++- Every other registry uses the default policy: `SERVER_BUSY` and
++  `RATE_LIMITED` are retried, three attempts in total, with no delay.
+ 
+ ## Tests
+ 
 diff --git a/regclient/client.py b/regclient/client.py
 index f3fe33c..85364c7 100644
 --- a/regclient/client.py
@@ -40,7 +57,7 @@ index f3fe33c..85364c7 100644
 +            self.sleep(policy.backoff_seconds)
 +        raise AssertionError("unreachable")
 diff --git a/regclient/policies.py b/regclient/policies.py
-index 417337d..6f613c2 100644
+index 417337d..ea63624 100644
 --- a/regclient/policies.py
 +++ b/regclient/policies.py
 @@ -1,5 +1,7 @@
@@ -53,7 +70,7 @@ index 417337d..6f613c2 100644
  from dataclasses import dataclass
  
  
-@@ -7,16 +9,28 @@ from dataclasses import dataclass
+@@ -7,16 +9,27 @@ from dataclasses import dataclass
  class RetryPolicy:
      retryable_errors: tuple[str, ...]
      max_attempts: int
@@ -64,7 +81,6 @@ index 417337d..6f613c2 100644
 +
  
 +TRANSIENT = ("SERVER_BUSY", "RATE_LIMITED")
-+CONNECTION = ("CONNECTION_RESET",)
  
 -DEFAULT = RetryPolicy(retryable_errors=("SERVER_BUSY", "RATE_LIMITED"), max_attempts=3)
 +DEFAULT = RetryPolicy(retryable_errors=TRANSIENT, max_attempts=3)
@@ -75,8 +91,8 @@ index 417337d..6f613c2 100644
 +# Policies for the registries we currently talk to. Anything not listed here
 +# gets DEFAULT.
 +REGISTRIES = {
-+    "com": RetryPolicy(retryable_errors=TRANSIENT + CONNECTION, max_attempts=4, backoff_seconds=0.5),
-+    "net": RetryPolicy(retryable_errors=TRANSIENT + CONNECTION, max_attempts=4, backoff_seconds=0.5),
++    "com": RetryPolicy(retryable_errors=TRANSIENT, max_attempts=4, backoff_seconds=0.5),
++    "net": RetryPolicy(retryable_errors=TRANSIENT, max_attempts=4, backoff_seconds=0.5),
 +    "org": RetryPolicy(retryable_errors=TRANSIENT, max_attempts=3, backoff_seconds=1.0),
 +    # DENIC (.de) rejects a repeated command with the same transaction id and may
 +    # suspend the account after repeated duplicates: never retry there.
@@ -88,7 +104,7 @@ index 417337d..6f613c2 100644
 -    return POLICIES.get(tld.lower(), DEFAULT)
 +    return REGISTRIES.get(tld.lower(), DEFAULT)
 diff --git a/tests/test_client.py b/tests/test_client.py
-index 2d67651..5e916a2 100644
+index 2d67651..0e46245 100644
 --- a/tests/test_client.py
 +++ b/tests/test_client.py
 @@ -8,28 +8,55 @@ def command(tld="com"):
@@ -123,24 +139,24 @@ index 2d67651..5e916a2 100644
          transport = ScriptedTransport(["timeout", "ok"])
 -        self.assertTrue(RegistryClient(transport).send(command()).ok)
 +        self.assertTrue(client(transport).send(command()).ok)
-         self.assertEqual(["txn-1"], transport.executed)
- 
++        self.assertEqual(["txn-1"], transport.executed)
++
 +    def test_timeout_after_execution_is_not_resent(self):
 +        transport = ScriptedTransport(["timeout-after", "ok"])
 +        self.assertTrue(client(transport).send(command()).ok)
 +        self.assertEqual(1, transport.calls)
-+        self.assertEqual(["txn-1"], transport.executed)
-+
+         self.assertEqual(["txn-1"], transport.executed)
+ 
 +    def test_de_is_never_retried(self):
 +        transport = ScriptedTransport(["error:SERVER_BUSY", "ok"])
 +        with self.assertRaises(RegistryError):
 +            client(transport).send(command("de"))
 +        self.assertEqual(1, transport.calls)
 +
-+    def test_com_retries_connection_reset(self):
-+        transport = ScriptedTransport(["error:CONNECTION_RESET", "ok"])
++    def test_com_gets_four_attempts(self):
++        transport = ScriptedTransport(["error:SERVER_BUSY"] * 3 + ["ok"])
 +        self.assertTrue(client(transport).send(command("com")).ok)
-+        self.assertEqual(2, transport.calls)
++        self.assertEqual(4, transport.calls)
 +
 +    def test_backoff_is_applied_between_attempts(self):
 +        waits = []
