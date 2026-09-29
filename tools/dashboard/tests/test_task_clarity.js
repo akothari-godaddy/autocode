@@ -170,3 +170,6 @@ for(const status of ['PAUSED_INVALID_OUTPUT','PAUSED_REPORT_REPAIR_LIMIT','PAUSE
   assert.equal(blocked.reason,'Report schema rejected: missing summary');
   assert.equal(blocked.action,'Inspect failure');
 }
+
+const dependencyWait=classify({status:'WAITING_FOR_DEPENDENCY',stop_reason:'Waiting for Planner backend. No user action needed.'});
+assert.equal(dependencyWait.label,'Waiting for prerequisite');
