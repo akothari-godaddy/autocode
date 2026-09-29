@@ -11,13 +11,24 @@ $PY scenarios/run.py check                        # prove every oracle (seconds;
 $PY scenarios/run.py run --fake                   # every scenario through AutoCode with a scripted model (under a minute, no spend)
 $PY scenarios/run.py run bugfix-iso-weeks --profile glm53-openai --i-authorize-live-model-spend
 $PY scenarios/run.py route --fake                 # which workflow AutoCode recognizes for each prompt in routing.toml
+$PY scenarios/run.py compare --fake               # AutoCode vs a plain agent on the same oracles (scripted; no spend)
+$PY scenarios/run.py stats                        # per scenario and mode: runs, passes, pass streak, time, model stages
 $PY -m unittest scenarios/test_harness.py         # the harness's own tests (under a minute)
 ```
 
 Results land in `.scenario-runs/<time>-<id>-<mode>/`: `result.json` (verdict,
-every oracle check, CLI calls, answers given on the user's behalf, stages,
-model time and tokens), `steps.jsonl`, the final `state.json`, and the
-delivered `project/`, kept for inspection.
+every oracle check, CLI calls, answers given on the user's behalf, wall time,
+stages with a per-stage count and time breakdown, report-repair rounds, model
+time and tokens), `steps.jsonl`, the final `state.json`, and the delivered
+`project/`, kept for inspection.
+
+`run.py stats` reads those results back. One pass can be luck, so it reports
+how many times each scenario ran in each mode, how many runs passed, and the
+current streak of consecutive passes, with median wall time and model stages.
+Fake and live modes are never combined. `test_harness.py` also fails if the
+tiny scenarios (`greenfield-greeting-cli`, `bugfix-trivial`) take more model
+stages with the scripted model than they do today, so extra steps can't creep in
+unnoticed (issue #15).
 
 ## Three levels
 
@@ -40,6 +51,7 @@ harness must report `FALSE_COMPLETE`. That is how the harness itself is tested.
 | `HONEST_BLOCKER` | AutoCode stopped (paused, waiting for a person) without claiming completion, where completion was expected. The oracle summary shows how far the work got. |
 | `ERROR` | The harness could not finish (budget used up, no progress, a CLI crash) or the oracle crashed. |
 | `SKIPPED` | A required tool is missing, or the scenario does not support the requested mode. |
+| `NOT_EXERCISED` | The run ended well but never reached a stage the scenario exists to test (`[run] requires_stages`), so it says nothing about that stage. Not counted as a failure; `run.py stats` shows how often a scenario is exercised. A false completion or error keeps its own verdict. |
 
 The driver answers AutoCode's clarifying questions with AutoCode's own proposed
 default and records each answer in `result.json`. It approves the plan it is
@@ -69,7 +81,8 @@ cover five kinds of job and check three things beyond the deliverable:
 
 1. **Which workflow ran.** The status view (`autocode --status`,
    docs/task-run.md) carries a `workflow` field naming one of the five,
-   decided by the first stage of every run (`recognize_workflow`). Oracles
+   decided by the first stage of every run (`recognize_workflow`) unless the
+   user named it with `--workflow`. Oracles
    check it through `run_checks`, together with which saved stages ran: a
    review must not dispatch a Builder or ask for plan approval; a bug fix must
    not start with requirements gathering; a three-line fix must not get
@@ -89,12 +102,86 @@ should be recognized as; `run.py route` starts each one, lets AutoCode run a
 single stage, and reads `workflow` from the status view.
 
 Oracles receive an optional third argument, `run`, with the final status view,
-the saved stage names, the questions the driver answered and the CLI calls it
-made. It is `None` in `check` mode, so run-level checks contribute nothing
+the saved stage names, the questions the driver answered, the CLI calls it
+made, and AutoResolver's accepted diagnoses (`resolutions`). It is `None` in `check` mode, so run-level checks contribute nothing
 there and the reference/broken variants are told apart by files alone.
 
-Not yet covered: a conversation that changes activity mid-run (review → "fix
-them" → build → bug found → fix), which needs a multi-turn driver.
+### Conversations: follow-up turns in the same run
+
+One conversation should move between workflows (issue #51): review a PR, then
+"Fix them." builds from the review's findings in the same run, with no new
+project and no requirements questions. A scenario says this with `[[turn]]`
+tables in `scenario.toml`, in order:
+
+```toml
+[[turn]]
+after = "complete"      # or "stop", or "needs:<kind>" to say it instead of serving that need
+say = "Fix them."
+```
+
+When the run reaches the state `after` names, the driver says the message with
+`autocode --follow-up TEXT` (an action on the existing run, like `--feedback`)
+and keeps driving. Nothing in AutoCode accepts `--follow-up` yet, so
+`review-then-fix` is a known failure until the product side of #51 exists. The
+oracle's `run` gets `turns`: one record per turn, with the same keys as `run`
+itself (the view that turn ended with, its stages, answers and CLI calls), so
+`run_checks` can judge each turn on its own. Stages are assigned to a turn by
+when they finished.
+
+## Comparing with a plain agent
+
+AutoCode adds stages so that its results can be trusted. `compare` measures
+whether that pays off. It runs each scenario twice: once through AutoCode, as
+`run` does, and once through a plain coding agent in a single call with the
+same seed and brief. There is no planning, review or completion gate on the
+agent's side. The same oracle then judges both deliveries.
+
+```sh
+$PY scenarios/run.py compare --fake                                        # plumbing only: both apply the reference
+$PY scenarios/run.py compare bugfix-iso-weeks --fake --fake-baseline-solution broken/special-case
+$PY scenarios/run.py compare bugfix-iso-weeks feature-timesheet-by-project \
+    --profile openai-only --baseline opencode --i-authorize-live-model-spend
+```
+
+- **The agent:** `--baseline` picks `opencode` (the default, and AutoCode's
+  default engine) or `codex`. Each is launched with the same command line
+  AutoCode uses for that engine.
+  - The opencode agent defaults to the profile's builder model;
+    `--baseline-model` overrides it.
+  - `--baseline-command 'CMD {project} {model}'` runs any other agent, with
+    the brief on stdin.
+- **Fairness:**
+  - Give both sides the same model where you can.
+  - Both sides share one time budget per scenario.
+  - The agent is a single call. The comparison asks whether AutoCode's
+    extra stages beat one good attempt, not whether AutoCode beats a person
+    iterating with the agent.
+
+**Scoring.** Each side gets a *deliverable* result and a verdict.
+
+- **Deliverable:** the oracle with no run record, as in `check`. AutoCode-only
+  process checks, such as workflow recognition, therefore don't count against
+  the agent.
+- **Verdict:** as in the table above.
+  - The agent claims completion by exiting 0. A wrong delivery with exit 0 is
+    therefore `FALSE_COMPLETE`, and a nonzero exit or a timeout is
+    `HONEST_BLOCKER`.
+  - A plain agent has no machine-readable way to stop. On scenarios whose
+    correct ending is a stop (`expected = "stop"`), exiting 0 is a false
+    completion.
+
+**Output.** Results land in `.scenario-runs/<time>-compare-<mode>/`. The
+directory holds:
+
+- `comparison.md`: accepted deliveries, false completions and time for each
+  side, plus one row per scenario
+- `comparison.json`: the same data
+- each side's own evidence: AutoCode's run directory as `run` writes it, and
+  `<id>-baseline/` with the agent's log, the delivered project and
+  `result.json`
+
+A fake comparison proves only the plumbing and the scoring. What matters is a
+live comparison with matched models and a recorded profile.
 
 ## Catalog
 
@@ -107,6 +194,7 @@ them" → build → bug found → fix), which needs a multi-turn driver.
 | `stuck-planner-citation` | bugfix | The stuck-stage Investigator, with a real model. Every stage is scripted except the Investigator (`--investigator-model openai/gpt-6-sol`, high); the scripted Planner repeats a mistake seen live (prose after a cited path) until repairs run out. Passes only if the real Investigator names the cause and its guidance gets the retried Planner through. One real model call: skipped without `--i-authorize-live-model-spend`. |
 | `bugfix-trivial` | bugfix | An off-by-one. Correctness is easy; the check is proportionality: no requirements gathering, no plan-review rounds, no questions, at most five model stages. |
 | `bugfix-not-reproducible` | bugfix | The reported bug does not exist in this code. Passes by saying so or asking; a "defensive" change to working code fails. |
+| `feature-refund-window` | feature | Built to reach AutoResolver (#59): the seed's `store_date()` helper ignores the store's UTC-8 offset, and the cap is on the running total of partial refunds. A plausible first attempt passes its own tests and fails hidden boundary tests; the oracle checks that AutoResolver's diagnosis names a planted defect. Runs that never reach `astra_resolve` are `NOT_EXERCISED` (always, with the scripted model). |
 | `feature-timesheet-by-project` | feature | Adding an option to an existing CLI without changing existing output. |
 | `implement-locked-design` | feature | An approved design is a constraint: specified modules and signatures (checked by AST), clock injected, no questions about settled decisions. A single-class "simplification" fails. |
 | `implement-design-conflict` | feature | The approved design contradicts a frozen API. The right ending is a stop with the conflict written down and no code changed (`expected = "stop"`). |
@@ -122,6 +210,7 @@ them" → build → bug found → fix), which needs a multi-turn driver.
 | `design-review-sound` | design | The same design with the gaps closed. No blocking concerns. |
 | `discuss-cache-choice` | discuss | In-process vs. shared cache, decided by facts planted in the repository (four shared-nothing workers against a 60/hour upstream limit). Cites sources, weighs both options, writes no code, asks at most three questions. |
 | `investigate-two-caches` | investigate | Explain two caches: scope, TTL and users must match the code; consequence of removing one named; nothing changed. |
+| `review-then-fix` | conversation | Review `pr-184.patch`, then "Fix them." in the same run: the PR lands with both regressions fixed and a test that catches each (the oracle swaps back one unfixed file at a time), the advisory finding is left alone, and the fix turn asks no requirements questions. Known failure until AutoCode accepts `--follow-up` (#51). |
 
 Planned next: Figma design → implementation, and multi-service systems started
 with `docker compose` and checked end to end.
@@ -178,7 +267,9 @@ catalog/<id>/
                     optional [fake] flags = [...] (extra CLI flags), fault = "name" (a scripted
                     mistake in harness/fake_codex.py), live_investigator = true (the scripted run
                     still makes one real model call; needs --i-authorize-live-model-spend),
-                    [run] max_steps, timeout_minutes, expected = "complete"|"stop"|"any", known_failure = "why"
+                    [run] max_steps, timeout_minutes, expected = "complete"|"stop"|"any", known_failure = "why",
+                          requires_stages = ["astra_resolve"] (a model stage the run must reach to count)
+                    [[turn]] after = "complete"|"stop"|"needs:<kind>", say = "follow-up message" (optional, repeatable)
   brief.md          the request, exactly as a user would type it (plain text, no headings)
   seed/             the starting project, committed before the run (omit for an empty repo)
   oracle.py         def check(project, scenario, run=None) -> list[Check]
