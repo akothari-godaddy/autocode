@@ -156,6 +156,17 @@ a run instead; a `provider/model` id such as `openai/gpt-6-sol` runs it through 
 Codex run. Guidance goes into the retried stage's prompt: for planning, every planning stage until the
 plan is presented; otherwise that stage until it completes.
 
+A retry is checked, not trusted. The Investigator states the diagnosed cause as a
+plain-English `example` ("Given the Planner's report cited `docs/bugs/cent-drift.json (see
+note)`; when the runner validated `code_refs`; then it rejected the path as missing") and,
+unless it says in `untestable` why no command can, a `probe`: a command that exits 0
+exactly when the files it cites in `evidence_refs` show that cause. Every cited file must
+exist, in the repository or in the run's directory, and a retry must cite at least one. The
+runner copies only the cited run files into a scratch tree, each at `run/<name>`, and runs
+the probe there: a probe that does not exit 0, or that needs a file the Investigator did
+not cite, rejects the report, and the original pause is restored with the reason. The
+probe's receipt is recorded with the investigation.
+
 Bounds: one investigation per distinct stage and pause, three per run
 (`settings.stuck_investigation.max_calls_per_run`; 0 turns it off). A second failure of the
 same problem, a `pause` recommendation or a failed investigation restores the original

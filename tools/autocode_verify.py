@@ -547,7 +547,8 @@ def run_suite(framework, command, tree, evidence_dir, label, *, timeout):
     return receipt
 
 
-def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeout=DEFAULT_TIMEOUT) -> dict:
+def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeout=DEFAULT_TIMEOUT,
+                files=None) -> dict:
     """Run tests or one command in a scratch copy of the workspace as it is now, never in the workspace.
 
     The copy is HEAD plus every uncommitted change (so files a stage just delivered are there),
@@ -555,6 +556,9 @@ def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeo
     review. ``tests`` runs those test files with the project's framework and returns per-test
     results; ``command`` runs a shell command (a discussion's probe). Returns the receipt with
     ``results`` (or None) and ``error`` (why nothing could be run, else "").
+    ``files`` maps a path inside the tree to a file outside it that is copied in first (a stuck
+    investigation's cited run files, under ``run/``), so a probe sees exactly what was cited and
+    never the real run directory.
     """
     workspace, run_dir = Path(workspace), Path(run_dir)
     head = _git(workspace, "rev-parse", "HEAD").strip()
@@ -566,6 +570,10 @@ def scratch_run(workspace, run_dir, *, patch=None, tests=(), command=None, timeo
             if applied.returncode:
                 return {"error": f"git apply {patch} failed: {(applied.stderr or applied.stdout).strip()[-300:]}",
                         "results": None}
+        for relative, source in (files or {}).items():
+            target = tree / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
         if command is None:
             python = python_for(workspace)
             framework = detect_framework(tree, python=python)

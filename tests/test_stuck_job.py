@@ -16,7 +16,12 @@ class Paused(Exception):
         self.status = status
 
 
-def state_for(workspace="/nowhere", next_stage="terra", status="RUNNING", **extra):
+def state_for(workspace=None, next_stage="terra", status="RUNNING", **extra):
+    if workspace is None:  # a real directory holding the fixture report's cited evidence file
+        workspace = Path(tempfile.mkdtemp(prefix="stuck-ws-"))
+        (workspace / "docs" / "bugs").mkdir(parents=True)
+        (workspace / "docs" / "bugs" / "cent-drift.json").write_text("{}\n")
+        workspace = str(workspace)
     state = {"version": 3, "task": "Fix the rounding drift", "workspace": workspace, "status": status,
              "phase": "EXECUTING", "next_stage": next_stage, "stages": [], "iteration": 1,
              # An OpenCode run records its transport at creation (autocode.py configure).
@@ -33,9 +38,13 @@ def state_for(workspace="/nowhere", next_stage="terra", status="RUNNING", **extr
 def report(recommendation="retry", **overrides):
     value = {"diagnosis": "The Planner cites the diagnosis with prose after its path.", "cause": "stage_output",
              "guidance": "Cite docs/bugs/cent-drift.json exactly; put the explanation in the summary.",
-             "recommendation": recommendation, "user_question": "", "evidence_refs": ["docs/bugs/cent-drift.json"]}
+             "recommendation": recommendation, "user_question": "", "evidence_refs": ["docs/bugs/cent-drift.json"],
+             "example": "Given code_refs 'docs/bugs/cent-drift.json (see the note)'; when the runner checked the "
+                        "path; then it rejected it as missing",
+             "probe": "", "untestable": "The fixture reads no saved attempt; the cause is stated, not shown"}
     if recommendation == "pause":
-        value.update(guidance="", cause="needs_user", user_question="May the fix change the public API?")
+        value.update(guidance="", cause="needs_user", user_question="May the fix change the public API?",
+                     example="", untestable="")
     value.update(overrides)
     return value
 
@@ -98,7 +107,7 @@ class ApplyTests(unittest.TestCase):
         state = self.investigated("PAUSED_REPEATED_FAILURE", pending_report_repair={"attempts": 2},
                                   failure_history=copy.deepcopy(history),
                                   stages=[{"stage": "terra", "failure_key": "k1"}, {"stage": "sol", "failure_key": "k2"}])
-        stuck.apply(state, report(), {"output": "o"}, "/ws")
+        stuck.apply(state, report(), {"output": "o"}, state["workspace"])
         # One more attempt, not a fresh failure budget: another failure counts on top of these.
         self.assertEqual(history, state["failure_history"])
         self.assertEqual(["k1", "k2"], [row.get("failure_key") for row in state["stages"]])
@@ -111,7 +120,7 @@ class ApplyTests(unittest.TestCase):
         state = self.investigated("PAUSED_REPEATED_FAILURE")
         state["settings"]["roles"][stuck.ROUTE] = {"model": "openai/gpt-6-astra", "engine": "opencode",
                                                    "reasoning_effort": "xhigh"}
-        stuck.apply(state, report(), {"output": "o"}, "/ws")
+        stuck.apply(state, report(), {"output": "o"}, state["workspace"])
         self.assertNotIn(stuck.ROUTE, state["settings"]["roles"])
         self.assertEqual(("openai/gpt-6-astra", "opencode"),
                          (state["stuck_investigations"][0]["model"], state["stuck_investigations"][0]["engine"]))
@@ -136,15 +145,15 @@ class ApplyTests(unittest.TestCase):
         for stage, used, expected in (("astra_challenge", 2, 4), ("astra_finalize", 2, 3)):
             state = self.investigated("PAUSED_PLANNING_BUDGET", stage=stage,
                                       planning={"review_call_limit": 2, "astra_calls": used})
-            stuck.apply(state, report(), {}, "/ws")
+            stuck.apply(state, report(), {}, state["workspace"])
             self.assertEqual((expected, "PLANNING"), (state["planning"]["review_call_limit"], state["phase"]), stage)
         state = self.investigated("PAUSED_NO_PROGRESS", no_progress_batches=3)
-        stuck.apply(state, report(), {}, "/ws")
+        stuck.apply(state, report(), {}, state["workspace"])
         self.assertEqual(2, state["no_progress_batches"])
 
     def test_pause_restores_the_original_pause_with_the_diagnosis(self):
         state = self.investigated("PAUSED_REPEATED_FAILURE", pending_report_repair={"attempts": 2})
-        stuck.apply(state, report("pause"), {}, "/ws")
+        stuck.apply(state, report("pause"), {}, state["workspace"])
         self.assertEqual(("PAUSED_REPEATED_FAILURE", "PAUSED_OR_BLOCKED", "terra"),
                          (state["status"], state["phase"], state["next_stage"]))
         self.assertIn("the original reason", state["stop_reason"])
@@ -155,7 +164,7 @@ class ApplyTests(unittest.TestCase):
 
     def test_a_diagnose_only_pause_is_never_retried(self):
         state = self.investigated("PAUSED_BUILDER_RETRY_LIMIT")
-        stuck.apply(state, report(), {}, "/ws")
+        stuck.apply(state, report(), {}, state["workspace"])
         self.assertEqual("PAUSED_BUILDER_RETRY_LIMIT", state["status"])
         self.assertIn("Investigator (paused)", state["stop_reason"])
 
@@ -167,7 +176,7 @@ class ApplyTests(unittest.TestCase):
             with self.subTest(name):
                 state = self.investigated("PAUSED_REPEATED_FAILURE")
                 with self.assertRaises(ValueError):
-                    stuck.apply(state, value, {"changed_files": changed}, "/ws")
+                    stuck.apply(state, value, {"changed_files": changed}, state["workspace"])
 
     def test_a_failed_investigation_restores_the_original_pause(self):
         state = self.investigated("PAUSED_INVALID_OUTPUT", pending_report_repair={"attempts": 2})
@@ -185,7 +194,7 @@ class GuidanceTests(unittest.TestCase):
     def in_force(self, stage):
         state = state_for(next_stage=stage)
         stuck.intercept(state, "PAUSED_REPEATED_FAILURE", "x")
-        stuck.apply(state, report(), {}, "/ws")
+        stuck.apply(state, report(), {}, state["workspace"])
         return state
 
     def test_guidance_reaches_the_stuck_stage_before_its_handoff_data(self):
@@ -272,7 +281,7 @@ class DriveTests(unittest.TestCase):
 
         def apply(current, stage, outcome):
             if stage == stuck.STAGE:
-                return stuck.apply(current, outcome, {}, "/ws")
+                return stuck.apply(current, outcome, {}, state["workspace"])
             current.update(next_stage=None, status="TASK_COMPLETE")
 
         def fail(status):
@@ -328,7 +337,7 @@ class DriveTests(unittest.TestCase):
 
         def apply(current, stage, outcome):
             if stage == stuck.STAGE:
-                stuck.apply(current, outcome, {}, "/ws")
+                stuck.apply(current, outcome, {}, state["workspace"])
 
         stuck.drive(state, dispatch, apply=apply, active=lambda s: s["status"] == "RUNNING", skip=object(),
                     paused=Paused, investigate=True)
@@ -389,3 +398,70 @@ class DriveTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProbeTests(unittest.TestCase):
+    """A retry's diagnosed cause is shown by a probe the runner runs over the cited files only; no model."""
+
+    REJECTED = {"code_refs": ["docs/bugs/cent-drift.json (see the note)"], "summary": "plan"}
+
+    def setup(self):
+        import json, subprocess
+        workspace = Path(tempfile.mkdtemp(prefix="stuck-probe-ws-"))
+        (workspace / "docs" / "bugs").mkdir(parents=True)
+        (workspace / "docs" / "bugs" / "cent-drift.json").write_text("{}\n")
+        for command in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "seed"]):
+            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@example.test", *command],
+                           cwd=workspace, check=True)
+        run_dir = Path(tempfile.mkdtemp(prefix="stuck-probe-run-"))
+        (run_dir / "astra_discovery-03.json").write_text(json.dumps(self.REJECTED))
+        (run_dir / "secret-uncited.json").write_text("{}")
+        state = state_for(workspace=str(workspace), next_stage="astra_discovery")
+        self.assertTrue(stuck.intercept(state, "PAUSED_REPEATED_FAILURE", "rejected three times"))
+        return state, workspace, run_dir
+
+    def apply(self, state, run_dir, workspace, **overrides):
+        value = report(**{"evidence_refs": [str(run_dir / "astra_discovery-03.json")], "untestable": "", **overrides})
+        autoresolver.apply_job(stuck.STAGE, state, value,
+                               {"changed_files": [], "output": str(run_dir / "investigate_stuck-01.json")}, str(workspace))
+        return state
+
+    def test_a_probe_over_the_cited_run_file_is_accepted_and_recorded(self):
+        state, workspace, run_dir = self.setup()
+        probe = "python3 -c \"import json; r = json.load(open('run/astra_discovery-03.json')); assert ' ' in r['code_refs'][0]\""
+        self.apply(state, run_dir, workspace, probe=probe, example="Given code_refs 'docs/bugs/cent-drift.json (see "
+                   "the note)'; when the runner checked the path; then it was rejected as missing")
+        entry = state["stuck_investigations"][0]
+        self.assertEqual(("retried", 0, probe), (entry["outcome"], entry["probe_result"]["exit_code"], entry["probe"]))
+        self.assertEqual("astra_discovery", state["next_stage"])
+        self.assertTrue((run_dir / "secret-uncited.json").is_file())  # the real run directory is untouched
+
+    def test_a_probe_that_does_not_show_the_cause_rejects_the_report(self):
+        state, workspace, run_dir = self.setup()
+        with self.assertRaisesRegex(ValueError, "diagnosed causes' probes did not exit 0"):
+            self.apply(state, run_dir, workspace, example="x",
+                       probe="python3 -c \"import json; r = json.load(open('run/astra_discovery-03.json')); assert ' ' not in r['code_refs'][0]\"")
+
+    def test_a_probe_sees_only_the_cited_files(self):
+        state, workspace, run_dir = self.setup()
+        with self.assertRaisesRegex(ValueError, "did not exit 0"):
+            self.apply(state, run_dir, workspace, example="x", probe="test -f run/secret-uncited.json")
+
+    def test_cited_files_must_exist(self):
+        state, workspace, run_dir = self.setup()
+        with self.assertRaisesRegex(ValueError, "not found there"):
+            self.apply(state, run_dir, workspace, example="x", untestable="judgement",
+                       evidence_refs=["docs/bugs/no-such-note.json"])
+        self.assertEqual({"run/astra_discovery-03.json": (run_dir / "astra_discovery-03.json").resolve()},
+                         stuck.cited_files(report(evidence_refs=["docs/bugs/cent-drift.json:3",
+                                                                 str(run_dir / "astra_discovery-03.json")]),
+                                           workspace, run_dir))
+
+    def test_a_retry_needs_an_example_and_exactly_one_of_probe_and_untestable(self):
+        state, workspace, run_dir = self.setup()
+        with self.assertRaisesRegex(ValueError, "example in plain English"):
+            self.apply(state, run_dir, workspace, example=" ", untestable="judgement")
+        with self.assertRaisesRegex(ValueError, "exactly one of probe"):
+            self.apply(state, run_dir, workspace, example="x")
+        with self.assertRaisesRegex(ValueError, "must cite the files"):
+            self.apply(state, run_dir, workspace, example="x", untestable="judgement", evidence_refs=[])

@@ -27,8 +27,17 @@ cannot approve work, change requirements or criteria, weaken tests, grant permis
 spend beyond the one attempt, or write anything (it runs read-only). Decisions that belong to the
 user (permissions, scope, goal and criteria changes, spend limits) never come here.
 
+A retry is checked, not trusted. The Investigator states the diagnosed cause as a
+plain-English ``example`` and, unless it says why none can (``untestable``), a ``probe``:
+a command that exits 0 exactly when the files it cites in ``evidence_refs`` show that
+cause. Every cited file must exist (in the repository or this run's directory). The runner
+copies only the cited run files into a scratch tree, under ``run/``, and runs the probe
+there (autocode_test_cases.run_probes); a probe that does not exit 0, or that needs an
+uncited file, rejects the report and the original pause is restored.
+
 Pure module: prompt, schema, transitions and the drive loop. Imports nothing from the
-runner; the runner passes its pause exception type in. State keys written:
+runner; the runner passes its pause exception type in, and the unit passes the function
+that runs the probe. State keys written:
 ``stuck_investigation`` (the one in progress or in force) and ``stuck_investigations``
 (history).
 """
@@ -37,6 +46,12 @@ from __future__ import annotations
 import datetime as dt
 import json
 from dataclasses import replace
+from pathlib import Path
+
+try:
+    from .autocode_test_cases import run_probes
+except ImportError:
+    from autocode_test_cases import run_probes
 
 STAGE = "investigate_stuck"
 ROUTE = "stuck_investigator"
@@ -55,9 +70,16 @@ TEXT = {"type": "string"}
 TEXTS = {"type": "array", "items": TEXT}
 SCHEMA = {
     "type": "object", "additionalProperties": False,
-    "required": ["diagnosis", "cause", "guidance", "recommendation", "user_question", "evidence_refs"],
+    "required": ["diagnosis", "cause", "guidance", "recommendation", "user_question", "evidence_refs",
+                 "example", "probe", "untestable"],
     "properties": {
         "diagnosis": TEXT,
+        # example: the diagnosed cause as one concrete case in plain English; probe: a shell command
+        # that exits 0 exactly when the cited files show it; untestable: why no command can. A retry
+        # needs the example and exactly one of probe / untestable.
+        "example": TEXT,
+        "probe": TEXT,
+        "untestable": TEXT,
         "cause": {"type": "string", "enum": ["stage_output", "role_disagreement", "missing_information",
                                              "environment", "needs_user", "other"]},
         "guidance": TEXT,
@@ -95,7 +117,16 @@ Return:
 - recommendation: retry only when your guidance would plausibly make the next attempt succeed; pause for
   environment, needs_user, or when you cannot tell. Never guess.
 - user_question: when pausing, the one question or action the user must take; otherwise "".
-- evidence_refs: files or saved outputs you relied on.
+- evidence_refs: files or saved outputs you relied on. Every one must exist: a repository path, or a
+  saved output's path from recent_stages or failure_history. A retry needs at least one.
+- example: for a retry, the diagnosed cause as one concrete case in plain English: "Given <the attempt's
+  exact output>, when <the runner checked it>, then <it rejected it because ...>".
+- probe: for a retry, a shell command that exits 0 exactly when the files you cite show that cause. The
+  runner copies ONLY the run files you cite into a scratch tree, each at run/<its file name> (repository
+  files keep their own paths), and runs the probe there; it rejects your report if the probe does not
+  exit 0 or needs a file you did not cite. For example: python3 -c "import json; r = json.load(open(
+  'run/astra_discovery-03.json')); assert ' ' in r['code_refs'][0]". When no command can show the cause
+  (a judgement about two positions), leave probe "" and say why in untestable; otherwise untestable is "".
 
 You cannot approve work, change requirements or acceptance criteria, weaken tests, grant permissions or extend
 budgets; the runner grants at most one more attempt. Return JSON only, matching the schema the runner gives you.
@@ -263,6 +294,44 @@ def check(value: dict, changed_files) -> None:
         raise ValueError("A retry needs concrete guidance for the next attempt")
     if value["recommendation"] == "pause" and value["cause"] == "needs_user" and not value["user_question"].strip():
         raise ValueError("A pause for the user must say what the user has to decide")
+    if value["recommendation"] == "retry":
+        if not value.get("example", "").strip():
+            raise ValueError("A retry needs the diagnosed cause as an example in plain English")
+        if bool(value.get("probe", "").strip()) == bool(value.get("untestable", "").strip()):
+            raise ValueError("A retry needs exactly one of probe (a command that exits 0 exactly when the cited "
+                             "files show the cause) or untestable (why no command can)")
+        if not [ref for ref in value["evidence_refs"] if str(ref).strip()]:
+            raise ValueError("A retry must cite the files it relied on in evidence_refs")
+
+
+def cited_files(value: dict, workspace, run_dir) -> dict[str, Path]:
+    """Resolve evidence_refs; return the run-directory ones as {tree path under run/: source file}.
+
+    A ref is a repository path, a path under this run's directory (relative or absolute), optionally
+    with a ``:line`` suffix. Raises ValueError naming refs that do not exist or lie elsewhere.
+    """
+    workspace = Path(workspace).resolve()
+    run_dir = Path(run_dir).resolve() if run_dir else None
+    copies, missing = {}, []
+    for raw in value["evidence_refs"]:
+        text = str(raw).strip()
+        if not text:
+            continue
+        ref = Path(text.rsplit(":", 1)[0] if ":" in text and text.rsplit(":", 1)[1].isdigit() else text)
+        candidates = [ref] if ref.is_absolute() else [workspace / ref, *([run_dir / ref] if run_dir else [])]
+        found = next((c for c in candidates if c.is_file()), None)
+        if found is None:
+            missing.append(text)
+            continue
+        found = found.resolve()
+        if run_dir and found.is_relative_to(run_dir):
+            copies["run/" + found.relative_to(run_dir).as_posix()] = found
+        elif not found.is_relative_to(workspace):
+            missing.append(text)
+    if missing:
+        raise ValueError("evidence_refs must name files that exist in the repository or this run's directory; "
+                         f"not found there: {missing}")
+    return copies
 
 
 def release_route(state: dict) -> dict:
@@ -271,8 +340,17 @@ def release_route(state: dict) -> dict:
     return (state.get("settings") or {}).get("roles", {}).pop(ROUTE, None) or {}
 
 
-def apply(state: dict, value: dict, record: dict, workspace) -> None:
+def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> None:
+    """``run_probe(command, files)`` runs the probe in a scratch tree with ``files`` copied in (the unit
+    passes autocode_verify.scratch_run); without it a probed diagnosis is rejected rather than trusted."""
     check(value, record.get("changed_files"))
+    run_dir = Path(record["output"]).parent if record.get("output") else None
+    cited = cited_files(value, workspace, run_dir)
+    probe = value.get("probe", "").strip()
+    runner = (lambda command: run_probe(command, cited)) if run_probe else \
+        (lambda command: {"error": "no probe runner was given"})
+    shown = run_probes([{"id": "the diagnosed cause", "example": value.get("example", ""), "probe": probe}],
+                       runner, what="diagnosed cause", key="id") if probe else []
     request = state.pop("stuck_investigation")
     used = release_route(state)
     retry = value["recommendation"] == "retry" and request["status"] in RETRYABLE
@@ -280,6 +358,8 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
     entry = next(row for row in reversed(state["stuck_investigations"]) if row["identity"] == request["identity"])
     entry.update(outcome=outcome, diagnosis=value["diagnosis"], cause=value["cause"], guidance=value["guidance"],
                  user_question=value["user_question"], evidence_refs=value["evidence_refs"],
+                 example=value.get("example", ""), probe=probe, untestable=value.get("untestable", ""),
+                 probe_result=shown[0] if shown else None,
                  model=used.get("model"), engine=used.get("engine"), reasoning_effort=used.get("reasoning_effort"),
                  output=record.get("output"), finished_at=now())
     state["next_stage"] = request["stage"]
@@ -292,7 +372,8 @@ def apply(state: dict, value: dict, record: dict, workspace) -> None:
             "repair": request["pending_report_repair"]})
     grant_one_attempt(state, request)
     state["stuck_investigation"] = {**{k: request[k] for k in ("identity", "stage", "status")},
-                                    "guidance": value["guidance"], "diagnosis": value["diagnosis"], "in_force": True}
+                                    "guidance": value["guidance"], "diagnosis": value["diagnosis"],
+                                    "example": value.get("example", ""), "in_force": True}
     state.update(status="RUNNING", phase="PLANNING" if request["stage"] in PLANNING else
                  (request.get("phase") if request.get("phase") not in (None, "PAUSED_OR_BLOCKED") else "EXECUTING"))
 

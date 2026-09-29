@@ -92,7 +92,7 @@ def report_for(stage: str, component_id: str, spec: dict, data: dict) -> dict:
     if stage == "recognize_workflow":
         return {"workflow": "build", "reason": "Scripted: component builds are builds", "signals": [], "design_document": ""}
     if stage == "investigate_stuck":
-        return {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
+        return {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": [], "example": "", "probe": "", "untestable": ""}
     if stage == "requirements_gather":
         return {"summary": "Scripted component requirements", "intended_outcome": spec["description"],
                 "required_behaviors": [spec["description"]], "constraints": [], "acceptance_tests": [spec["check"]],

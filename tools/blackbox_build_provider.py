@@ -62,7 +62,7 @@ def main():
         result = dict(workflow='build', reason='Handwritten fixture: every request is a build', signals=[],
                       design_document='')
     elif data['stage'] == 'investigate_stuck':
-        result = {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": []}
+        result = {"diagnosis": "Offline fixture: it cannot diagnose; the run pauses as before.", "cause": "other", "guidance": "", "recommendation": "pause", "user_question": "", "evidence_refs": [], "example": "", "probe": "", "untestable": ""}
     elif data['stage'] == 'astra_discovery':
         result = dict(contract=spec['contract'], summary='Handwritten fixture plan; no model planning')
     elif data['stage'] == 'terra':
