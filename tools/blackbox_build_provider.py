@@ -87,7 +87,24 @@ def main():
             if not marker.exists():
                 raise SystemExit(8)
         # Keep independent worker intervals overlapping without requiring scheduler internals.
-        time.sleep(.3)
+        overlap = int(os.environ.get('BUILD_AUDIT_OVERLAP') or 0)
+        if overlap:
+            # Wait until that many Builders have started, so they provably overlap however busy the machine is.
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                started = set()
+                for line in log.read_text().splitlines():
+                    try:
+                        row = json.loads(line)
+                    except ValueError:
+                        continue  # another Builder is appending this line right now
+                    if row.get('stage') == 'terra' and row.get('event') == 'start':
+                        started.add(row.get('milestone'))
+                if len(started) >= overlap:
+                    break
+                time.sleep(.02)
+        else:
+            time.sleep(.3)
         changed = []
         if not (mid in stuck and mode == 'no_change' or mid == 'M1' and mode in ('permission', 'infeasible')):
             for name, content in spec['payloads'][mid].items():

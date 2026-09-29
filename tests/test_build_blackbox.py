@@ -153,6 +153,9 @@ class BuildBlackbox(unittest.TestCase):
         return candidate
 
     def test_02_three_workers_parallel_isolated_candidate_34(self):
+        # Each fake Builder waits until all three have started, so the overlap check below does not
+        # depend on how busy the machine is; if the Builders ran one at a time the run would stall and fail.
+        self.env['BUILD_AUDIT_OVERLAP'] = '3'
         self.seed(); self.build(); candidate = self.candidate()
         starts, ends = self.events(), self.events('finish')
         self.assertEqual({'M1','M2','M3'}, {e['milestone'] for e in starts})

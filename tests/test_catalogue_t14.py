@@ -6,6 +6,7 @@ catalogue module guarding that invariant; killed = detectors fail on the
 mutated copy and pass on the pristine copy.
 """
 import copy
+import io
 import json
 import os
 import random
@@ -16,6 +17,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import autopilot_testkit as kit
@@ -348,14 +350,21 @@ class SystematicCase(t08.CrashCase):
 
     def test_sys06_progress_after_every_recoverable_fault_family(self):
         """SYS-06: every CRH bundle from this run records PASS with its recovery."""
-        for index in range(1, 15):
-            scenario = f"CRH-{index}"
-            try:
-                result = kit.read_result(scenario)
-            except FileNotFoundError:
-                self.check(f"[{scenario}] executed", True, False)
-                continue
-            self.check(f"[{scenario}] passed_with_recovery", kit.PASS, result["status"])
+        # Run the CRH cases (test_catalogue_t08) here, into an empty results directory, so this reads
+        # this run's results. Reading whatever another module left on disk depended on test order,
+        # which parallel and --changed runs do not keep, and could pass on stale results.
+        with tempfile.TemporaryDirectory(prefix="crh-results-") as results, \
+                mock.patch.dict(os.environ, {"AUTOCODE_TEST_ARTIFACTS": results}):
+            crash_cases = unittest.defaultTestLoader.loadTestsFromName("tests.test_catalogue_t08")
+            unittest.TextTestRunner(stream=io.StringIO(), verbosity=0).run(crash_cases)
+            for index in range(1, 15):
+                scenario = f"CRH-{index}"
+                try:
+                    result = kit.read_result(scenario)
+                except FileNotFoundError:
+                    self.check(f"[{scenario}] executed", True, False)
+                    continue
+                self.check(f"[{scenario}] passed_with_recovery", kit.PASS, result["status"])
         self.finish(summary="EVENTUAL_COMPLETE_WHERE_APPLICABLE: safety/progress pairs hold per fault family")
 
     def test_sys07_saved_failing_trace_replays(self):
