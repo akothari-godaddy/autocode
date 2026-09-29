@@ -1,6 +1,7 @@
 """AutoPlanner step 2 (issue #62): the runner-owned clarification episode, the
 single investigation pass for discoverable questions, and machine-resolution
 validity. Discoverable questions must never reach the user."""
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -287,3 +288,49 @@ class ContractListTests(EpisodeCase):
         ready["permission_boundaries"] = []
         with self.assertRaisesRegex(ValueError, "missing permission_boundaries"):
             goals.validate_body(self.state, ready)
+
+
+class RequirementTraceRowsTests(EpisodeCase):
+    """Live planner reports returned requirement_trace [] although the handoff listed R1..Rn
+    (Claude models, 2026-09-29): the stages that trace requirements get the IDs and the rule."""
+
+    REQUIREMENTS = [{"id": "R1", "text": "Print Hello, NAME", "source_quote": "Print Hello, NAME"},
+                    {"id": "R2", "text": "Reject an empty name", "source_quote": "Reject an empty name"}]
+
+    def setUp(self):
+        super().setUp()
+        self.state["requirements_handoff"] = {"report": {"requirements": self.REQUIREMENTS}, "output": "req.json"}
+
+    def packet(self, stage):
+        prompt, _ = planner.context(self.state, stage, Path("/tmp/state.json"))
+        return prompt, json.loads(prompt.split("CURRENT HANDOFF DATA\n", 1)[1])
+
+    def test_the_tracing_stages_get_every_requirement_id_and_the_rule(self):
+        for stage in planner.TRACE_STAGES:
+            prompt, packet = self.packet(stage)
+            with self.subTest(stage=stage):
+                self.assertEqual([{"requirement_id": "R1", "requirement": "Print Hello, NAME"},
+                                  {"requirement_id": "R2", "requirement": "Reject an empty name"}],
+                                 packet["requirement_trace_rows"])
+                self.assertIn(planner.REQUIREMENT_TRACE_RULE, prompt)
+
+    def test_the_plan_review_and_a_run_without_requirements_do_not(self):
+        prompt, packet = self.packet("astra_challenge")
+        self.assertNotIn("requirement_trace_rows", packet)
+        self.assertNotIn(planner.REQUIREMENT_TRACE_RULE, prompt)
+        self.state["requirements_handoff"] = {"report": {"requirements": []}, "output": "req.json"}
+        prompt, packet = self.packet("astra_discovery")
+        self.assertNotIn("requirement_trace_rows", packet)
+        self.assertNotIn(planner.REQUIREMENT_TRACE_RULE, prompt)
+
+    def test_the_runners_check_is_unchanged(self):
+        contract = body()
+        with self.assertRaisesRegex(ValueError, "dropped requirements with no trace: R1, R2"):
+            goals.check_requirement_trace(self.state, {"requirement_trace": []}, contract)
+        paraphrase = [{"requirement_id": "R1", "disposition": "covered", "evidence": "It greets people"},
+                      {"requirement_id": "R2", "disposition": "covered", "evidence": "C1"}]
+        with self.assertRaisesRegex(ValueError, "R1 is not covered"):
+            goals.check_requirement_trace(self.state, {"requirement_trace": paraphrase}, contract)
+        cited = [{"requirement_id": "R1", "disposition": "covered", "evidence": "C1 checks this"},
+                 {"requirement_id": "R2", "disposition": "covered", "evidence": "C1"}]
+        goals.check_requirement_trace(self.state, {"requirement_trace": cited}, contract)

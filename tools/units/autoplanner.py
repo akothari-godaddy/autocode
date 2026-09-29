@@ -99,6 +99,30 @@ do; permission_boundaries is what it may and may not touch (for example "Edit on
 writes outside the workspace"). important_failure_cases, scope_exclusions and constraints may be empty when there is
 nothing to say: do not invent entries. While open_blocking_questions is non-empty, empty lists are allowed.
 """
+# Planner reports were sent back for repair with "Planner dropped requirements with no trace" in
+# several live runs (Claude models, 2026-09-29): the report's requirement_trace was [] although the
+# handoff listed R1..Rn, buried in requirements_handoff. The stages that must trace them get the
+# IDs as a short list (requirement_trace_rows) and this rule; the runner's check is unchanged.
+REQUIREMENT_TRACE_RULE = """
+REQUIREMENT TRACE: requirement_trace_rows in the handoff data lists every requirement from the requirements
+handoff. requirement_trace must contain exactly one row for each of those requirement_id values, no more and no
+fewer; an empty requirement_trace is refused. disposition is covered, excluded or superseded. For covered, evidence
+is an acceptance criterion ID of this contract (for example "AC3", or "AC3 checks this"), or a required_behaviors
+entry copied exactly; a paraphrase is refused. For excluded, evidence is a scope_exclusions entry copied exactly and
+backed by a saved user answer; for superseded, it cites the saved answer or feedback event ID.
+"""
+TRACE_STAGES = ("astra_discovery", "glm_revise", "astra_finalize")
+
+
+def trace_rows(state, stage):
+    """The requirements a stage's requirement_trace must cover, one row each; [] when there are none."""
+    if stage not in TRACE_STAGES:
+        return []
+    handoff = (state.get("requirements_handoff") or {}).get("report") or {}
+    return [{"requirement_id": row["id"], "requirement": row.get("text", "")}
+            for row in handoff.get("requirements") or [] if isinstance(row, dict) and row.get("id")]
+
+
 # The first stage of every new run: which kind of job this is (autocode_workflows).
 # It runs read-only with the requirements route when there is one, else the Plan Reviewer's.
 RECOGNIZE = workflows.STAGE
@@ -753,6 +777,9 @@ def context(state, stage, state_path):
             sentence for source in goals.source_texts(state)
             for sentence in goals.cue_sentences(source)
         ]
+    rows = trace_rows(state, stage)
+    if rows:
+        packet["requirement_trace_rows"] = rows
     if state["settings"].get("figma_file"):
         packet["figma_file"] = state["settings"]["figma_file"]
     packet['user_events'] = state.get('user_events', [])
@@ -790,6 +817,8 @@ def context(state, stage, state_path):
     design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
     if stage != "requirements_gather":
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
+    if rows:
+        design_rule += REQUIREMENT_TRACE_RULE
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
