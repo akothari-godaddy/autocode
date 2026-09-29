@@ -749,7 +749,7 @@ def apply_review_result(runtime, state, stage, value, record, workspace, run_dir
                   "source_revision": record["source_revision"], "output": record["output"],
                   "reviewer_role": record.get("role", stage)}
     if value["verdict"] == "PASS" and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):
-        raise support.Paused("PAUSED_INVALID_OUTPUT", "Validator PASS lacks successful executed checks")
+        raise ValueError("Validator PASS lacks successful executed checks: list each check you ran, with its exit code")
     validation["check_replay"] = (check_replay.replay(value["checks"], workspace, run_dir, record, verify.scratch_run)
                                   if value["verdict"] == "PASS" else None)  # the runner re-runs every check
     if state.get("validation"):

@@ -76,6 +76,9 @@ New standard-workflow runs use a persisted Builder retry policy per approved mil
 the configured Builder gets one ordinary retry, then one stronger attempt
 (default `openai/gpt-6-sol` at `xhigh` reasoning, not Astra), then a safety pause. Set
 `--builder-strong-model MODEL` when creating a run to select a different model.
+When the run's provider config lists its models (`models = [...]`) and the strong model is
+not among them, the run gets no stronger attempt: the Builder pauses after its ordinary retry,
+and `--builder-strong-model` must name one of the listed models.
 Explicit model pins and custom providers are never overridden. Existing saved runs
 without this policy retain their previous routing. Restarting/resuming cannot reset
 an exhausted budget. Scope violations, approval requests and transport safety pauses

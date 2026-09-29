@@ -37,3 +37,8 @@ def render(state: dict, fallback) -> str:
     """The completion summary: the job's own, or ``fallback(state)`` for a build-pipeline completion."""
     job = ended_in(state)
     return job.render(state) if job else fallback(state)
+
+
+def repair_rules(stage: str) -> str:
+    """The job's own report rules for a report-only repair of its stage, or "" when it has none."""
+    return next((getattr(job, "REPAIR_RULES", "") for job in JOBS if job.STAGE == stage), "")

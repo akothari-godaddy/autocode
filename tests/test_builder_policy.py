@@ -5,6 +5,11 @@ import unittest
 import autocode_builder_policy as policy
 import autocode_dispatch as dispatch
 from . import test_build_blackbox as bb
+from providers import command, opencode
+
+CLAUDE_TOML = Path(__file__).resolve().parents[1] / 'examples' / 'claude-provider' / 'claude.toml'
+CLAUDE_CONFIG = command.tomllib.loads(CLAUDE_TOML.read_text())
+CLAUDE_PROVIDER = command.CommandProvider(CLAUDE_CONFIG, CLAUDE_TOML)
 
 
 class PolicyTests(unittest.TestCase):
@@ -31,6 +36,23 @@ class PolicyTests(unittest.TestCase):
             policy.failure(state,'e1','failure')
             self.assertEqual('pause',policy.failure(state,'e2','failure'))
             self.assertEqual('gpt-6-luna',state['settings']['roles']['terra']['model'])
+
+    def test_a_provider_that_lists_its_models_without_the_strong_one_pauses_instead_of_escalating(self):
+        claude = CLAUDE_PROVIDER
+        with self.assertRaisesRegex(ValueError, 'is not a claude model'):
+            policy.configured('openai/gpt-6-sol', claude)
+        self.assertEqual('claude-opus-5-5', policy.configured('claude-opus-5-5', claude)['strong_model'])
+        state = self.state(); state['settings']['builder_retry'] = policy.configured(None, claude)
+        policy.failure(state, 'e1', 'failure')
+        self.assertEqual('pause', policy.failure(state, 'e2', 'failure'))
+        self.assertEqual('gpt-6-luna', state['settings']['roles']['terra']['model'])
+        self.assertIn('offers no stronger Builder model', state['stop_reason'])
+        with self.assertRaises(policy.s.Paused): policy.guard(state)
+
+    def test_providers_that_do_not_list_models_keep_the_default_strong_model(self):
+        self.assertEqual(policy.DEFAULTS, policy.configured(None, opencode))
+        unlisted = command.CommandProvider({**CLAUDE_CONFIG, 'models': None}, CLAUDE_TOML)
+        self.assertEqual(policy.DEFAULTS['strong_model'], policy.configured(None, unlisted)['strong_model'])
 
     def test_new_milestone_restores_normal_route_and_new_budget(self):
         state = self.state(); policy.failure(state,'e1','f'); policy.failure(state,'e2','f')

@@ -867,6 +867,24 @@ class RepairTests(unittest.TestCase):
         self.assertIn('exactly one JSON object', call['prompt'])
         self.assertIn('independently executed Validator tool event', call['prompt'])
 
+    def test_an_investigator_repair_repeats_where_its_probe_finds_the_cited_files(self):
+        # Live run 2026-09-29: both repairs of a rejected probe guessed the cited file's path.
+        self.queue(role='astra', stage='investigate_stuck', error=ValueError('diagnosed causes\' probes did not exit 0'))
+        self.state['next_stage'] = 'investigate_stuck'
+        with patch.object(runner, 'run_role', side_effect=RuntimeError('fixture stop')) as launch:
+            with self.assertRaises(RuntimeError):
+                runner.execute_report_repair(self.state, self.run, self.root)
+        self.assertIn('each at run/<its file name>', launch.call_args.kwargs['prompt'].split('CURRENT HANDOFF DATA\n')[0])
+        self.assertEqual('', runner.jobs.repair_rules('terra'))
+
+    def test_a_validator_pass_without_checks_gets_a_report_repair(self):
+        # Live run 2026-09-29: the Validator ran its check but returned "checks": [], and the run paused.
+        with self.assertRaisesRegex(ValueError, 'lacks successful executed checks'):
+            runner.autopilot.apply_review_result(runner, self.state, 'sol', {
+                'verdict': 'PASS', 'checks': [], 'criterion_results': [], 'evidence_refs': []},
+                {'events': str(self.run / 'none.jsonl'), 'source_revision': 'r', 'output': 'sol-01.json'},
+                self.root, self.run)
+
     def test_repair_handoff_contains_exact_original_command_receipts(self):
         pending = self.queue()
         event = {'type': 'item.completed', 'item': {'type': 'command_execution',
