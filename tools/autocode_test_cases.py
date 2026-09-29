@@ -27,8 +27,18 @@ import re
 MARK = "test:"
 
 
+def design_only(state: dict) -> bool:
+    """A job recognized as design (autocode_workflows) delivers documents, never code or tests. A live run
+    asked to "deliver only a design ... no application code" planned every criterion as a test and added
+    tests/ (architecture-two-services, 2026-09-29); its criteria are checked by the Validator instead."""
+    return (state.get("workflow") or {}).get("kind") == "design"
+
+
 def contract_cases(state: dict) -> list[dict]:
-    """The approved plan's criteria marked ``test:`` that are due now, as cases (id, text)."""
+    """The approved plan's criteria marked ``test:`` that are due now, as cases (id, text). None in a
+    design-only job: nothing there is proven by a test the Builder writes."""
+    if design_only(state):
+        return []
     body = (state.get("goal_contract") or {}).get("body") or {}
     due = in_scope(state)
     return [{"id": row["id"], "text": row.get("criterion", "")} for row in body.get("acceptance_criteria") or []

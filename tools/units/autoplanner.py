@@ -10,8 +10,9 @@ import uuid
 
 try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
-    from .. import autocode_bug_job as bug_job, autocode_workflows as workflows
+    from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
 except ImportError:
+    import autocode_test_cases as test_cases
     import autocode_goals as goals
     import autocode_planning_artifacts as artifacts
     import autocode_support as s
@@ -57,6 +58,16 @@ criterion under the milestone that delivers it: the runner checks a milestone's 
 already accepted, at that milestone's checkpoint, so a test must not depend on a later milestone. Keep criteria
 a test cannot check (documentation, visual design, performance under real load) with an ordinary
 verification_method.
+"""
+# A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
+# example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
+DESIGN_DELIVERABLES_RULE = """
+DESIGN DELIVERABLES: this job delivers a design, not code. Deliver exactly the files the request names and
+nothing else: no application code, no test files, no scripts. Every milestone's affected_paths and the
+initial_task's affected_paths list only those files (or their directory). Never mark a verification_method
+"test:". Verify each criterion by what the Validator can check directly in the delivered files: read them,
+and run read-only commands against them (for example python3 -c that loads a JSON file and checks a field),
+without adding any file to the repository.
 """
 # Planning is otherwise never told how execution captures test evidence, so plans invented
 # scratch copies outside the workspace and reviewers blocked them for a "missing capture
@@ -770,7 +781,7 @@ def context(state, stage, state_path):
         clarification_policy += INVESTIGATION_POLICY
     design_rule = (APPROVED_DESIGN_RULE if state.get('design_constraint') else "") + (BUG_DIAGNOSIS_RULE if diagnosis else "")
     if stage != "requirements_gather":
-        design_rule += EXAMPLE_CRITERIA_RULE
+        design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
