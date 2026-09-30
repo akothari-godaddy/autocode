@@ -17,8 +17,8 @@ PROSE = re.compile(r"[;,]|(?:^|\s)(?:and|or|then|via|passes|pass|reads?|should|m
 QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 # `python3 -c doing a topological sort` is prose: the code after -c is one quoted argument, and unquoted code
 # followed by more words is a sentence. A live architecture run approved it as AC3's method, the runner replayed
-# it as a command (NameError), and the run paused (2026-09-30).
-UNQUOTED_CODE = re.compile(r"\s-c\s+[^\s'\"]\S*\s+\S")
+# it as a command (NameError), and the run paused (2026-09-30); another wrote `python3 -c: Kahn topological sort`.
+UNQUOTED_CODE = re.compile(r"\s-c:|\s-c\s+[^\s'\"]\S*\s+\S")
 
 RUNNERS = frozenset({"pytest", "npm", "npx", "yarn", "pnpm", "go", "cargo", "ruby", "bundle",
                      "node", "deno", "bun", "uv", "make", "cmake", "ctest", "dotnet", "mvn", "gradle",
