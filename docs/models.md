@@ -48,6 +48,11 @@ struggling pauses the run instead. The Builder instead gets its
 Builder on `openai/gpt-6-sol` (with GLM checkers), it climbs Sol Medium → High → XHigh
 → Max. No role other than the Resolver escalates onto GPT-6 Astra.
 
+The one-stage jobs use the Plan Reviewer's model on a route of their own: the
+Investigator (bug fixes), the Analyst (discuss) and the Architect (design reviews),
+the last two with effort capped at medium. A run without a Plan Reviewer route falls
+back to the Resolver's. The Reviewer (code review) runs on the Validator's route.
+
 Other engines keep their own defaults, set where each engine is configured:
 
 | Engine or provider | Defaults |
