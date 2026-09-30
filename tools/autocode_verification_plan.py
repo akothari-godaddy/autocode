@@ -8,6 +8,14 @@ from pathlib import Path, PurePosixPath
 import re
 import shlex
 
+# Plain text (no backticks) is a command only when all of it is one: prose after a command makes the whole
+# method prose, left to the Validator. Live bugfix-trivial runs (Claude models, 2026-09-30) approved
+# "python3 -m unittest -v passes; Validator reads the diff" and "Run python3 -m unittest -v via capture and
+# read the diff"; the runner replayed each sentence as a shell command, it could never pass, and the run paused.
+PROSE = re.compile(r"[;,]|(?:^|\s)(?:and|or|then|via|passes|pass|reads?|should|must|the|with|using|while|which|"
+                   r"that|confirms?|verif(?:y|ies)|inspects?|shows?|prints?|outputs?|returns?)(?=\s|$)", re.IGNORECASE)
+QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
 RUNNERS = frozenset({"pytest", "npm", "npx", "yarn", "pnpm", "go", "cargo", "ruby", "bundle",
                      "node", "deno", "bun", "uv", "make", "cmake", "ctest", "dotnet", "mvn", "gradle",
                      "sh", "bash"})
@@ -42,7 +50,7 @@ def commands(method):
         return result
     if text.lower().startswith("run "):
         text = text[4:].strip()
-    return [text] if executable(text) else []
+    return [text] if executable(text) and not PROSE.search(QUOTED.sub("", text)) else []
 
 
 def approved_commands(state):
