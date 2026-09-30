@@ -236,7 +236,7 @@ def evidence_hashes(refs, workspace, run_dir):
         if not path.is_relative_to(Path(workspace).resolve()):
             raise ValueError(f"Evidence outside project: {ref}")
         if not path.is_file():
-            raise ValueError(f"Missing evidence: {ref}")
+            raise ValueError(f"Missing evidence: {ref} (cite a project file path, not a description of what you read)")
         path = evidence_snapshot.stable_path(path, run_dir)
         found[str(path)] = file_hash(path)
     if not found:
@@ -482,7 +482,7 @@ For criterion and end-to-end evidence from image/MCP calls or retained earlier
 stages, cite the exact existing artifact path (including the owning JSONL log),
 not a foreign or non-command event: ID. These artifacts still require independent
 inspection and source provenance; a file path alone is not proof of acceptance.
-Artifact evidence_refs must resolve inside the project. For checks using external
+Artifact evidence_refs are project file paths (README.md), never sentences like "README.md read: 38 lines". For external
 temporary artifacts, cite the current executed shell event that records the
 observation, or its project-contained event log, and preserve any limitations.
 open_findings in CURRENT HANDOFF DATA lists both reviewers' open findings. Each

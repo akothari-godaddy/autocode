@@ -137,6 +137,10 @@ def run_one(scenario, args) -> dict:
         skip.append("no [fake] check in scenario.toml")
     if args.fake and scenario.fake_live_calls and not getattr(args, "i_authorize_live_model_spend", False):
         skip.append("its Investigator is a real model: add --i-authorize-live-model-spend")
+    # Under a live profile no stage is scripted, so the fault it needs is never injected: three live runs of
+    # stuck-planner-citation (2026-09-30) were judged FALSE_COMPLETE on checks that could not have passed.
+    if not args.fake and scenario.fake_live_calls:
+        skip.append("hybrid scenario: only its Investigator is live; run it with --fake --i-authorize-live-model-spend")
     if args.fake and not solution.is_dir():
         skip.append(f"no {args.fake_solution}/ solution for the fake to apply")
     if skip:

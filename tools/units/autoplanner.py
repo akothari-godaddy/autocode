@@ -75,7 +75,8 @@ they leave open. Cite the review in code_refs as exactly its report_path.
 EXAMPLE_CRITERIA_RULE = """
 TESTS IN PLAIN ENGLISH: write every acceptance criterion a test can check as one concrete example a person can
 check without reading code: "Given <the exact starting data or state>, when <the exact action or command>,
-then <the exact result, with literal values>". No vague words such as "correctly" or "gracefully". Set its
+then <the exact result, with literal values>". No vague words such as "correctly" or "gracefully". Work each
+literal result out from the criterion's own rule (count the items, do the arithmetic), never estimate it. Set its
 verification_method to "test: test_<criterion id in lowercase>_<what it checks>" (C2 -> test_c2_...). The
 Builder writes that test; the runner itself checks that it passes with the change and did not pass before the
 run began, and refuses the milestone and completion otherwise. With several milestones, list each test
@@ -113,6 +114,15 @@ hit Python's digit limit too. Preserve the public contract; do not invent a boun
 Probe mixed-type numeric interactions as well as isolated bounds; valid operands can overflow in combination.
 ERROR PATHS: inject failures after staged or transactional work begins; verify the public error contract,
 unchanged persistent state and complete cleanup across the relevant underlying failure modes.
+"""
+# Two live ladder runs (Claude models, 2026-09-30) approved an example that contradicted its own rule: "2024-02-28
+# to 2024-03-01 is 4 dates", and an entry with a TTL of 2**63 still present at time 1e300. Both plan reviews passed
+# it, the Builder bent its test to fit, and the run stopped for a person after the build.
+EXAMPLE_CHECK_RULE = """
+CHECK EVERY WORKED EXAMPLE: recompute the literal result of each acceptance criterion's example from its own rule
+and the request: count the items in a range, do the arithmetic, apply the stated expiry, ordering or rounding rule
+to the example's inputs. An example whose stated result does not follow is a blocking concern naming the
+correct result: no implementation can satisfy both the rule and the example.
 """
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
@@ -909,6 +919,7 @@ def context(state, stage, state_path):
     design_rule += REVIEW_FINDINGS_RULE if findings else ""
     if stage != "requirements_gather":
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
+        design_rule += EXAMPLE_CHECK_RULE if stage in ("astra_challenge", "astra_finalize") else ""
     if rows:
         design_rule += REQUIREMENT_TRACE_RULE
     design_rule += adaptive.prompt_rule(state, stage)

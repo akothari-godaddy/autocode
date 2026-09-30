@@ -71,5 +71,40 @@ class RetainedChangesTests(unittest.TestCase):
         self.assertEqual(["other.txt"], assignment.outside(["src"], [], only))
 
 
+class UndoCreatedTests(RetainedChangesTests):
+    """Out-of-scope files the assignment created are removed; anything else is kept for a person (2026-09-30)."""
+
+    def workspace(self, files):
+        root = Path(tempfile.mkdtemp())
+        for name, text in files.items():
+            (root / name).parent.mkdir(parents=True, exist_ok=True)
+            (root / name).write_text(text)
+        return root
+
+    def test_a_created_file_is_removed_and_an_edited_one_is_kept(self):
+        import autocode_stray_writes as stray
+        root = self.workspace({"src/a.py": "2", "README.md": "new", "notes.txt": "edited"})
+        start = self.snapshot("a.before", {"src/a.py": "1", "notes.txt": "n"})
+        after = self.snapshot("a.after", {name: stray.current(root / name) for name in ("src/a.py", "README.md", "notes.txt")})
+        first = self.attempt("t1", start, after)
+        paths = assignment.outside(["src"], [], first)
+        self.assertEqual(["README.md", "notes.txt"], paths)
+        message = assignment.undo_created(paths, [], first, root)
+        self.assertEqual("Builder attempts for this task changed files outside the assigned paths; the runner removed "
+                         "the files they created, so a retry starts without them: README.md; edits retained for "
+                         "inspection: notes.txt", message)
+        self.assertFalse((root / "README.md").exists())
+        self.assertEqual("edited", (root / "notes.txt").read_text())
+
+    def test_a_created_file_changed_since_the_attempt_is_kept(self):
+        import autocode_stray_writes as stray
+        root = self.workspace({"README.md": "the attempt's"})
+        after = self.snapshot("a.after", {"README.md": stray.current(root / "README.md")})
+        first = self.attempt("t1", self.snapshot("a.before", {}), after)
+        (root / "README.md").write_text("changed by someone since")
+        self.assertIn("edits retained for inspection: README.md", assignment.undo_created(["README.md"], [], first, root))
+        self.assertTrue((root / "README.md").exists())
+
+
 if __name__ == "__main__":
     unittest.main()

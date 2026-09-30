@@ -12,6 +12,24 @@ try:
 except ImportError:
     from autocode_util import Paused, criteria_definition, file_hash
 
+REFUSED = "Completion rejected: missing, stale, failed or unverified independent evidence"
+
+
+def rejection(state) -> str:
+    """Why COMPLETE was refused, naming the criteria the latest validation did not pass.
+
+    A live ladder-20 run (Claude models, 2026-09-30) reached the plain refusal twice: the last
+    milestone's validation left out the accepted milestone's criteria, and the Completion Owner
+    could not tell what was missing or how to ask for it."""
+    results = {row["id"]: row.get("status") for row in (state.get("validation") or {}).get("criterion_results", [])}
+    gaps = [row["id"] for row in state.get("acceptance_criteria", []) if results.get(row["id"]) != "PASS"]
+    if not gaps:
+        return REFUSED
+    return (f"{REFUSED}. The latest validation has no passing result for {', '.join(gaps)}; completion needs one "
+            "validation that passes every criterion on the current source. Request CONTINUE with a next_task of "
+            "kind=validate that lists every criterion (in a milestone run, on the current milestone: a validate "
+            "task may recheck accepted milestones' criteria).")
+
 
 def completion_ready(state, decision, current, *, require_human_reviews=True, require_independent=True):
     human_only_gap = False

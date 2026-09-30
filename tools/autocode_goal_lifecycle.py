@@ -522,6 +522,8 @@ def assign_task(state, decision, current):
     allowed = (set(c for mid in previous_batch for c in milestones[mid]["acceptance_criteria"])
                if spec["milestone_id"] in previous_batch else
                set(milestones.get(spec["milestone_id"], {}).get("acceptance_criteria", [])))
+    if spec["kind"] == "validate":
+        allowed |= checkpoints.recheckable(state)
     if milestones and (spec["milestone_id"] not in milestones or
             not set(ids) <= allowed):
         raise ValueError("Task must belong to an approved milestone and its acceptance criteria")

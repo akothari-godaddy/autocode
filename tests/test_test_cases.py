@@ -293,6 +293,18 @@ class PromptTests(unittest.TestCase):
         self.assertNotIn(autoplanner.EXAMPLE_CRITERIA_RULE,
                          autoplanner.context(state, "requirements_gather", state_path)[0])
 
+    def test_the_plan_reviewer_recomputes_worked_examples(self):
+        from tests.test_bug_job import SmallCorrectionTests
+        from units import autoplanner
+        state = SmallCorrectionTests.start(SmallCorrectionTests(), fix_size="large")
+        state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+        state_path = Path(state["workspace"]) / "state.json"
+        for stage, wanted in (("astra_challenge", True), ("astra_finalize", True), ("astra_discovery", False),
+                              ("glm_revise", False)):
+            with self.subTest(stage=stage):
+                prompt = autoplanner.context(state, stage, state_path)[0]
+                self.assertEqual(wanted, "CHECK EVERY WORKED EXAMPLE" in prompt)
+
     def test_the_builder_is_told_to_write_the_named_tests(self):
         from tests.test_bug_job import approved_small_fix
         from units import common
