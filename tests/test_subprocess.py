@@ -249,6 +249,8 @@ class SubprocessFlow(unittest.TestCase):
         _, final = self.saved()
         self.assertEqual(["sol", "astra_review"], [r["stage"] for r in final["stages"][stage_count:]])
         evidence = Path(next(iter(final["validation"]["evidence_hashes"])))
+        # Deliberate external corruption bypasses the normal read-only event log guard.
+        evidence.chmod(evidence.stat().st_mode | 0o200)
         evidence.write_text(evidence.read_text() + "\n")
         self.launch(args, 2)
         self.assertEqual("PAUSED_STALE_VALIDATION", self.saved()[1]["status"])
