@@ -35,13 +35,7 @@ def extract(zip_path,destination,max_bytes=1048576):
             staging=Path(tempfile.mkdtemp(dir=destination.parent,prefix='.extract-')); actual=0
             for info,name,is_dir in entries:
                 target=staging/name
-                if is_dir:
-                    # Directory entries can carry payloads too; consume them to validate CRC and compression.
-                    with archive.open(info) as source:
-                        while source.read(65536):
-                            pass
-                    target.mkdir(parents=True,exist_ok=True)
-                    continue
+                if is_dir: target.mkdir(parents=True,exist_ok=True); continue
                 target.parent.mkdir(parents=True,exist_ok=True)
                 with archive.open(info) as source,target.open('wb') as output:
                     while True:
