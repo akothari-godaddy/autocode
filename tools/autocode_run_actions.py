@@ -129,7 +129,8 @@ def handle(runner, args, parser, state, state_path, run_dir, workspace):
         state.update(status='RUNNING', phase='EXECUTING')
         state.pop('stop_reason', None)
         runner.write_json(state_path, state)
-    if (not decision_action and args.grant_recovery is None and not args.diagnose_failed_stage and not args.retry_builder
+    if (not decision_action and args.abandon_stage is None
+            and args.grant_recovery is None and not args.diagnose_failed_stage and not args.retry_builder
             and state.get('status') != 'RUNNING'
             and not acknowledged_planning_extension and not acknowledged_bound_change
             and str(state.get('status', '')).startswith('PAUSED_')

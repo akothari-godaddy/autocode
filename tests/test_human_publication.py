@@ -7,10 +7,12 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import autocode as runner, autocode_resolver_human as human, autocode_support as support
+import autocode_run_actions as run_actions
 from . import test_resolver_human, test_subprocess
 
 
@@ -104,6 +106,31 @@ class HumanPublicationTests(unittest.TestCase):
         self.assertFalse(human.projection(saved)['human_request_authorized'])
         self.assertEqual([], saved['pending_questions'])
         self.assertIn(human.PRIVATE, saved)
+
+    def test_answered_operational_request_allows_explicit_stage_abandonment(self):
+        published = self.publish_operational()
+        human.respond_operational(self.state, published['request_id'], published['request_token'],
+                                  'provide_information', 'Inspected the uncertain attempt')
+        human.review_operational_response(self.state)
+        self.assertTrue(human.response_holds_current_frontier(self.state))
+        args = SimpleNamespace(
+            run_dir=self.state['run_dir'], expected_goal_token=None, conversation_handoff=None,
+            answer=None, delegate=None, approve_goal=None, edit_goal=None, approve_review=None,
+            reconcile_review=None, feedback=None, follow_up=None, show_goal=None,
+            accept_completion=None, resolver_response=None, planning_review_call_limit=None,
+            resume_paused=False, retry_builder=False, retry_failed_stage=False, retry_report=False,
+            abandon_stage='001/terra-01', grant_recovery=None, diagnose_failed_stage=False)
+        fake_runner = Mock()
+        fake_runner.abandon_stage.side_effect = lambda state, *_: state.update(
+            status='PAUSED_STAGE_ABANDONED', stop_reason='Stage set aside')
+        with patch.object(run_actions.dependency, 'apply', return_value=None), \
+                patch.object(run_actions.resolver_runtime, 'record_operational_exhaustion', return_value=True) as publish:
+            result = run_actions.handle(fake_runner, args, None, self.state,
+                                        Path(self.state['run_dir']) / 'state.json',
+                                        Path(self.state['run_dir']), self.root)
+        self.assertEqual(0, result)
+        fake_runner.abandon_stage.assert_called_once()
+        publish.assert_not_called()
 
 
 class HumanResponseCLITests(unittest.TestCase):
