@@ -16,6 +16,10 @@ import os
 from pathlib import Path
 import threading
 import time
+try:
+    from .autocode_progress import tool_description
+except ImportError:
+    from autocode_progress import tool_description
 
 
 class _ProjectedJsonLine:
@@ -133,6 +137,7 @@ class ActivityMonitor:
         self._closed = set()
         self._explicit_starts = False
         self._fallback_started = None
+        self._completed_action = None
 
     @staticmethod
     def _digest(value):
@@ -173,6 +178,7 @@ class ActivityMonitor:
             if len(self._closed) < self.MAX_SEEN:
                 self._closed.add(key)
             if self._new("complete:" + key) or was_active:
+                self._completed_action = label
                 self._activity(now)
                 if not self._explicit_starts and self._fallback_started is not None:
                     # Completion-only providers may keep helper processes alive
@@ -212,9 +218,9 @@ class ActivityMonitor:
             key = "codex:" + self._digest(identifier).hex()
             if isinstance(kind, str) and kind in self.TOOL_TYPES:
                 if event_type == "item.started":
-                    self._tool(key, self.TOOL_TYPES[kind], "start", now)
+                    self._tool(key, tool_description(kind, item), "start", now)
                 elif event_type == "item.completed":
-                    self._tool(key, self.TOOL_TYPES[kind], "complete", now)
+                    self._tool(key, tool_description(kind, item), "complete", now)
                 # A running update is also a usable start when initial events
                 # were omitted; later output updates leave the first start fixed.
                 elif item.get("status") in ("in_progress", "running"):
@@ -234,10 +240,11 @@ class ActivityMonitor:
                 if not isinstance(state, dict):
                     return
                 phase = state.get("status")
+                label = tool_description(part['tool'], state.get('input'))
                 if phase in ("pending", "running"):
-                    self._tool("opencode:" + identifier, "tool", "start", now)
+                    self._tool("opencode:" + identifier, label, "start", now)
                 elif phase in ("completed", "error"):
-                    self._tool("opencode:" + identifier, "tool", "complete", now)
+                    self._tool("opencode:" + identifier, label, "complete", now)
                 return
             if event_type == "text" and identifier:
                 self._text("opencode:" + identifier, part.get("text"), now)
@@ -344,6 +351,7 @@ class ActivityMonitor:
                 "tool_elapsed_seconds": round(elapsed, 3) if elapsed is not None else None,
                 "idle_limit_seconds": self.idle_limit, "tool_limit_seconds": self.tool_limit,
                 "active_tool_count": len(self._active), "completed_tool_count": len(self._closed),
+                "completed_action": self._completed_action,
                 "process_fallback": self._fallback_started is not None}
 
     def snapshot(self):

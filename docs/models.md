@@ -22,6 +22,34 @@ Model overrides use the role names: `--requirements-model`, `--glm-model`,
 `--completion-model`, and the matching `--<role>-reasoning-effort` flags.
 See [CLI](cli.md).
 
+### Explicit fallback for silent OpenCode turns
+
+Pinned and custom routes still do not use the general escalation ladder. To
+authorize a specific replacement after two idle expiries ending in an unmatched
+OpenCode model-turn start, use the repeatable flag:
+
+```sh
+--stream-hang-fallback terra=openai/gpt-6-sol,medium
+```
+
+The role must exist and use OpenCode. Fallback efforts are limited to
+`low`, `medium`, or `high`; no unspecified model is selected. A fallback may
+override a pin only because this flag explicitly authorizes that exact route.
+It is used at most once per role per run, after stopped nonterminal attempts
+are archived, with a two-second backoff. It never increases retry budgets,
+replays a completed report, changes engine, or bypasses verifier independence.
+Without the flag the existing retry/pause policy remains unchanged.
+
+Idle records carry `stream_silence` evidence (last event, session, model and
+bounded completed read/search paths). Recovery prompts retain these paths as
+navigation hints, not as trusted findings or a completed report. This describes
+observed stream silence; it does not assert a backend root cause.
+
+CLI stage progress is emitted at INFO level using human role names and safe
+action summaries, for example “Builder is updating transport.ts” or “Validator
+finished running the tests.” Raw commands, prompts, and tool results are not
+printed in these summaries.
+
 ## Escalation ladders
 
 | Role | CLI and billing route | Automatic escalation ladder |

@@ -243,6 +243,37 @@ class ActivityRuntimeTests(unittest.TestCase):
         self.assertFalse(support.completion_ready(self.state, self.decision('TASK_COMPLETE'),
                                                  support.snapshot(self.root)))
 
+    def test_stream_fallback_archives_attempt_and_preserves_budgets(self):
+        self.start_task()
+        import autocode_stream_recovery as stream_recovery
+        mimo, glm, sol = ('xiaomi-token-plan-sgp/mimo-v2.6-pro',
+                         'zai-coding-plan/glm-5.3', 'openai/gpt-6-sol')
+        self.state['settings']['engine'] = 'opencode'
+        self.state['settings']['roles']['terra'].update(model=mimo, model_pinned=True)
+        for role in ('sol', 'completion'):
+            self.state['settings']['roles'].setdefault(role, {}).update(model=glm)
+        stream_recovery.configure(self.state['settings'], SimpleNamespace(
+            stream_hang_fallback=[f'terra={sol},medium']))
+        evidence = {'kind': 'provider_stream_silence', 'model': mimo,
+                    'last_event': {'type': 'step_start'}, 'source_refs': ['greet.py']}
+        self.state['automatic_timeout_recoveries'] = [
+            {'role': 'terra', 'stream_silence': evidence}]
+        limits = copy.deepcopy(self.state['settings']['limits'])
+        _, record = self.interrupted_attempt()
+        record['stream_silence'] = evidence
+        stream_recovery_recover = stream_recovery.recover
+        with patch.object(stream_recovery, 'recover', wraps=lambda state, rec, ctx:
+                          stream_recovery_recover(state, rec, ctx, sleep=lambda _: None)):
+            self.assertTrue(runner.automatically_recover_timed_out_stage(
+                self.state, self.run, self.root, support.Paused('PAUSED_PROVIDER_TIMEOUT', 'idle')))
+        saved = support.read(self.run / 'state.json')
+        self.assertEqual(sol, saved['settings']['roles']['terra']['model'])
+        self.assertEqual('medium', saved['settings']['roles']['terra']['reasoning_effort'])
+        self.assertEqual(limits, saved['settings']['limits'])
+        self.assertEqual('provider_stream_silence', saved['recovery_context']['stream_silence']['kind'])
+        self.assertTrue(Path(saved['recovery_context']['events']).exists())
+        self.assertNotIn('active_stage', saved)
+
     def test_timeout_racing_a_completed_report_reconciles_to_sol_without_replay(self):
         self.start_task()
         source, record = self.interrupted_attempt(terminal=True)

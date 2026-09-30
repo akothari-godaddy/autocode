@@ -51,6 +51,8 @@ try:
     from . import autocode_resolver_runtime as resolver_runtime
     from . import autocode_resolver_human as resolver_human
     from . import autocode_reviewer_fallback as reviewer_fallback
+    from . import autocode_stream_recovery as stream_recovery
+    from .autocode_progress import StageProgress
     from . import autocode_planning_artifacts as planning_artifacts
     from . import autocode_budget_recovery as budget_recovery
     from . import autocode_findings as findings_ledger
@@ -65,6 +67,8 @@ except ImportError:
     import autocode_resolver_runtime as resolver_runtime
     import autocode_resolver_human as resolver_human
     import autocode_reviewer_fallback as reviewer_fallback
+    import autocode_stream_recovery as stream_recovery
+    from autocode_progress import StageProgress
     import autocode_planning_artifacts as planning_artifacts
     import autocode_budget_recovery as budget_recovery
     import autocode_findings as findings_ledger
@@ -774,25 +778,14 @@ def run_role(
             for prepared in (prompt_file, events, base.with_suffix(".before.json"), base.with_suffix(".opencode.json")):
                 prepared.unlink(missing_ok=True)
             raise
-        print(f"{stage}: started; log={events}", flush=True)
+        progress = StageProgress(stage); progress.started()
         activity = ActivityMonitor(events, idle_seconds=idle_timeout, tool_seconds=tool_timeout)
-        activity_label = None
-        last_activity_print = 0
         def activity_checkpoint(snapshot):
-            nonlocal activity_label, last_activity_print
             record["activity"] = {**snapshot, "observed_at": now(),
                                   "elapsed_seconds": round(time.monotonic() - started, 1),
                                   "stage_limit_seconds": stage_timeout}
             write_json(run_dir / "state.json", state)
-            label = (snapshot.get("activity"), snapshot.get("detail"))
-            current = time.monotonic()
-            if label != activity_label or current - last_activity_print >= 60:
-                print(f"{stage}: {snapshot.get('activity', 'waiting_for_provider')}; "
-                      f"elapsed={record['activity']['elapsed_seconds']:g}s; "
-                      f"idle={snapshot.get('idle_seconds', 0):g}s/{idle_timeout or 'off'}; "
-                      f"tool={snapshot.get('tool_elapsed_seconds', 0) or 0:g}s/{tool_timeout or 'off'}; "
-                      f"stage_limit={stage_timeout or 'off'}", flush=True)
-                activity_label, last_activity_print = label, current
+            progress.activity(snapshot)
         def checkpoint(owned):
             record["processes"] = owned
             write_json(worker_path, {"run_dir": str(run_dir), "pid": child.pid, "processes": owned})
@@ -816,10 +809,12 @@ def run_role(
             worker_path.unlink(missing_ok=True)  # wait_for_stage cleaned up before propagating the interrupt
     record.update(finished_at=now(), exit_code=exit_code, duration_seconds=time.monotonic() - started,
                   metrics=support.event_metrics(events), timed_out=timed_out)
+    progress.finished(exit_code, timed_out, interrupted)
     if timed_out:
         timeout = getattr(activity, "timeout", None) or {
             "kind": "stage", "reason": f"Stage exceeded its {stage_timeout}-second hard runtime limit"}
         record.update(timeout_kind=timeout["kind"], timeout_reason=timeout["reason"])
+        record["stream_silence"] = stream_recovery.diagnose_file(record)
     account_stage(state, record)
     # Persist terminal subprocess evidence before parsing or advancing.
     write_json(run_dir / "state.json", state)
@@ -1478,17 +1473,12 @@ def timeout_recovery_route(state, record):
 def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
     """Archive one fully stopped, non-terminal timeout and continue safely.
 
-    This is deliberately *not* a replay: the original request remains archived,
-    its role session is discarded, and a later loop iteration creates a new
-    attempt with recovery_context. A completed provider turn, live worker or
-    requested pause remains an explicit paused checkpoint. Repeated recoveries
-    consume the existing no-progress budget before another provider is launched.
+    Preserve partial work, discard sessions, and consume existing recovery budgets.
     """
     record = state.get("active_stage")
     if record and record.get('report_only'):
         return automatically_recover_report_repair_timeout(state, run_dir, workspace, error)
-    # Startup reconciliation classifies a non-terminal saved log as uncertain;
-    # the durable timeout record still proves why the stopped request ended.
+    # Durable timeout evidence permits reconciliation of uncertain saved logs.
     if (error.status not in ("PAUSED_PROVIDER_TIMEOUT", "PAUSED_PROVIDER_UNCERTAIN")
             or not record or not record.get("timed_out")
             or (run_dir / "pause-requested").exists()):
@@ -1542,6 +1532,7 @@ def automatically_recover_timed_out_stage(state, run_dir, workspace, error):
                     "change the execution plan: split long tool work into bounded calls, reuse valid completed "
                     "checks, or fix the identified stall. Preserve all acceptance checks; do not replay the same "
                     "task under unchanged limits. Do not extend limits or reset budgets without authorization."}
+    stream_recovery.recover(state, record, recovery)
     count_automatic_recovery(state)
     state.setdefault("automatic_timeout_recoveries", []).append(recovery)
     state.setdefault("user_events", []).append({"kind": "automatic_timeout_recovery", "actor": "runner",
@@ -2201,7 +2192,7 @@ def configure(args, state):
             if not settings.get("orchestration", {}).get("enabled"):
                 raise ValueError("Start a new run to enable milestone orchestration")
             settings["orchestration"]["max_parallel"] = args.max_parallel_builders
-        return autopilot.stuck.configure(settings, args)
+        return stream_recovery.configure(autopilot.stuck.configure(settings, args), args)
     if engine == "opencode":
         local = opencode.local_settings(state["workspace"])
     elif engine == "gocode":
@@ -2277,7 +2268,7 @@ def configure(args, state):
         settings['planning_flow'] = 'v2'
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
-    return autopilot.stuck.configure(settings, args)
+    return stream_recovery.configure(autopilot.stuck.configure(settings, args), args)
 
 
 def iteration_limit_reached(iteration, ceiling):
@@ -2896,6 +2887,7 @@ def _main_body(unit=None) -> int:
                         help="Override reasoning effort for the completion owner only")
     parser.add_argument("--pin-model-role", action="append", choices=tuple(DEFAULT_ROLE_MODELS), default=[],
                         help="Keep this role's selected model and reasoning effort instead of escalating it automatically")
+    parser.add_argument("--stream-hang-fallback", action="append", help="Explicit idle-stream fallback ROLE=provider/model,effort (at most high)")
     parser.add_argument("--headroom", choices=["off","on"], default=None,
                         help="Off by default; on fails closed until compatibility is verified")
     parser.add_argument("--dry-run", action="store_true")
