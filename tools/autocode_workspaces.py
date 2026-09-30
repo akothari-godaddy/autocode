@@ -1,6 +1,8 @@
 """One Git worktree and branch per task; source checkout locks stay independent."""
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import json
 from pathlib import Path
 import re
@@ -34,6 +36,20 @@ def git(root, *args):
     if result.returncode:
         raise ValueError(result.stderr.strip() or 'Git command failed')
     return result.stdout.strip()
+
+
+@contextlib.contextmanager
+def _creating(project):
+    """Serialize task worktree creation across autocode processes in one project.
+
+    Two tasks started at the same moment each run `git worktree add` on the same repository, and git
+    does not guarantee that is safe (ref and worktree-metadata locks): one can fail, and the CLI then
+    exits 2 without a run. autocode_program serializes its own threads the same way (WORKTREE_LOCK).
+    """
+    # Beside .autocode/worktrees, not in it: everything in there is read as a worktree.
+    with (keep_out_of_git(project) / "worktree-create.lock").open("a+") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
 
 
 def metadata(workspace):
@@ -71,7 +87,8 @@ def create(project, task):
     parent.mkdir(parents=True, exist_ok=True)
     workspace = parent / name
     branch = 'autocode/' + name
-    git(project, 'worktree', 'add', '-b', branch, str(workspace), base)
+    with _creating(project):
+        git(project, 'worktree', 'add', '-b', branch, str(workspace), base)
     # kind 'task': this worktree and its branch belong to one task (autocode_worktrees
     # delivers to and cleans up only these; programs write this file without a kind).
     data = {'version': 1, 'kind': 'task', 'project_workspace': str(project), 'workspace': str(workspace),

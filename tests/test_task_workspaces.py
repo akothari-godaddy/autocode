@@ -166,11 +166,14 @@ class IsolatedCli(unittest.TestCase):
         processes = [subprocess.Popen([*command, title], cwd=flow.root, env=env,
                                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
                      for title in ('Build greeting one', 'Build greeting two')]
+        outputs = []
         for process in processes:
             out, err = process.communicate(timeout=35)
+            outputs.append(out + err)
             self.assertEqual(2, process.returncode, out + err)
         runs = list(flow.project.glob('.autocode/worktrees/*/.autocode/runs/*/state.json'))
-        self.assertEqual(2, len(runs))
+        # Both launches exit 2 whether or not they created a run, so say why one did not.
+        self.assertEqual(2, len(runs), "\n---\n".join(outputs))
         states = [json.loads(path.read_text()) for path in runs]
         self.assertEqual(2, len({s['workspace'] for s in states}))
         for path, state in zip(runs, states):
