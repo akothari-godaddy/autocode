@@ -47,10 +47,8 @@ another successful command cannot replace them. Empty Python test bodies cannot 
 For an unbounded integer contract, test 2**63-1, 2**63, and 10**5000 (plus large negative values when valid),
 including persistence, arithmetic and invalid/stale identifiers. Check that SQLite neither overflows bindings
 nor promotes exact arithmetic to REAL. Decimal conversion limits must not reject otherwise valid integers.
-Also probe interactions such as a large integer TTL with a float clock and a large database query limit.
-For staged/transactional operations inject a failure after work begins: assert the public exception type,
-unchanged destination/data and no leftover staging files. Archive corruption probes must include compressed
-file payloads and directory payloads; malformed headers alone do not cover these paths.
+Probe mixed-type numeric interactions. For staged/transactional operations inject failures after work begins:
+assert the public error contract, unchanged persistent state and complete cleanup across failure modes.
 """
 # A Validator closed a proof-linked finding with a check that read the proof from .autocode/, twice
 # (fix run B, 2026-09-29); each replay failed and the run paused. The rejection says why.

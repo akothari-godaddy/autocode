@@ -62,7 +62,7 @@ class PlanningClarificationRecovery(AdversarialCase):
 
 
 class DraftProofPlanning(AdversarialCase):
-    def test_recursive_suite_proof_is_corrected_before_approval_without_a_question(self):
+    def test_draft_command_is_corrected_before_approval_without_a_question(self):
         from .harness.project import git
         (self.project / "README.md").write_text("Implement the requested greeting CLI.\n")
         git(self.project, "add", "README.md")
@@ -72,7 +72,15 @@ class DraftProofPlanning(AdversarialCase):
         self.assertEqual("TASK_COMPLETE", view["status"], self.root)
         self.assertEqual([], self.driver.answers, "A proof repair is not a product decision")
         plans = self.trace("draft_proof")
-        self.assertEqual("test: test_c1_recursive_suite", plans[0]["method"])
+        self.assertEqual("python3 -m unittest nonexistent_test.py", plans[0]["method"])
         self.assertEqual("python3 -m unittest test_greet.py", plans[-1]["method"])
         self.assertEqual(1, sum(step["kind"] == "approve-plan" for step in self.driver.steps))
         self.assertFalse(self.trace("stage_enter", "investigate_stuck"), self.root)
+
+    def test_draft_test_proof_cannot_be_downgraded_to_a_suite_command(self):
+        self.set_fault("planning", "reject_draft_proof_downgrade")
+        view = self.driver.drive(self.scenario.brief)
+        self.assertFalse(view["done"], self.root)
+        self.assertFalse(self.trace("stage_enter", "terra"))
+        self.assertFalse(any(step["kind"] == "approve-plan" for step in self.driver.steps))
+        self.assertTrue(self.trace("draft_proof"), self.root)

@@ -1,8 +1,4 @@
-"""Constrain review report generation to runner-owned identities and approved literals.
-
-These constraints help a provider copy the saved contract exactly. Runtime guards
-still require the complete ordered criteria and independently verified evidence.
-"""
+"""Review report identities and ID-only decoding; no controller dependencies."""
 import copy
 
 
@@ -26,9 +22,62 @@ def review_generation_schema(schema, state, stage):
         if "id" in fields:
             fields["id"] = {**fields["id"], "enum": ["", *own]}
     criteria = state.get("acceptance_criteria") or []
-    fields = props.get("acceptance_criteria", {}).get("items", {}).get("properties", {})
-    if criteria and fields:
-        for key in ("id", "criterion"):
-            if key in fields:
-                fields[key] = {**fields[key], "enum": [row[key] for row in criteria]}
+    item = props.get("acceptance_criteria", {}).get("items", {})
+    fields = item.get("properties", {})
+    if criteria and fields and stage in COMPLETION_STAGES:
+        fields["id"] = {**fields["id"], "enum": list(dict.fromkeys(row["id"] for row in criteria))}
+        fields.pop("criterion", None)
+        item["required"] = [key for key in item.get("required", []) if key != "criterion"]
+    return result
+
+
+COMPLETION_STAGES = {"astra_review", "astra_checkpoint"}
+
+
+def review_validation_schema(schema, state, record, value):
+    """Validate one report shape and its full ordered IDs before report repair ends.
+
+    New providers produce ID-only rows; legacy reports must still copy every
+    literal exactly. This also accepts ID-only responses against older saved schemas.
+    """
+    stage = record.get("original_stage") or record.get("stage")
+    criteria = (state or {}).get("acceptance_criteria") or []
+    if stage not in COMPLETION_STAGES or not criteria or "acceptance_criteria" not in schema.get("properties", {}):
+        return schema
+    rows = value.get("acceptance_criteria")
+    if (not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows)
+            or [row.get("id") for row in rows] != [row["id"] for row in criteria]):
+        raise ValueError("Review report must contain each approved criterion ID once, in order")
+    has_text = ["criterion" in row for row in rows]
+    if any(has_text) and not all(has_text):
+        raise ValueError("Review report mixes ID-only and legacy criterion rows")
+    if all(has_text) and any(row["criterion"] != approved["criterion"] for row, approved in zip(rows, criteria)):
+        raise ValueError("Review report criterion text conflicts with the approved contract; repair the copied text")
+    result = copy.deepcopy(schema)
+    item = result["properties"]["acceptance_criteria"]["items"]
+    if all(has_text):
+        item["properties"]["criterion"] = {"type": "string"}
+        item["required"] = list(dict.fromkeys([*item.get("required", []), "criterion"]))
+    else:
+        item["properties"].pop("criterion", None)
+        item["required"] = [key for key in item.get("required", []) if key != "criterion"]
+    return result
+
+
+def hydrate_review_report(value, state, record):
+    """Fill runner-owned text after validation, leaving the provider file untouched.
+
+    criteria_hydrated is written only here on the stage record for audit/recovery;
+    the controller and status view continue receiving the complete legacy shape.
+    """
+    stage = record.get("original_stage") or record.get("stage")
+    if stage not in COMPLETION_STAGES or not (state or {}).get("acceptance_criteria"):
+        return value
+    rows = value.get("acceptance_criteria", [])
+    if not rows or any("criterion" in row for row in rows):
+        return value
+    result = copy.deepcopy(value)
+    for row, approved in zip(result["acceptance_criteria"], state["acceptance_criteria"]):
+        row["criterion"] = approved["criterion"]
+    record["criteria_hydrated"] = True
     return result

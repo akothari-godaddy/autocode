@@ -1214,10 +1214,10 @@ Agent assumptions and unrelated user events cannot resolve a conflict. Carry gen
 unresolved conflicts into open_blocking_questions; do not ask again for a saved decision.
 When revising a plan after review, copy required_behaviors, scope_exclusions,
 constraints, important_failure_cases, acceptance_criteria (including verification
-methods), and permission_boundaries verbatim from goal_contract.body. Before first approval, you may
-correct only verification_method while retaining the criterion's exact behavior, ID and human_review:
-test names, test:/guard: marking and a suite command are proof details, not a new product decision.
-Use contract_changes=[] for these draft proof corrections. Approved proof changes remain protected. Add new
+methods), and permission_boundaries verbatim from goal_contract.body. In a draft without an approval receipt,
+you may correct only a planner-generated verification_method that was never approved or user-set, retaining
+exact behavior, ID and human_review. Never replace test:/guard: proof with prose or a suite command.
+Use contract_changes=[] only for these narrow corrections; otherwise cite a saved user basis. Add new
 items when review identifies a gap; revise technical_approach, milestones, paths,
 tests and dependencies as needed. Do not rewrite an existing protected item for
 style or detail. A changed or removed protected item requires a saved user answer

@@ -15,13 +15,13 @@ import tomllib
 
 # Re-export shared helpers for existing callers and test patches.
 try:
-    from .autocode_report_schema import review_generation_schema
+    from .autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     from . import autocode_evidence_snapshot as evidence_snapshot
     from .autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                 model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
     from . import autocode_receipts as receipts
 except ImportError:
-    from autocode_report_schema import review_generation_schema
+    from autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     import autocode_evidence_snapshot as evidence_snapshot
     from autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
@@ -500,8 +500,8 @@ decides what happens next. Do not declare project completion.
 """,
 }
 ASTRA_DECISIONS = """
-Return the complete ordered acceptance_criteria array from CURRENT HANDOFF DATA,
-preserving every id and criterion text exactly, including criteria outside the
+Return the complete ordered acceptance_criteria array from CURRENT HANDOFF DATA.
+For astra_review/astra_checkpoint omit criterion text; use only id, status and evidence. Include every criterion outside the
 current milestone. Mark unchecked criteria unverified; narrowing the review scope
 does not authorize dropping criteria from the approved contract.
 Choose exactly one status:

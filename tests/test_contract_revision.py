@@ -8,7 +8,7 @@ from autocode_goals import revision_guard
 class DraftVerificationRevisionTests(unittest.TestCase):
     def inputs(self, **contract_fields):
         body = {"acceptance_criteria": [{"id": "AC5", "criterion": "The complete project suite passes.",
-                 "verification_method": "test: test_ac5_recursive_suite", "human_review": False}],
+                 "verification_method": "Run python3 -m unittest nonexistent_test.py", "human_review": False}],
                 "required_behaviors": ["Preserve the current output exactly"], "scope_exclusions": [],
                 "constraints": [], "important_failure_cases": [], "permission_boundaries": ["No network"]}
         contract = {"body": body, "approval_status": "draft", "approval_event": None, **contract_fields}
@@ -40,6 +40,7 @@ class DraftVerificationRevisionTests(unittest.TestCase):
     def test_clearing_the_current_receipt_does_not_erase_saved_user_approval(self):
         state, after = self.inputs()
         state["user_events"] = [{"kind": "goal_approval", "token": "r1:previously-approved"}]
+        state["contract_history"] = [dict(copy.deepcopy(state["goal_contract"]), revision=1, hash="previously-approved")]
         with self.assertRaisesRegex(ValueError, "without a user-backed"):
             revision_guard(state, after, [], "glm_revise")
 
@@ -59,3 +60,48 @@ class DraftVerificationRevisionTests(unittest.TestCase):
                     after["acceptance_criteria"] = []
                 with self.assertRaisesRegex(ValueError, "without a user-backed"):
                     revision_guard(state, after, [], "glm_revise")
+
+    def test_unrelated_prior_turn_approval_does_not_freeze_a_new_draft(self):
+        state, after = self.inputs()
+        state["user_events"] = [{"kind": "goal_approval", "token": "r1:old"}]
+        old = copy.deepcopy(state["goal_contract"])
+        old.update(revision=1, hash="old")
+        old["body"]["acceptance_criteria"][0]["id"] = "PREVIOUS"
+        state["contract_history"] = [old]
+        revision_guard(state, after, [], "glm_revise")
+
+    def test_user_set_methods_remain_protected(self):
+        for origin in ("user_cli_edit", "user_answer", "user_feedback"):
+            state, after = self.inputs()
+            prior = copy.deepcopy(state["goal_contract"])
+            prior["origin"] = origin
+            event = {"id": "F1", "kind": "brief_feedback", "text": "Use this proof"}
+            state.update(answers={"Q1": {}}, brief_feedback=[event], user_events=[event])
+            if origin != "user_cli_edit":
+                prior["declared_changes"] = [{"item": "AC5", "basis": origin,
+                                              "answer_id": "Q1" if origin == "user_answer" else "F1"}]
+            state["contract_history"] = [prior]
+            with self.subTest(origin=origin), self.assertRaises(ValueError):
+                revision_guard(state, after, [], "glm_revise")
+
+    def test_runner_enforced_proof_cannot_be_replaced_by_prose(self):
+        for mark in ("test:", "guard:"):
+            state, after = self.inputs()
+            state["goal_contract"]["body"]["acceptance_criteria"][0]["verification_method"] = mark + " test_ac5_behavior"
+            with self.subTest(mark=mark), self.assertRaises(ValueError):
+                revision_guard(state, after, [], "glm_revise")
+
+    def test_approved_human_review_cannot_be_removed_with_unchanged_proof(self):
+        state, _ = self.inputs(approval_status="approved")
+        before = state["goal_contract"]["body"]
+        before["acceptance_criteria"][0]["human_review"] = True
+        after = copy.deepcopy(before)
+        after["acceptance_criteria"][0]["human_review"] = False
+        with self.assertRaises(ValueError):
+            revision_guard(state, after, [], "glm_revise")
+
+    def test_an_explicit_user_proof_change_is_consumed_once(self):
+        state, after = self.inputs()
+        state["answers"] = {"Q1": {"text": "Use this proof"}}
+        revision_guard(state, after, [{"item": "AC5", "change": "reworded", "basis": "user_answer",
+                       "answer_id": "Q1", "replacement": after["acceptance_criteria"][0]["verification_method"]}], "glm_revise")

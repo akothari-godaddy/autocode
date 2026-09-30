@@ -6,7 +6,7 @@ and bounded operational stops. They are not 28 interchangeable runtime bugs.
 PR #191 fixed oracle execution errors and an archive reference/coverage gap;
 the prose verification replay fix was already on master.
 
-## Planning loses a verified correction after clarification
+## Planning loses a report correction after clarification
 
 The inventory run repeatedly cited `.autocode/state.json` as repository source.
 The Investigator's correction reached its immediate retry, but clarification
@@ -17,9 +17,12 @@ second investigation.
 `autocode_stuck_job.with_guidance` now reads accepted planning report corrections
 from the existing investigation history. They remain prompt context across
 clarification, without resetting a repair allowance, an investigation limit,
-approval, permissions or a spend cap. Only `stage_output` diagnoses accepted
-with a retry are reusable; execution, environment and user-decision diagnoses
-are excluded. A follow-up conversation turn excludes older corrections.
+approval, permissions or a spend cap. Only `stage_output` diagnoses triggered by rejected reports are reusable, including
+repeated invalid output; convergence, environment and user-decision advice is excluded.
+Lessons remain run-wide because investigation identities are spent run-wide. Active
+guidance is appended last and wins conflicts, without duplicating its history row.
+The configured investigation limit caps retained lessons. The prompt calls these
+earlier corrections, not verified successful retries.
 
 A public CLI fault-injection regression reproduces rejection, investigation,
 clarification and re-planning. It fails against the previous runtime and
@@ -40,30 +43,33 @@ ordinary suite command, but the revision guard rejected that proof change before
 the plan had ever been approved. Report repair restored the unusable proof and
 planning restarted or asked another question.
 
-The guard now permits a nonempty verification-method correction in a draft with
-no approval receipt, while retaining the same criterion ID, literal behavior and
-human-review requirement. Behavior, permission and protected-list changes still
-need saved user authorization. Current and invalidated approvals retain their
-existing proof protections. The pure revision guard moved into
-`autocode_contract_revision`; the public `autocode_goals` entry remains available
-and its architecture line limit shrank.
+After review, the guard permits only planner-generated draft proof corrections,
+with identical ID, criterion text and human-review requirement, no current approval
+receipt, and no matching approved or user-authored proof in contract history.
+Approvals are matched by revision/hash token and criterion proof rather than any
+approval ever recorded. A test:/guard: proof cannot be downgraded to prose or a
+suite command without a saved user basis. Human-review changes are protected even
+when text and method are unchanged. Protected-list and permission guards remain.
 
-A public CLI regression fails on the original runtime and finishes on the
-candidate with one plan approval, no clarification and no Investigator. Pure
-tests also reject an accompanying behavior, permission or human-review change.
-Saved approval events also prevent a cleared current receipt from granting the
-draft exception after approval.
+This deliberately narrows the original repair: a recursive test-to-suite-command
+replacement now stops for a user-backed correction. CLI coverage checks both an
+ordinary draft command repair completing without a question and a prohibited
+downgrade stopping before approval/build. Verification written only in the original
+free-form task has no structured provenance; that existing limitation remains.
+Planner instructions now match the guard, including protected criterion text.
+The pure guard remains in `autocode_contract_revision` behind its existing public API.
 
 ## Completion reports retype approved criteria and builders rename tests
 
 The outbox repair passed all ten oracle checks, but its Completion Owner inserted
 one word into an approved criterion. The existing guard correctly rejected the
-report. Review generation schemas now enumerate the approved criterion IDs and
-literal texts, in addition to the existing contract and task identity bindings.
-The full ordered contract and independent evidence are still checked at runtime;
-the schema does not authorize a reworded or weaker completion report. The helper
-moved from `autocode_support` to the pure `autocode_report_schema`, lowering the
-support module's line limit.
+report. Completion decision generation now requests IDs, status and evidence without
+criterion text. Runtime validation requires the complete ordered IDs and rejects
+unknown, duplicate, missing or mixed-shape rows. Legacy full-text reports must match
+exactly; a copying error enters bounded report repair. Only validated ID-only rows
+receive runner-owned text, after provider artifacts are persisted; the record marks
+`criteria_hydrated`, and raw output remains unchanged. Identity and evidence guards
+remain in force. Validator/checkpoint schemas without criteria are unchanged.
 
 The archive repair passed its application checks but renamed two original tests
 to match newly planned case IDs. Both the oracle and regression proof reject
@@ -95,10 +101,8 @@ and `c939e21f97cd4fb4484d4005e41dd4b4a17df3e7b1240aa7f371a3082607dd85`.
 Original campaign evidence remains unchanged. Reference repairs are not
 counted as successful live AutoCode completions.
 
-Planner and Validator instructions now include numeric interactions and failure
-after staging begins, including compressed file and directory payloads. This
-improves the checks the models are asked to perform; it does not give AutoCode
-a domain-specific archive or database implementation.
+Planner and Validator instructions use general mixed-type numeric and staged-failure
+guidance, without embedding the new scenarios’ specific edge cases in every prompt.
 
 ## Review an accepted tradeoff within its stated scope
 
@@ -125,7 +129,7 @@ cap still stops the run. Active-time and iteration caps likewise remain intact.
 Live runs and deterministic fixture results are recorded separately under the
 ignored `.scenario-runs/remaining-fix-validation/` tree.
 
-## Completed validation
+## Validation before the review revisions
 
 The full suite passed 2,157 tests in 149 modules; the changed-file gate passed
 1,102 tests in 72 modules, with the final saved-approval boundary also covered by
@@ -151,3 +155,26 @@ calculated draft whitespace example. The harness supplied the proposed default;
 this remains an unnecessary clarification, not evidence of flawless planning.
 These targeted passes do not stand in for a fresh live run of the original full
 48-scenario campaign. Original campaign files remain unchanged.
+
+## Review revisions
+
+Claude reviewed the three implementation concerns in PR #192 before these revisions.
+The changes address the 13 original review comments: investigation continuity and
+trigger classification, active guidance precedence, honest lesson labeling and
+configured limits; proof provenance and human-review protection; prompt/guard
+consistency and general numeric/staging guidance; ID-only review reports and strict
+legacy repair; and hidden cache checks for exact overflow expiry and float rounding.
+An infinite-deadline mutant now demonstrates that the strengthened cache oracle
+rejects the shortcut raised in review. The prior live results above describe the
+pre-review head only; no new live-model campaign has been run for these revisions.
+
+The saved pre-review live cache deliverable was independently rechecked with the
+strengthened oracle: all five deliverable checks passed, including all ten hidden
+tests. This is a re-score of existing code, not a new live run of the revised runner.
+
+Post-review offline validation passed: 2,166 full-suite tests in 149 modules;
+1,132 changed-file tests in 75 modules; five planning CLI regressions; thirteen
+CLI evidence regressions; and 68 harness/catalog tests. The fake catalog records
+49 PASS, one existing NOT_EXERCISED and one existing live-Investigator SKIPPED.
+The original human-review-removal bypass was reproduced against `c99e955` and
+rejected by the revised guard. No live model calls were made for this revision.
