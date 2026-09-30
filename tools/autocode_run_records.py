@@ -37,6 +37,9 @@ except ImportError:
     import autocode_support as support
     import autocode_workflow as workflow
 
+# Planning restarts allowed per deferral reason since the user's last input; the next deferral pauses.
+MAX_DEFERRED_APPROVAL_RESTARTS = 2
+
 
 def now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat()
@@ -117,7 +120,24 @@ def normalize_human_boundary(state, run_dir):
     if disposition == 'defer' and proposal['scope'] == 'goal_approval':
         if planning.enabled(state) and not (state.get('goal_contract') or {}).get('body', {}).get('open_blocking_questions'):
             if not state.get('planning') or not planning.is_planning(state, state.get('next_stage')):
+                # A restart begins a cycle with a fresh review allowance, so a deferral that keeps
+                # recurring would spend review calls without limit (docs/bugs/2026-09-30-unbounded-
+                # planning-restart.md). Restarts are counted per reason since the user's last input.
+                reason = state['resolver']['human_disposition']['reason']
+                identity = support.digest({'task_id': state.get('task_id'), 'reason': reason,
+                                           'user_events': len(state.get('user_events', []))})
+                restarts = state['resolver'].setdefault('deferred_approval_restarts', {})
                 planning.start(state)
+                if restarts.get(identity, 0) >= MAX_DEFERRED_APPROVAL_RESTARTS:
+                    # The new cycle is ready, so an explicit resume runs exactly one more.
+                    state.pop(resolver_human.PRIVATE, None)
+                    state.update(status='PAUSED_APPROVAL_DEFERRED', phase='PAUSED_OR_BLOCKED', stop_reason=(
+                        f"Plan approval was deferred again: {reason}. Planning already restarted "
+                        f"{restarts[identity]} times for this reason since your last input, so it stopped "
+                        "instead of starting another cycle. Inspect the run; --resume-paused runs one more "
+                        "planning cycle, and --feedback restarts from requirements."))
+                    return
+                restarts[identity] = restarts.get(identity, 0) + 1
             state.update(status='RUNNING', phase='PLANNING')
             state.pop(resolver_human.PRIVATE, None)
             return
