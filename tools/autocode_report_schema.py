@@ -31,7 +31,7 @@ def review_generation_schema(schema, state, stage):
     return result
 
 
-COMPLETION_STAGES = {"astra_review", "astra_checkpoint"}
+COMPLETION_STAGES = {"astra_review"}
 
 
 def review_validation_schema(schema, state, record, value):
@@ -65,10 +65,10 @@ def review_validation_schema(schema, state, record, value):
 
 
 def hydrate_review_report(value, state, record):
-    """Fill runner-owned text after validation, leaving the provider file untouched.
+    """Fill runner-owned text after validation for the canonical saved report.
 
-    criteria_hydrated is written only here on the stage record for audit/recovery;
-    the controller and status view continue receiving the complete legacy shape.
+    The loader preserves the original response in its existing reported_output
+    artifact, so every downstream reader can use the complete canonical shape.
     """
     stage = record.get("original_stage") or record.get("stage")
     if stage not in COMPLETION_STAGES or not (state or {}).get("acceptance_criteria"):
@@ -79,5 +79,4 @@ def hydrate_review_report(value, state, record):
     result = copy.deepcopy(value)
     for row, approved in zip(result["acceptance_criteria"], state["acceptance_criteria"]):
         row["criterion"] = approved["criterion"]
-    record["criteria_hydrated"] = True
     return result

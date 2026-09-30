@@ -22,7 +22,7 @@ class ReviewReportSchemaTests(unittest.TestCase):
 
     def test_strict_generation_requires_ids_without_text_and_preserves_inputs(self):
         before = copy.deepcopy((self.schema, self.state))
-        for stage in ("astra_review", "astra_checkpoint"):
+        for stage in ("astra_review",):
             schema = review_generation_schema(self.schema, self.state, stage)
             validate_schema(self.report, schema)
             item = schema["properties"]["acceptance_criteria"]["items"]
@@ -31,8 +31,8 @@ class ReviewReportSchemaTests(unittest.TestCase):
             self.assertEqual(["G1", "G2"], item["properties"]["id"]["enum"])
         self.assertEqual(before, (self.schema, self.state))
 
-    def test_loader_accepts_id_only_and_legacy_and_preserves_provider_file(self):
-        for stage in ("astra_review", "astra_checkpoint", "astra_review_report_repair"):
+    def test_loader_saves_canonical_report_and_preserves_original_response(self):
+        for stage in ("astra_review", "astra_review_report_repair"):
             for legacy in (False, True):
                 with self.subTest(stage=stage, legacy=legacy), tempfile.TemporaryDirectory() as directory:
                     raw = copy.deepcopy(self.report)
@@ -47,8 +47,11 @@ class ReviewReportSchemaTests(unittest.TestCase):
                         record["original_stage"] = "astra_review"
                     result = runner.load_stage_report(record, state=self.state)
                     self.assertEqual(["Same wording"]*2, [row["criterion"] for row in result["acceptance_criteria"]])
-                    self.assertEqual(raw, json.loads(output.read_text()))
-                    self.assertEqual(not legacy, bool(record.get("criteria_hydrated")))
+                    self.assertEqual(result, json.loads(output.read_text()))
+                    if not legacy:
+                        self.assertEqual(raw, json.loads(Path(record["reported_output"]).read_text()))
+                    self.assertEqual(result, runner.load_stage_report(record, state=self.state))
+                    self.assertNotIn("criteria_hydrated", record)
 
     def test_bad_identity_text_or_mixed_shape_is_invalid_output_before_hydration(self):
         for case in ("unknown", "duplicate", "missing", "reordered", "mixed", "conflicting"):
@@ -75,3 +78,13 @@ class ReviewReportSchemaTests(unittest.TestCase):
         for stage in ("astra_plan", "sol", "terra"):
             schema = review_generation_schema(self.schema, self.state, stage)
             self.assertIn("criterion", schema["properties"]["acceptance_criteria"]["items"]["required"])
+
+    def test_production_checkpoint_keeps_its_nested_full_text_schema(self):
+        import autocode_workflow as workflow
+        schema = workflow.checkpoint_schema(runner.SCHEMA_DIR)
+        bound = review_generation_schema(schema, self.state, "astra_checkpoint")
+        self.assertEqual(schema, bound)
+        item = bound["properties"]["decision"]["properties"]["acceptance_criteria"]["items"]
+        self.assertIn("criterion", item["required"])
+        report = {"decision": {"acceptance_criteria": [{"id": "G1"}]}}
+        self.assertEqual(report, hydrate_review_report(report, self.state, {"stage": "astra_checkpoint"}))

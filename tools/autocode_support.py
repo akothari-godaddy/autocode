@@ -500,8 +500,8 @@ decides what happens next. Do not declare project completion.
 """,
 }
 ASTRA_DECISIONS = """
-Return the complete ordered acceptance_criteria array from CURRENT HANDOFF DATA.
-For astra_review/astra_checkpoint omit criterion text; use only id, status and evidence. Include every criterion outside the
+Return every acceptance criterion in CURRENT HANDOFF DATA order, preserving IDs and criterion text exactly.
+Only astra_review omits criterion text, returning id, status and evidence. Include criteria outside the
 current milestone. Mark unchecked criteria unverified; narrowing the review scope
 does not authorize dropping criteria from the approved contract.
 Choose exactly one status:

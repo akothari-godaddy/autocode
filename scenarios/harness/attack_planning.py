@@ -58,6 +58,8 @@ def citation_after_clarification(fake, original, stage, data, trace):
 
 
 def draft_suite_proof(fake, original, stage, data, trace, config):
+    if data.get("report_repair"):
+        trace("proof_rejection_observed", stage=stage, error=data.get("error", ""))
     value = original(stage, data)
     if stage == "astra_discovery":
         value["contract"]["acceptance_criteria"][0]["verification_method"] = ("test: test_c1_recursive_suite"

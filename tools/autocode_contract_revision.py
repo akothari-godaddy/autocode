@@ -44,7 +44,7 @@ def draft_proof_corrections(state: dict, before: dict, after: dict) -> set[str]:
         return set()
     old = {row["id"]: row for row in before.get("acceptance_criteria", [])}
     new = {row["id"]: row for row in after.get("acceptance_criteria", [])}
-    marked = lambda method: str(method).strip().lower().startswith(("test:", "guard:"))
+    marked = lambda method: test_cases.proof(method) != str(method or "").strip()
     return {cid for cid in old.keys() & new.keys()
             if old[cid]["criterion"] == new[cid]["criterion"]
             and old[cid].get("human_review") == new[cid].get("human_review")
@@ -117,6 +117,10 @@ def revision_guard(state, body, changes, origin):
     new_rows = {row["id"]: row for row in body.get("acceptance_criteria", [])}
     comparable = [dict(row, verification_method=new_rows[row["id"]]["verification_method"])
                   if row["id"] in proof_corrections else row for row in previous.get("acceptance_criteria", [])]
+    if previous_contract.get("approval_status") == "draft" and not previous_contract.get("approval_event"):
+        comparable = [dict(row, human_review=True) if (
+            not row.get("human_review") and new_rows.get(row["id"], {}).get("human_review") is True
+            and not declared.get(row["id"]) and not protected_proof(state, row)) else row for row in comparable]
     signature = lambda row: (row["criterion"], test_cases.proof(row["verification_method"]), row.get("human_review", False))
     old_criteria = {row["id"]: signature(row) for row in comparable}
     new_criteria = {cid: signature(row) for cid, row in new_rows.items()}

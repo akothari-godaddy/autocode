@@ -83,4 +83,6 @@ class DraftProofPlanning(AdversarialCase):
         self.assertFalse(view["done"], self.root)
         self.assertFalse(self.trace("stage_enter", "terra"))
         self.assertFalse(any(step["kind"] == "approve-plan" for step in self.driver.steps))
-        self.assertTrue(self.trace("draft_proof"), self.root)
+        self.assertTrue(self.trace("stage_enter", "glm_revise"), self.root)
+        rejected = self.trace("proof_rejection_observed", "glm_revise")
+        self.assertTrue(any("without a user-backed" in row["error"] for row in rejected), self.root)

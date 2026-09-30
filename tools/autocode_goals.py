@@ -13,11 +13,11 @@ import uuid
 try:
     from .autocode_contract_revision import (PLANNER_ORIGINS, PROTECTED_LISTS as _PROTECTED_LISTS,
                                             revision_guard, saved_user_basis as _saved_user_basis)
-    from . import autocode_util as s, autocode_workflows as workflows, autocode_test_cases as test_cases
+    from . import autocode_util as s, autocode_workflows as workflows
 except ImportError:
     from autocode_contract_revision import (PLANNER_ORIGINS, PROTECTED_LISTS as _PROTECTED_LISTS,
                                            revision_guard, saved_user_basis as _saved_user_basis)
-    import autocode_util as s, autocode_workflows as workflows, autocode_test_cases as test_cases
+    import autocode_util as s, autocode_workflows as workflows
 
 # The state keys under which a Resolver proposal waits for the user and the request shown to them.
 # autocode_resolver_human owns those records and re-exports these as PRIVATE and PUBLIC; they are
@@ -1212,12 +1212,12 @@ If no matching current or historical conflict exists, retain the saved decision 
 accepted_assumptions instead; an empty conflict_resolutions list then is valid.
 Agent assumptions and unrelated user events cannot resolve a conflict. Carry genuinely
 unresolved conflicts into open_blocking_questions; do not ask again for a saved decision.
-When revising a plan after review, copy required_behaviors, scope_exclusions,
-constraints, important_failure_cases, acceptance_criteria (including verification
+When revising, copy required_behaviors, scope_exclusions, constraints, important_failure_cases, acceptance_criteria (including verification
 methods), and permission_boundaries verbatim from goal_contract.body. In a draft without an approval receipt,
 you may correct only a planner-generated verification_method that was never approved or user-set, retaining
-exact behavior, ID and human_review. Never replace test:/guard: proof with prose or a suite command.
-Use contract_changes=[] only for these narrow corrections; otherwise cite a saved user basis. Add new
+exact behavior, ID and human_review. Test:/guard: proofs cannot become prose or suite commands without a saved user basis.
+An unapproved planner draft may add human review. Approved/user-set review changes and removals need a saved basis.
+Use contract_changes=[] only for allowed draft corrections. Add new
 items when review identifies a gap; revise technical_approach, milestones, paths,
 tests and dependencies as needed. Do not rewrite an existing protected item for
 style or detail. A changed or removed protected item requires a saved user answer

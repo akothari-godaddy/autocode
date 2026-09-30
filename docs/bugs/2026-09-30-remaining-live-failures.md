@@ -48,7 +48,9 @@ with identical ID, criterion text and human-review requirement, no current appro
 receipt, and no matching approved or user-authored proof in contract history.
 Approvals are matched by revision/hash token and criterion proof rather than any
 approval ever recorded. A test:/guard: proof cannot be downgraded to prose or a
-suite command without a saved user basis. Human-review changes are protected even
+suite command without a saved user basis. An unapproved planner draft may add a
+human-review requirement that has never been approved or user-set. Removing one,
+or changing an approved or user-set requirement, needs saved user backing even
 when text and method are unchanged. Protected-list and permission guards remain.
 
 This deliberately narrows the original repair: a recursive test-to-suite-command
@@ -63,13 +65,16 @@ The pure guard remains in `autocode_contract_revision` behind its existing publi
 
 The outbox repair passed all ten oracle checks, but its Completion Owner inserted
 one word into an approved criterion. The existing guard correctly rejected the
-report. Completion decision generation now requests IDs, status and evidence without
-criterion text. Runtime validation requires the complete ordered IDs and rejects
+report. The `astra_review` completion decision now requests IDs, status and evidence
+without criterion text. Runtime validation requires the complete ordered IDs and rejects
 unknown, duplicate, missing or mixed-shape rows. Legacy full-text reports must match
 exactly; a copying error enters bounded report repair. Only validated ID-only rows
-receive runner-owned text, after provider artifacts are persisted; the record marks
-`criteria_hydrated`, and raw output remains unchanged. Identity and evidence guards
-remain in force. Validator/checkpoint schemas without criteria are unchanged.
+receive runner-owned text before the canonical report is saved, so disk readers
+and the controller receive the same complete report. The existing `.reported.json`
+artifact and `reported_output` record preserve the original response; no hydration
+marker is added. Identity and evidence guards remain in force. The real nested
+checkpoint schema retains its full-text requirement. Report-only repair preserves
+the original saved schema bytes, including full-text schemas from older runs.
 
 The archive repair passed its application checks but renamed two original tests
 to match newly planned case IDs. Both the oracle and regression proof reject
@@ -178,3 +183,36 @@ CLI evidence regressions; and 68 harness/catalog tests. The fake catalog records
 49 PASS, one existing NOT_EXERCISED and one existing live-Investigator SKIPPED.
 The original human-review-removal bypass was reproduced against `c99e955` and
 rejected by the revised guard. No live model calls were made for this revision.
+
+## Follow-up review corrections
+
+The next review raised 12 comments. Eleven have implementation changes: persist
+the canonical hydrated report for deferred blockers and other disk readers; restore
+exact-copy instructions for full-text reports; allow adding human review to an
+unapproved planner draft; keep the actual nested checkpoint schema outside the
+ID-only path; preserve pre-upgrade repair schema bytes; strengthen the negative
+proof-downgrade CLI test; reuse marker parsing; remove unused imports and the unused
+hydration marker; and make the ID-only fault injection safe on repeated repair.
+Canonical persistence also addresses the review's simplification request.
+
+The deferred-blocker CLI regression fails against `90210554` because the Resolver
+is never reached; it passes with the canonical-output fix. Reloading the canonical
+report is idempotent and keeps the original response artifact.
+
+The remaining guidance-policy comment conflicts with Claude's earlier explicit
+recommendation to retain run-wide report corrections. The
+[clarification request](https://github.com/charlieanna/autocode/pull/192#discussion_r4148743932)
+asks how guidance retirement should interact with spent investigation identities
+and a later investigation replacing the active correction. The existing reviewed
+policy remains unchanged pending that answer. These are implementation statuses,
+not reviewer verification; review threads remain open.
+
+Follow-up validation: 1,091 changed-file tests in 70 modules (against `90210554`),
+19 planning/evidence CLI tests and architecture checks passed. The fake catalog
+again records 49 PASS, one existing NOT_EXERCISED and one live-Investigator SKIPPED.
+The full suite ran 2,169 tests in 149 modules with one failure in the existing
+`test_grader_kills_descendants_on_timeout_and_success` success case: immediately
+after termination, macOS `ps` returned `?E` instead of an absent or zombie process.
+All 39 diagnosis-module tests passed on an isolated rerun. This suggests a
+process-observation race but is not a clean full-suite pass; the assertion remains
+unchanged and the failure is disclosed for review. No live model calls were made.

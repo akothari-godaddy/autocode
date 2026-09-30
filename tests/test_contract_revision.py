@@ -105,3 +105,20 @@ class DraftVerificationRevisionTests(unittest.TestCase):
         state["answers"] = {"Q1": {"text": "Use this proof"}}
         revision_guard(state, after, [{"item": "AC5", "change": "reworded", "basis": "user_answer",
                        "answer_id": "Q1", "replacement": after["acceptance_criteria"][0]["verification_method"]}], "glm_revise")
+
+    def test_draft_can_add_human_review_but_approved_or_user_set_review_stays_protected(self):
+        for kind in ("draft", "approved", "user_cli_edit", "previously_approved"):
+            state, _ = self.inputs(approval_status="approved" if kind == "approved" else "draft")
+            if kind == "user_cli_edit":
+                state["goal_contract"]["origin"] = "user_cli_edit"
+            if kind == "previously_approved":
+                prior = dict(copy.deepcopy(state["goal_contract"]), revision=1, hash="old", approval_status="approved")
+                state["contract_history"] = [prior]
+            after = copy.deepcopy(state["goal_contract"]["body"])
+            after["acceptance_criteria"][0]["human_review"] = True
+            with self.subTest(kind=kind):
+                if kind == "draft":
+                    revision_guard(state, after, [], "glm_revise")
+                else:
+                    with self.assertRaisesRegex(ValueError, "without a user-backed"):
+                        revision_guard(state, after, [], "glm_revise")
