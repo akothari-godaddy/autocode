@@ -39,8 +39,10 @@ from pathlib import Path, PurePosixPath
 
 try:
     from . import autocode_util as util, autocode_agent_env as agent_env
+    from . import autocode_test_environment as test_env
 except ImportError:
     import autocode_util as util, autocode_agent_env as agent_env
+    import autocode_test_environment as test_env
 
 PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"
 # Directories that hold tests wherever they appear, and ones that do only at the repository root:
@@ -156,12 +158,7 @@ def removed_python_tests(workspace, base, changes) -> list[str]:
 # --- project test frameworks -----------------------------------------------
 
 def python_for(project) -> str:
-    project = Path(project)
-    for relative in (".venv/bin/python", "venv/bin/python"):
-        candidate = project / relative
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return shutil.which("python3") or sys.executable
+    return test_env.python_for(project)
 
 
 def _read(path):
@@ -296,6 +293,12 @@ def test_environment(tree, env=None):
     if environment.get("PYTHONPATH"):
         roots.append(environment["PYTHONPATH"])
     environment["PYTHONPATH"] = os.pathsep.join(roots)
+    python = test_env.virtualenv_python(tree)
+    if python:
+        # Test fixtures often launch `python3` rather than sys.executable.
+        # They must inherit the same dependencies as the parent test process.
+        environment["PATH"] = str(Path(python).parent) + os.pathsep + environment.get("PATH", "")
+        environment["VIRTUAL_ENV"] = str(Path(python).parent.parent)
     return environment
 
 
@@ -469,10 +472,18 @@ def link_dependencies(source_root, tree):
     """Expose ignored dependency directories (node_modules, venvs) to a scratch tree."""
     if not source_root:
         return
+    roots = test_env.dependency_roots(source_root)
     for name in DEPENDENCY_DIRS:
-        source, target = Path(source_root) / name, Path(tree) / name
-        if source.is_dir() and not target.exists() and not target.is_symlink():
-            target.symlink_to(source.resolve(), target_is_directory=True)
+        target = Path(tree) / name
+        # Sharing a virtualenv is supported; other dependencies keep their
+        # existing task-local lookup to avoid changing package-manager behavior.
+        sources = roots if name in (".venv", "venv") else roots[:1]
+        for root in sources:
+            source = root / name
+            if source.is_dir():
+                if not target.exists() and not target.is_symlink():
+                    target.symlink_to(source.resolve(), target_is_directory=True)
+                break
 
 
 GENERATED_SOURCE_LIMIT = 1_000_000
