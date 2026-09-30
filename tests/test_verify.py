@@ -84,6 +84,49 @@ class VerifyCase(unittest.TestCase):
         self.assertEqual([], [line for line in git(project.root, "worktree", "list").splitlines()[1:]])
         self.assertEqual({"greet.py", "test_greet.py"}, set(result["changes"]))
 
+    def test_linked_task_inherits_project_dependencies_for_parent_and_child_tests(self):
+        project = self.project({**SEED, ".gitignore": ".venv/\n"})
+        environment = project.root / ".venv"
+        subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(environment)], check=True,
+                       capture_output=True, text=True)
+        python = environment / "bin" / "python"
+        site = Path(subprocess.check_output(
+            [str(python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"], text=True).strip())
+        (site / "worktree_test_dependency.py").write_text("value = 42\n")
+        task = Path(project.temp.name) / "linked-task"
+        git(project.root, "worktree", "add", "--detach", str(task), project.base)
+        extra = ("\nclass Dependencies(unittest.TestCase):\n"
+                 "    def test_project_dependency_is_available(self):\n"
+                 "        import worktree_test_dependency\n"
+                 "        self.assertEqual(42, worktree_test_dependency.value)\n"
+                 "    def test_fixture_child_uses_the_same_environment(self):\n"
+                 "        import subprocess\n"
+                 "        child = subprocess.run(['python3', '-c', "
+                 "'import worktree_test_dependency; assert worktree_test_dependency.value == 42'], "
+                 "capture_output=True, text=True)\n"
+                 "        self.assertEqual(0, child.returncode, child.stderr)\n")
+        candidate = {**REFERENCE, "test_greet.py": REFERENCE["test_greet.py"] + extra}
+        references.write(candidate, task)
+        framework = verify.detect_framework(task)
+        self.assertEqual(str(python), framework.python)
+        result = verify.verify(task, project.base, project.evidence, framework=framework,
+                               dependencies_from=task, timeout=120)
+        self.assertEqual(verify.PASS, result["verdict"], result)
+        self.assertIn("test_greet.Dependencies.test_fixture_child_uses_the_same_environment",
+                      result["pass_to_pass"])
+        self.assertEqual(0, result["checks"]["suite_on_candidate"]["exit_code"])
+        self.assertFalse((task / ".venv").exists(), "verification must not modify the task checkout")
+
+    def test_a_task_local_environment_overrides_the_main_checkout(self):
+        project = self.project()
+        for root in (project.root, Path(project.temp.name) / "linked-task"):
+            if root != project.root:
+                git(project.root, "worktree", "add", "--detach", str(root), project.base)
+            (root / ".venv" / "bin").mkdir(parents=True)
+            (root / ".venv" / "bin" / "python").symlink_to(sys.executable)
+        task = Path(project.temp.name) / "linked-task"
+        self.assertEqual(str(task / ".venv" / "bin" / "python"), verify.python_for(task))
+
     def test_fix_without_a_regression_test_fails(self):
         project = self.project()
         project.write({"greet.py": REFERENCE["greet.py"]})

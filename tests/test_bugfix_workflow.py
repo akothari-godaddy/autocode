@@ -158,11 +158,9 @@ class ProvenanceDefaults(unittest.TestCase):
         self.assertEqual([str(project / ".venv" / "bin" / "python")], seen)
         # An explicit interpreter setting still wins.
         state = {**state, "settings": {"regression": {"python": "/opt/python"}}}
-        state.pop("regression_proof", None)
         seen.clear()
         with mock.patch.object(verify, "detect_framework", side_effect=lambda root, python: seen.append(python)), \
-                mock.patch.object(verify, "verify", return_value=result), \
-                mock.patch.object(regression.util, "snapshot", return_value={"revision": "other"}):
+                mock.patch.object(verify, "verify", return_value=result):
             regression.prove(state, task, Path(temp.name) / "run")
         self.assertEqual(["/opt/python"], seen)
 

@@ -154,11 +154,23 @@ def prove(state, workspace, run_dir):
     current = util.snapshot(workspace)["revision"]
     saved = state.get("regression_proof") or {}
     scope = sorted(case["id"] for case in cases(state))
-    # The cases due grow as milestones are accepted; a proof for a smaller scope is stale.
-    if saved.get("source_revision") == current and saved.get("case_scope", scope) == scope:
+    options = settings(state)
+    # Stored only in regression_proof; prove reads it before reusing evidence.
+    # A repaired test environment must invalidate a prior failure (or PASS)
+    # even when the source and acceptance criteria have not changed.
+    execution_context = {
+        "python": options.get("python") or verify.python_for(state.get("project_workspace") or workspace),
+        "test_command": options.get("test_command"),
+        "regression_command": options.get("regression_command"),
+        "timeout": suite_timeout(state),
+    }
+    if (saved.get("source_revision") == current and saved.get("case_scope", scope) == scope
+            and saved.get("execution_context") == execution_context):
         return saved
     with runner_check.track(state, run_dir, STAGE, "Preparing regression checks", status.persist) as progress:
-        return _prove(state, workspace, run_dir, current, scope, progress)
+        proof = _prove(state, workspace, run_dir, current, scope, progress)
+        proof["execution_context"] = execution_context
+        return proof
 
 
 def _prove(state, workspace, run_dir, current, scope, progress):
