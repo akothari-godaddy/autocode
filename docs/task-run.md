@@ -52,6 +52,7 @@ All commands take `--workspace WORKSPACE`; commands on an existing run add
 | --- | --- | --- |
 | Start | `autocode "BRIEF" --in-place --no-chat [options]` | 0 complete, 2 stopped for input |
 | Status | `autocode --status` | 0; prints JSON, the view is under `"view"` |
+| Display brief | `autocode --show-goal` | 0; prints the current brief for human review |
 | Continue | `autocode --no-chat [options]` | 0 complete, 2 stopped for input |
 | Resume a pause | `autocode --resume-paused --no-chat [options]` | 0 complete, 2 stopped for input |
 | Answer | `autocode --answer QUESTION_ID=TEXT` | 0 saved, 2 rejected |

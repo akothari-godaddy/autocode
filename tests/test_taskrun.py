@@ -5,6 +5,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import autocode_run_view as run_view
 import autocode_taskrun as taskrun
@@ -170,6 +171,15 @@ class TaskRunTests(unittest.TestCase):
         broken = taskrun.TaskRun(self.workspace, run.run_dir, options=("--no-such-flag",), env=self.env)
         with self.assertRaisesRegex(taskrun.TaskRunError, "unrecognized arguments"):
             broken.advance()
+
+
+class TaskRunClientTests(unittest.TestCase):
+    def test_show_goal_returns_the_current_displayed_brief(self):
+        run = taskrun.TaskRun(Path("/work/repo"), Path("/work/repo/.autocode/runs/one"))
+        completed = subprocess.CompletedProcess([], 0, stdout="Build brief r2\nAcceptance criteria:\n  [AC1] Works\n")
+        with patch.object(run, "_invoke", return_value=completed) as invoke:
+            self.assertEqual(completed.stdout, run.show_goal())
+        invoke.assert_called_once_with("show goal", "--show-goal")
 
 
 if __name__ == "__main__":

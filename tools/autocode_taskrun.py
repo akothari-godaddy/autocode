@@ -73,6 +73,10 @@ class TaskRun:
         except (ValueError, KeyError) as error:
             raise TaskRunError(f"--status did not return a status view: {error}") from None
 
+    def show_goal(self) -> str:
+        """Return the displayed brief a person must read before approving its token."""
+        return self._invoke("show goal", "--show-goal").stdout
+
     def advance(self) -> dict:
         """Relaunch the run; it works until it completes or stops for input."""
         self._invoke("advance", "--no-chat", *self.options, advancing=True)
