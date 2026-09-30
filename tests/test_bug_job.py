@@ -63,10 +63,24 @@ class PrepareTests(unittest.TestCase):
             state = state_for(workspace)
             request = autoresolver.prepare(state, bug_job.STAGE, "/run/state.json", None)
         self.assertEqual(("astra", "investigator", True), (request.role, request.route_role, request.allow_write))
-        self.assertEqual(state["settings"]["roles"]["astra"], state["settings"]["roles"]["investigator"])
+        self.assertEqual(state["settings"]["roles"]["plan_reviewer"], state["settings"]["roles"]["investigator"])
         self.assertEqual(bug_job.SCHEMA, request.schema)
         self.assertIn("renew the same domain twice", request.prompt)
         self.assertEqual("INVESTIGATING", state["phase"])
+
+    def test_without_a_plan_reviewer_the_investigator_falls_back_to_the_resolver_route(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            state = state_for(workspace)
+            del state["settings"]["roles"]["plan_reviewer"]
+            autoresolver.prepare(state, bug_job.STAGE, "/run/state.json", None)
+        self.assertEqual(state["settings"]["roles"]["astra"], state["settings"]["roles"]["investigator"])
+
+    def test_a_saved_investigator_route_is_kept(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            state = state_for(workspace)
+            state["settings"]["roles"]["investigator"] = {"model": "saved"}
+            autoresolver.prepare(state, bug_job.STAGE, "/run/state.json", None)
+        self.assertEqual({"model": "saved"}, state["settings"]["roles"]["investigator"])
 
 
 class ApplyTests(unittest.TestCase):
