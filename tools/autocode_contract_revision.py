@@ -104,4 +104,3 @@ def revision_guard(state, body, changes, origin):
             consume(item, "permission_changed")
     if any(rows for rows in declared.values()):
         raise ValueError("contract_changes contains an item that was not changed in the protected contract")
-

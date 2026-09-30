@@ -124,3 +124,30 @@ usage guard. Unknown consumption remains unknown, and a positive reported-token
 cap still stops the run. Active-time and iteration caps likewise remain intact.
 Live runs and deterministic fixture results are recorded separately under the
 ignored `.scenario-runs/remaining-fix-validation/` tree.
+
+## Completed validation
+
+The full suite passed 2,157 tests in 149 modules; the changed-file gate passed
+1,102 tests in 72 modules, with the final saved-approval boundary also covered by
+the focused tests and full suite. All four planning CLI regressions and 68
+harness/catalog tests passed. The fake catalog recorded 49 passes, one existing
+scenario not exercised and one existing scenario requiring a live Investigator
+skipped. Each new seed and unfixed variant is rejected; each reference passes.
+
+The targeted live reruns used only the Codex-only OpenCode routes, with the same
+30-minute active-time, 10-minute stage, six-iteration and two-million reported-token
+limits. Source hashes stayed unchanged throughout both live snapshots.
+
+| Scenario | Live outcome | Oracle | Clarification answers |
+| --- | --- | --- | --- |
+| Sound design review | PASS | 7/7 | 0 |
+| Cache numeric deadline repair | PASS | 10/10 | 0 |
+| Outbox query-limit repair | PASS | 10/10 | 0 |
+| Archive corruption/cleanup repair | PASS | 10/10 | 0 |
+| Timesheet by-project feature | PASS | 6/6 | 1 |
+
+The timesheet's one answer authorized correction of the model's incorrectly
+calculated draft whitespace example. The harness supplied the proposed default;
+this remains an unnecessary clarification, not evidence of flawless planning.
+These targeted passes do not stand in for a fresh live run of the original full
+48-scenario campaign. Original campaign files remain unchanged.

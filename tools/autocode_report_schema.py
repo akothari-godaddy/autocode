@@ -32,5 +32,3 @@ def review_generation_schema(schema, state, stage):
             if key in fields:
                 fields[key] = {**fields[key], "enum": [row[key] for row in criteria]}
     return result
-
-
