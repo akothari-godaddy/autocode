@@ -174,6 +174,20 @@ class TaskRunTests(unittest.TestCase):
 
 
 class TaskRunClientTests(unittest.TestCase):
+    def test_answer_forwards_the_current_resolver_token(self):
+        run = taskrun.TaskRun(Path("/work/repo"), Path("/work/repo/.autocode/runs/one"))
+        with patch.object(run, "_act", return_value={"needs": {"kind": "answer"}}) as act:
+            view = run.answer("Q1", "Use addition.py", resolver_token="current-token")
+        act.assert_called_once_with("answer", "--answer", "Q1=Use addition.py",
+                                     "--resolver-token", "current-token")
+        self.assertEqual("answer", view["needs"]["kind"])
+
+    def test_answer_without_resolver_token_keeps_the_existing_cli_contract(self):
+        run = taskrun.TaskRun(Path("/work/repo"), Path("/work/repo/.autocode/runs/one"))
+        with patch.object(run, "_act") as act:
+            run.answer("Q1", "Use addition.py")
+        act.assert_called_once_with("answer", "--answer", "Q1=Use addition.py")
+
     def test_start_preserves_cli_error_when_no_run_was_created(self):
         for stderr, stdout in (("autocode: GoCode authentication check failed", ""),
                                ("", "autocode: startup failed")):

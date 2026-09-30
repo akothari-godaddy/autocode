@@ -30,7 +30,8 @@ while not view["done"]:
     elif need["kind"] == "answer":
         for question in need["questions"]:
             # Decision questions may have no default; choose among their options.
-            view = run.answer(question["id"], question["proposed_default"] or question["options"][0])
+            view = run.answer(question["id"], question["proposed_default"] or question["options"][0],
+                              resolver_token=need.get("resolver_token"))
     elif need["kind"] == "continue":
         view = run.advance_until_input()
     else:
@@ -55,7 +56,7 @@ All commands take `--workspace WORKSPACE`; commands on an existing run add
 | Display brief | `autocode --show-goal` | 0; prints the current brief for human review |
 | Continue | `autocode --no-chat [options]` | 0 complete, 2 stopped for input |
 | Resume a pause | `autocode --resume-paused --no-chat [options]` | 0 complete, 2 stopped for input |
-| Answer | `autocode --answer QUESTION_ID=TEXT` | 0 saved, 2 rejected |
+| Answer | `autocode --answer QUESTION_ID=TEXT [--resolver-token TOKEN]` | 0 saved, 2 rejected |
 | Approve the plan | `autocode --approve-goal TOKEN` | 0 saved, 2 rejected |
 | Approve a review | `autocode --approve-review CRITERION --review-token TOKEN` | 0 saved, 2 rejected |
 | Plan feedback | `autocode --feedback TEXT` | 0 saved, 2 rejected |

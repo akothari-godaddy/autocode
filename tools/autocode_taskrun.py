@@ -108,8 +108,10 @@ class TaskRun:
     def receive_dependency(self, manifest: Path) -> dict:
         return self._act("receive dependency", "--receive-dependency", str(manifest))
 
-    def answer(self, question_id: str, text: str) -> dict:
-        return self._act("answer", "--answer", f"{question_id}={text}")
+    def answer(self, question_id: str, text: str, *, resolver_token: str | None = None) -> dict:
+        """Answer the displayed question, retaining its resolver token when present."""
+        token_args = ("--resolver-token", resolver_token) if resolver_token is not None else ()
+        return self._act("answer", "--answer", f"{question_id}={text}", *token_args)
 
     def approve_plan(self, token: str) -> dict:
         return self._act("approve plan", "--approve-goal", token)
