@@ -1686,7 +1686,7 @@ def _main_body(unit=None) -> int:
                 state.update(status='RUNNING', phase='EXECUTING')
                 state.pop('stop_reason', None)
                 write_json(state_path, state)
-            if (not decision_action and args.grant_recovery is None and not args.diagnose_failed_stage
+            if (not decision_action and args.grant_recovery is None and not args.diagnose_failed_stage and not args.retry_builder
                     and state.get('status') != 'RUNNING'
                     and not acknowledged_planning_extension and not acknowledged_bound_change
                     and str(state.get('status', '')).startswith('PAUSED_')
@@ -1844,8 +1844,8 @@ def _main_body(unit=None) -> int:
             if args.migrate_only:
                 print("Migrated to an unapproved draft; saved work retained; no agent launched")
                 return 0
-            if args.retry_builder:
-                dispatch.request_retry(state, run_dir, args.retry_builder)
+            if args.retry_builder and not dispatch.try_request_retry(state, run_dir, args.retry_builder, issued=issued):
+                return 2
             normalize_human_boundary(state, run_dir)
             user_action = any((args.show_goal, args.answer, args.delegate, args.delegate_all, args.reject_assumption,
                                args.approve_goal, args.edit_goal,

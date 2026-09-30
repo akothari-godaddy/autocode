@@ -619,9 +619,40 @@ def dispatch(state, workspace, run_dir):
     return record
 
 
-def request_retry(state, run_dir, selected):
-    """Explicitly retry named stopped members while retaining successful siblings."""
+def try_request_retry(state, run_dir, selected, *, issued=None):
+    """Reject invalid CLI selections without replacing the saved operational pause."""
+    candidate = copy.deepcopy(state)
+    try:
+        request_retry(candidate, run_dir, selected, issued=issued)
+    except ValueError as error:
+        print(f"Input rejected: {error}", file=sys.stderr)
+        return False
+    state.clear()
+    state.update(candidate)
+    return True
+
+
+def request_retry(state, run_dir, selected, *, issued=None):
+    """Explicitly retry a stopped serial milestone or named parallel members."""
     goals.execution_guard(state)
+    if state.get("next_stage") == "terra":
+        try:
+            from . import autocode_builder_recovery as recovery, autocode_resolver_human as human
+        except ImportError:
+            import autocode_builder_recovery as recovery
+            import autocode_resolver_human as human
+        s.assert_no_legacy_process(run_dir, Path(state["workspace"]))
+        # Explicit resume may append an audited resolver epoch before reaching us.
+        # The CLI verified this receipt before that bookkeeping changed its binding.
+        public = human.current(state) or issued
+        pause_status = None
+        if public and state.get('status') == 'WAITING_FOR_USER' and public['scope'] == 'operational_exhaustion':
+            proposal = state['resolver']['human_escalations'][public['request_id']]['identity']['proposal']
+            pause_status = proposal['origin'].get('pause_status')
+        recovery.request_serial_retry(state, selected, pause_status=pause_status)
+        human.supersede_operational(state, 'Operator explicitly retried the stopped serial Builder')
+        autocode_status.persist(run_dir / "state.json", state)
+        return
     batch = state.get("orchestration_batch")
     if (not batch or batch["status"] != "BUILDING" or state.get("next_stage") != "orchestrator"
             or batch["contract_hash"] != state["goal_contract"]["hash"]):
