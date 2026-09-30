@@ -17,6 +17,17 @@ runner, support = base.runner, base.s
 class RepairTests(unittest.TestCase):
     setUp = base.RetrofitTest.setUp
 
+    def test_repair_launch_keeps_the_original_pre_upgrade_schema_bytes(self):
+        self.state["next_stage"] = "astra_review"
+        schema = self.run / "legacy-review.schema.json"
+        schema.write_text(json.dumps(support.read(runner.SCHEMA_DIR / "v2/astra-decision.schema.json")))
+        original = schema.read_bytes()
+        _, record = runner.run_role(role="astra", prompt="Repair the saved report", sandbox="read-only",
+            workspace=self.root, run_dir=self.run, state=self.state, schema=schema,
+            model="model-astra", allow_write=False, dry_run=True, report_only=True)
+        self.assertEqual(original, Path(record["schema"]).read_bytes())
+        self.assertEqual(support.file_hash(schema), support.file_hash(record["schema"]))
+
     def timed_out_repair(self):
         pending = self.queue()
         pending['attempts'] = 1

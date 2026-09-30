@@ -109,6 +109,9 @@ domains. Prove persistence, exact arithmetic, stale/unknown identifiers, and tra
 boundaries. SQLite INTEGER bindings stop at 64 bits and SQL arithmetic can promote overflow to REAL; use
 lossless storage and application integer arithmetic for unbounded values. Decimal int/str conversion can
 hit Python's digit limit too. Preserve the public contract; do not invent a bound to fit the implementation.
+Probe mixed-type numeric interactions as well as isolated bounds; valid operands can overflow in combination.
+ERROR PATHS: inject failures after staged or transactional work begins; verify the public error contract,
+unchanged persistent state and complete cleanup across the relevant underlying failure modes.
 """
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
@@ -137,6 +140,16 @@ CONTRACT DELTA: contract_changes describes only changes from the current goal_co
 handoff, not cumulative history. A permission already incorporated into that revision is not a new change:
 retain its approved text, cite the saved authorization in the summary, and omit it from contract_changes.
 If no protected item changes against the current revision, return contract_changes=[].
+SOURCE CITATIONS: code_refs contains existing repository source paths, optionally :line, never a runner
+state file, .autocode/ artifact, cache, or explanatory sentence. state_file is context to read, not source
+to cite. Read the workspace_inventory candidates; a citation repair changes citations, not requirements.
+SETTLED REQUIREMENTS: preserve literal inputs and outputs from the task, approved design and saved answers.
+Create examples that match those literals. During a revision, protected criterion changes require a saved
+user answer or feedback entry and contract_changes; do not claim an original-request exception to that guard.
+Verification changes follow the same narrow draft-proof policy. Gather remaining decisions before drafting;
+do not reopen answered questions or invent extra clarification cycles for report wording.
+Keep existing test names and assertions. A planned case needs a separate new test if matching its id
+would otherwise require renaming an existing test; a guard must keep the original coverage as well.
 """
 # A live review-then-fix plan (2026-09-29) marked "the diff touches only the two fixes" for human
 # review although its own verification method was "Validator reads git diff"; the run then

@@ -11,9 +11,13 @@ import uuid
 # present, approve, assign, ask the user) are in autocode_goal_lifecycle, which imports this module,
 # never the other way round.
 try:
-    from . import autocode_util as s, autocode_workflows as workflows, autocode_protected_text as protected, autocode_test_cases as test_cases
+    from .autocode_contract_revision import (PLANNER_ORIGINS, PROTECTED_LISTS as _PROTECTED_LISTS,
+                                            revision_guard, saved_user_basis as _saved_user_basis)
+    from . import autocode_util as s, autocode_workflows as workflows
 except ImportError:
-    import autocode_util as s, autocode_workflows as workflows, autocode_protected_text as protected, autocode_test_cases as test_cases
+    from autocode_contract_revision import (PLANNER_ORIGINS, PROTECTED_LISTS as _PROTECTED_LISTS,
+                                           revision_guard, saved_user_basis as _saved_user_basis)
+    import autocode_util as s, autocode_workflows as workflows
 
 # The state keys under which a Resolver proposal waits for the user and the request shown to them.
 # autocode_resolver_human owns those records and re-exports these as PRIVATE and PUBLIC; they are
@@ -232,8 +236,6 @@ def validate_requirements_body(state, body):
             raise ValueError(f"Requirements are missing {key}")
 
 
-PLANNER_ORIGINS = {"glm_draft", "glm_revise", "astra_finalize", "astra_discovery"}
-_PROTECTED_LISTS = ("required_behaviors", "scope_exclusions", "constraints", "important_failure_cases")
 _CUE = re.compile(r"\b(must not|must|never|do not|don't|required|exactly|only)\b", re.I)
 
 
@@ -241,15 +243,6 @@ def protected_contract_snapshot(state):
     body = (state.get("goal_contract") or {}).get("body") or {}
     return {key: copy.deepcopy(body.get(key))
             for key in (*_PROTECTED_LISTS, "acceptance_criteria", "permission_boundaries")}
-
-
-def _saved_user_basis(state, basis, answer_id):
-    if basis == "user_answer":
-        return bool(answer_id) and answer_id in state.get("answers", {})
-    if basis == "user_feedback":
-        return bool(answer_id) and any(event.get("id") == answer_id and event in state.get("user_events", [])
-                                       for event in state.get("brief_feedback", []))
-    return False
 
 
 def _cites_saved_user_event(state, evidence):
@@ -261,64 +254,6 @@ def _cites_saved_user_event(state, evidence):
     # A valid citation must not mask a fabricated feedback ID alongside it.
     event_tokens = re.findall(r"(?<![\w-])(?:feedback|intervention)-[\w-]+", evidence)
     return known and all(key in ids for key in event_tokens)
-
-
-def revision_guard(state, body, changes, origin):
-    """A planner revision may not drop protected text or widen permissions on its own."""
-    previous_contract = state.get("goal_contract") or {}
-    previous = previous_contract.get("body")
-    if origin not in PLANNER_ORIGINS or not previous:
-        return
-    # A new draft may replace an unapproved one. Revising the current draft, or
-    # replacing an approved contract, cannot drop protected text on its own.
-    if origin in ("glm_draft", "astra_discovery") and previous_contract.get("approval_status") != "approved":
-        return
-    if not isinstance(changes, list):
-        raise ValueError("Planner revision needs contract_changes")
-    protected.restore_spelling(previous, body, {raw.get("item") for raw in changes if isinstance(raw, dict)}, _PROTECTED_LISTS)
-    for raw in changes:
-        if not isinstance(raw, dict) or raw.get("change") not in ("removed", "reworded", "permission_changed"):
-            raise ValueError("contract_changes entries need item, change, basis and answer_id")
-        basis = raw.get("basis")
-        if not _saved_user_basis(state, basis, raw.get("answer_id")):
-            raise ValueError("Changing a protected contract item needs a saved user answer or feedback event")
-    declared = {}
-    for raw in changes:
-        declared.setdefault(raw["item"], []).append(raw)
-
-    def consume(item, kind):
-        rows = declared.get(item, [])
-        match = next((row for row in rows if row["change"] == kind), None)
-        if match is None:
-            raise ValueError(f"Planner revision drops or changes {item!r} without a user-backed contract change")
-        rows.remove(match)
-        if kind == "reworded":
-            replacement = str(match.get("replacement", "")).strip()
-            if not replacement:
-                raise ValueError(f"Rewording {item!r} needs the replacement text")
-            return "user", replacement
-        return "user", None
-
-    for key in _PROTECTED_LISTS:
-        for item in previous.get(key, []):
-            if item in body.get(key, []):
-                continue
-            _, replacement = consume(item, "reworded" if any(row["change"] == "reworded" for row in declared.get(item, [])) else "removed")
-            if replacement and replacement not in body.get(key, []):
-                raise ValueError(f"Rewording {item!r} must appear in {key}")
-    old_criteria = {row["id"]: (row["criterion"], test_cases.proof(row["verification_method"])) for row in previous.get("acceptance_criteria", [])}
-    new_criteria = {row["id"]: (row["criterion"], test_cases.proof(row["verification_method"])) for row in body.get("acceptance_criteria", [])}
-    for cid, text in old_criteria.items():
-        if new_criteria.get(cid) == text:
-            continue
-        consume(cid, "removed" if cid not in new_criteria else "reworded")
-    previous_permissions = previous.get("permission_boundaries", [])
-    if previous_permissions and set(previous_permissions) != set(body.get("permission_boundaries", [])):
-        changed = set(previous.get("permission_boundaries", [])) ^ set(body.get("permission_boundaries", []))
-        for item in changed:
-            consume(item, "permission_changed")
-    if any(rows for rows in declared.values()):
-        raise ValueError("contract_changes contains an item that was not changed in the protected contract")
 
 
 def cue_sentences(text):
@@ -1277,9 +1212,12 @@ If no matching current or historical conflict exists, retain the saved decision 
 accepted_assumptions instead; an empty conflict_resolutions list then is valid.
 Agent assumptions and unrelated user events cannot resolve a conflict. Carry genuinely
 unresolved conflicts into open_blocking_questions; do not ask again for a saved decision.
-When revising a plan after review, copy required_behaviors, scope_exclusions,
-constraints, important_failure_cases, acceptance_criteria (including verification
-methods), and permission_boundaries verbatim from goal_contract.body. Add new
+When revising, copy required_behaviors, scope_exclusions, constraints, important_failure_cases, acceptance_criteria (including verification
+methods), and permission_boundaries verbatim from goal_contract.body. In a draft without an approval receipt,
+you may correct only a planner-generated verification_method that was never approved or user-set, retaining
+exact behavior, ID and human_review. Test:/guard: proofs cannot become prose or suite commands without a saved user basis.
+An unapproved planner draft may add human review. Approved/user-set review changes and removals need a saved basis.
+Use contract_changes=[] only for allowed draft corrections. Add new
 items when review identifies a gap; revise technical_approach, milestones, paths,
 tests and dependencies as needed. Do not rewrite an existing protected item for
 style or detail. A changed or removed protected item requires a saved user answer

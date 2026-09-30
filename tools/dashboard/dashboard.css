@@ -627,7 +627,7 @@ a,.next-action,.workflow-active,.task-path li.done,.model-state.mutable,button.t
 
 @media(max-width:759px){
   .app-shell{grid-template-rows:auto minmax(0,1fr)}
-  .topbar{height:auto;min-height:56px;flex-wrap:wrap;row-gap:4px;padding-block:6px}
+  .topbar{height:auto;min-height:56px;flex-wrap:wrap;row-gap:4px;padding-block:5px}
   .topbar .breadcrumb{flex:1 1 8em;min-width:min(8em,calc(100vw - 80px))}
   .topbar .breadcrumb strong{white-space:normal;overflow:visible;overflow-wrap:anywhere}
   .sidebar{top:var(--dashboard-header-height,56px)}

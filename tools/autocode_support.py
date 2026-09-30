@@ -15,11 +15,13 @@ import tomllib
 
 # Re-export shared helpers for existing callers and test patches.
 try:
+    from .autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     from . import autocode_evidence_snapshot as evidence_snapshot
     from .autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                 model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
     from . import autocode_receipts as receipts
 except ImportError:
+    from autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     import autocode_evidence_snapshot as evidence_snapshot
     from autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
@@ -498,8 +500,8 @@ decides what happens next. Do not declare project completion.
 """,
 }
 ASTRA_DECISIONS = """
-Return the complete ordered acceptance_criteria array from CURRENT HANDOFF DATA,
-preserving every id and criterion text exactly, including criteria outside the
+Return every acceptance criterion in CURRENT HANDOFF DATA order, preserving IDs and criterion text exactly.
+Only astra_review omits criterion text, returning id, status and evidence. Include criteria outside the
 current milestone. Mark unchecked criteria unverified; narrowing the review scope
 does not authorize dropping criteria from the approved contract.
 Choose exactly one status:
@@ -582,28 +584,6 @@ Do not invent a task-local comparator or loosen its checks. Unknown formats requ
 A matched comparison does not authorize a waiver: verify identical test selection,
 source provenance, and the saved exception separately; investigate baseline-only failures.
 """
-
-def review_generation_schema(schema, state, stage):
-    """Constrain runner-owned identity at generation, not by accepting bad reports."""
-    result = copy.deepcopy(schema)
-    if stage not in ("sol", "astra_review", "astra_checkpoint"):
-        return result
-    props = result.get("properties", {})
-    contract = state.get("goal_contract") or {}
-    for field, value in (("contract_hash", contract.get("hash")),
-                         ("contract_revision", contract.get("revision")),
-                         ("task_id", (state.get("current_task") or {}).get("id", ""))):
-        if field in props and value is not None:
-            props[field] = {**props[field], "enum": [value]}
-    source = "sol" if stage == "sol" else "astra"
-    own = [r["id"] for r in state.get("findings_ledger", [])
-           if r.get("source") == source and r.get("status") == "open"]
-    for field in ("findings", "finding_dispositions"):
-        fields = props.get(field, {}).get("items", {}).get("properties", {})
-        if "id" in fields:
-            fields["id"] = {**fields["id"], "enum": ["", *own]}
-    return result
-
 
 # Bug-fix runs: the runner has already executed the regression proof (autocode_regression).
 # The reviewers use it instead of re-running the same tests, and never override it.

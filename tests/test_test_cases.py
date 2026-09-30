@@ -49,13 +49,13 @@ class ContractCasesTests(unittest.TestCase):
                          test_cases.contract_cases(state))
         self.assertIn('"guard:"', test_cases.builder_note(state))
 
-    def test_a_planning_revision_may_switch_test_and_guard_but_nothing_else(self):
+    def test_an_approved_revision_may_switch_test_and_guard_but_keeps_the_same_proof(self):
         # A live review-then-fix plan (2026-09-29) could not move a criterion from test: to guard:, as its
         # Plan Reviewer asked, without asking the user.
         import autocode_goals as goals
 
         def revise(method, text=EXAMPLE["criterion"]):
-            state = {"goal_contract": {"body": {"acceptance_criteria": [EXAMPLE]}, "approval_status": "draft"},
+            state = {"goal_contract": {"body": {"acceptance_criteria": [EXAMPLE]}, "approval_status": "approved"},
                      "answers": {}, "user_events": [], "brief_feedback": []}
             body = {"acceptance_criteria": [{**EXAMPLE, "criterion": text, "verification_method": method}]}
             goals.revision_guard(state, body, [], "glm_revise")
