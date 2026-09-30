@@ -109,6 +109,12 @@ domains. Prove persistence, exact arithmetic, stale/unknown identifiers, and tra
 boundaries. SQLite INTEGER bindings stop at 64 bits and SQL arithmetic can promote overflow to REAL; use
 lossless storage and application integer arithmetic for unbounded values. Decimal int/str conversion can
 hit Python's digit limit too. Preserve the public contract; do not invent a bound to fit the implementation.
+Exercise interactions too: a large integer TTL with a float clock, and a large positive limit passed to
+a database query. Valid finite operands can produce a float infinity or a conversion OverflowError.
+ERROR PATHS: for transactional or staged operations, include a failure after work has begun and assert
+unchanged persistent state and no leftover staging files. For archives, test corrupted compressed payloads
+and directory payloads as well as malformed headers. Catching only the library's top-level format error
+does not cover decompression failures. Preserve the requested public exception type.
 """
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
@@ -137,6 +143,16 @@ CONTRACT DELTA: contract_changes describes only changes from the current goal_co
 handoff, not cumulative history. A permission already incorporated into that revision is not a new change:
 retain its approved text, cite the saved authorization in the summary, and omit it from contract_changes.
 If no protected item changes against the current revision, return contract_changes=[].
+SOURCE CITATIONS: code_refs contains existing repository source paths, optionally :line, never a runner
+state file, .autocode/ artifact, cache, or explanatory sentence. state_file is context to read, not source
+to cite. Read the workspace_inventory candidates; a citation repair changes citations, not requirements.
+SETTLED REQUIREMENTS: preserve literal inputs and outputs from the task, approved design and saved answers.
+Repair a criterion that contradicts them directly; do not ask the user to choose between their request and
+your mistaken example. Test names, proof commands and other verification details are engineering choices,
+not new product decisions. Gather genuine remaining decisions together before drafting implementation;
+do not reopen answered questions or invent extra clarification cycles for report wording.
+Keep existing test names and assertions. A planned case needs a separate new test if matching its id
+would otherwise require renaming an existing test; a guard must keep the original coverage as well.
 """
 # A live review-then-fix plan (2026-09-29) marked "the diff touches only the two fixes" for human
 # review although its own verification method was "Validator reads git diff"; the run then

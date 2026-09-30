@@ -188,6 +188,38 @@ class ApplyTests(unittest.TestCase):
 
 
 class GuidanceTests(unittest.TestCase):
+    def history(self, **overrides):
+        return {"identity": "astra_discovery:PAUSED_INVALID_OUTPUT", "stage": "astra_discovery",
+                "requested_at": "2026-09-30T08:00:00+00:00", "outcome": "retried",
+                "cause": "stage_output", "diagnosis": "The Planner cited runner state instead of source.",
+                "guidance": "Cite README.md and app/__init__.py, never .autocode/state.json.", **overrides}
+
+    def test_report_corrections_reach_a_fresh_planning_request_after_clarification(self):
+        state = {"stuck_investigations": [self.history()], "answers": {"Q1": {"text": "Use the existing API"}}}
+        before = copy.deepcopy(state)
+        for stage in ("astra_discovery", "glm_revise", "astra_finalize"):
+            with self.subTest(stage=stage):
+                text = stuck.with_guidance(state, stage, self.request()).prompt
+                self.assertIn(self.history()["guidance"], text)
+                self.assertLess(text.index(self.history()["guidance"]), text.index("CURRENT HANDOFF DATA"))
+        self.assertEqual(before, state, "Remembering a correction must not replenish a retry or budget")
+        self.assertEqual(self.request(), stuck.with_guidance(state, "terra", self.request()))
+
+    def test_pauses_and_decision_diagnoses_are_not_reused_as_report_corrections(self):
+        for row in (self.history(outcome="paused"), self.history(cause="needs_user"),
+                    self.history(cause="environment"), self.history(stage="terra"),
+                    self.history(guidance="")):
+            with self.subTest(row=row):
+                self.assertEqual(self.request(), stuck.with_guidance(
+                    {"stuck_investigations": [row]}, "astra_discovery", self.request()))
+
+    def test_an_earlier_turns_corrections_do_not_leak_into_a_new_request(self):
+        state = {"turns": [{"at": "2026-09-30T09:00:00+00:00"}],
+                 "stuck_investigations": [self.history()]}
+        self.assertEqual(self.request(), stuck.with_guidance(state, "astra_discovery", self.request()))
+        state["stuck_investigations"].append(self.history(requested_at="2026-09-30T10:00:00+00:00"))
+        self.assertIn(self.history()["guidance"], stuck.with_guidance(state, "astra_discovery", self.request()).prompt)
+
     def request(self):
         return common.ModelRequest("glm", "glm", "Do the stage.\nCURRENT HANDOFF DATA\n{}", {}, {}, False)
 

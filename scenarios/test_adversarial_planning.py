@@ -41,3 +41,38 @@ class PlanningAttacks(AdversarialCase):
         self.assertNotEqual("approve_plan", (view.get("needs") or {}).get("kind"))
         self.assertFalse(self.trace("stage_enter", "terra"))
         self.assertFalse(view["done"])
+
+
+class PlanningClarificationRecovery(AdversarialCase):
+    def test_verified_citation_correction_survives_clarification_and_finishes(self):
+        from .harness.project import git
+        (self.project / "README.md").write_text("Implement the requested greeting CLI.\n")
+        git(self.project, "add", "README.md")
+        git(self.project, "commit", "-qm", "A source file makes citation checks applicable")
+        self.set_fault("planning", "remember_citation_after_clarification")
+        view = self.driver.drive(self.scenario.brief)
+        cycles = self.trace("citation_cycle")
+        self.assertTrue(any(not row["guided"] for row in cycles), self.root)
+        self.assertTrue(any(row["guided"] and not row["answered"] for row in cycles), self.root)
+        self.assertTrue(any(row["guided"] and row["answered"] for row in cycles), self.root)
+        self.assertEqual("TASK_COMPLETE", view["status"], self.root)
+        self.assertEqual(1, len(self.trace("stage_enter", "investigate_stuck")),
+                         "Remembering a report correction must not buy another investigation")
+        self.assertEqual(["Q_AFTER"], [row["id"] for row in self.driver.answers])
+
+
+class DraftProofPlanning(AdversarialCase):
+    def test_recursive_suite_proof_is_corrected_before_approval_without_a_question(self):
+        from .harness.project import git
+        (self.project / "README.md").write_text("Implement the requested greeting CLI.\n")
+        git(self.project, "add", "README.md")
+        git(self.project, "commit", "-qm", "Source for the review's verification correction")
+        self.set_fault("planning", "repair_draft_suite_proof")
+        view = self.driver.drive(self.scenario.brief)
+        self.assertEqual("TASK_COMPLETE", view["status"], self.root)
+        self.assertEqual([], self.driver.answers, "A proof repair is not a product decision")
+        plans = self.trace("draft_proof")
+        self.assertEqual("test: test_c1_recursive_suite", plans[0]["method"])
+        self.assertEqual("python3 -m unittest test_greet.py", plans[-1]["method"])
+        self.assertEqual(1, sum(step["kind"] == "approve-plan" for step in self.driver.steps))
+        self.assertFalse(self.trace("stage_enter", "investigate_stuck"), self.root)

@@ -160,6 +160,8 @@ runs these tests itself, with those of milestones already accepted: each must pa
 not have passed before the run began. A criterion whose verification_method starts with "guard:" is behavior
 that already works and must keep working: write its test the same way (C4 -> test_c4_...); it must pass both
 before and after the change, so put it where it imports only code that exists before the change. Criteria without "test:" or "guard:" are checked by the Validator as usual.
+Keep existing test names and assertions intact. Add a new case test when needed; do not rename or remove an
+existing test to make its name match a planned case id. The regression proof rejects removed test names.
 """
 
 

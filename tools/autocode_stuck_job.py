@@ -18,6 +18,8 @@ attempt or the question only the user can answer. Then:
   worth of the limit that stopped the stage and runs it again with the guidance in its
   prompt (``with_guidance``). Planning guidance stays in force for every planning stage
   until the plan is presented; any other stage's guidance until that stage completes.
+  Verified planning report corrections also remain context after clarification,
+  without granting another retry or carrying into a later conversation turn.
 - ``pause``, a ``DIAGNOSE_ONLY`` status, or a failed investigation: the original pause
   is restored exactly, with the diagnosis added to its reason.
 
@@ -424,17 +426,51 @@ def abandon(state: dict, error: str) -> tuple[str, str]:
 
 
 def with_guidance(state: dict, stage: str, request):
-    """The stage's model request, with the Investigator's guidance when it is in force for ``stage``."""
+    """Attach active guidance or verified report corrections from this request's earlier cycles."""
     current = state.get("stuck_investigation") or {}
-    if not current.get("in_force") or stage == STAGE:
+    if stage == STAGE:
         return request
-    if not (stage == current["stage"] or (current["stage"] in PLANNING and stage in PLANNING)):
-        return request
-    block = ("\nINVESTIGATOR GUIDANCE (this stage stopped making progress; an independent Investigator read the "
-             f"saved attempts). Diagnosis: {current['diagnosis']}\nFollow this guidance on this attempt: "
-             f"{current['guidance']}\n")
+    active = current.get("in_force") and (
+        stage == current["stage"] or (current["stage"] in PLANNING and stage in PLANNING))
+    if active:
+        block = ("\nINVESTIGATOR GUIDANCE (this stage stopped making progress; an independent Investigator read the "
+                 f"saved attempts). Diagnosis: {current['diagnosis']}\nFollow this guidance on this attempt: "
+                 f"{current['guidance']}\n")
+    else:
+        lessons = planning_lessons(state) if stage in PLANNING else []
+        if not lessons:
+            return request
+        block = ("\nPREVIOUSLY VERIFIED PLANNING CORRECTIONS\n"
+                 "These report corrections survived an earlier investigation in this request. Keep applicable "
+                 "corrections after clarification; check them against the current task, contract and saved answers. "
+                 "They grant no additional retries, budget, permissions or approval and settle no user decision.\n"
+                 + "\n".join(f"Diagnosis: {row['diagnosis']}\nCorrection: {row['guidance']}" for row in lessons) + "\n")
     head, marker, tail = request.prompt.partition("CURRENT HANDOFF DATA\n")
     return replace(request, prompt=head + block + marker + tail if marker else request.prompt + block)
+
+
+def planning_lessons(state: dict) -> list[dict]:
+    """Read the existing history; never restore a retired one-use recovery grant.
+
+    Only accepted report-format diagnoses travel between planning cycles. A
+    changed product decision, environment diagnosis or execution-stage retry
+    is not reusable planning guidance. Follow-up turns start a new scope.
+    """
+    turns = state.get("turns") or []
+    boundary = turns[-1].get("at") if turns else None
+    lessons = []
+    for row in state.get("stuck_investigations") or []:
+        if (row.get("outcome") != "retried" or row.get("cause") != "stage_output"
+                or row.get("stage") not in PLANNING or not row.get("diagnosis") or not row.get("guidance")):
+            continue
+        if boundary:
+            try:
+                if dt.datetime.fromisoformat(row["requested_at"]) < dt.datetime.fromisoformat(boundary):
+                    continue
+            except (KeyError, TypeError, ValueError):
+                continue
+        lessons.append(row)
+    return lessons[-MAX_CALLS:]
 
 
 def settle(state: dict, stage: str) -> None:
