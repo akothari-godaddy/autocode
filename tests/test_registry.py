@@ -1,4 +1,5 @@
 """Registry persistence and read-only discovery tests using isolated storage."""
+from contextlib import contextmanager
 import json
 import multiprocessing
 import os
@@ -72,6 +73,30 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual("available", listed["runs"][0]["availability"])
         self.assertEqual("RUNNING", listed["runs"][0]["diagnostic"]["status"])
         self.assertEqual("run-task-id", listed["runs"][0]["task_id"])
+
+    def test_forget_deleted_rechecks_run_recreated_while_waiting_for_registry_lock(self):
+        workspace, run, state = self.fixture("workspace")
+        registry.register_run(workspace, run, state)
+        before = registry.registry_path().read_bytes()
+        (run / "state.json").unlink()
+        run.rmdir()
+        acquire = registry._locked_registry
+
+        @contextmanager
+        def recreated_before_acquiring():
+            # Deterministically cross the preflight/lock boundary without sleeps.
+            run.mkdir()
+            (run / "state.json").write_text(json.dumps({**state, "task": "new work"}))
+            with acquire() as path:
+                yield path
+
+        with patch.object(registry, "_locked_registry", recreated_before_acquiring):
+            with self.assertRaises(registry.RegistryError) as rejected:
+                registry.forget_deleted(workspace, run)
+        self.assertEqual("invalid_deleted_run", rejected.exception.code)
+        self.assertEqual(before, registry.registry_path().read_bytes())
+        self.assertEqual("new work", json.loads((run / "state.json").read_text())["task"])
+        self.assertEqual(str(run), registry.listing()["runs"][0]["run_dir"])
 
     def test_listing_derives_run_task_id_after_migration_without_mutating_registry(self):
         workspace, run, state = self.fixture("workspace")

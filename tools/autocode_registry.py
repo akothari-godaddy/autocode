@@ -430,6 +430,11 @@ def forget_deleted(workspace: Path, run_dir: Path) -> dict[str, Any]:
             or run_dir.parent != workspace / '.autocode/runs' or os.path.lexists(run_dir)):
         raise RegistryError('invalid_deleted_run', 'Only an absent canonical direct run may be forgotten')
     with _locked_registry() as path:
+        # The run or an ancestor may have been recreated while this cleanup
+        # waited for the registry lock. Never forget that new discovery entry.
+        if (str(workspace.resolve()) != str(workspace) or str(run_dir.resolve()) != str(run_dir)
+                or os.path.lexists(run_dir)):
+            raise RegistryError('invalid_deleted_run', 'Only an absent canonical direct run may be forgotten')
         document = _read_registry(path)
         removed = [key for key, value in document['runs'].items()
                    if value.get('workspace') == str(workspace) and value.get('run_dir') == str(run_dir)]
