@@ -174,6 +174,26 @@ class TaskRunTests(unittest.TestCase):
 
 
 class TaskRunClientTests(unittest.TestCase):
+    def test_start_preserves_cli_error_when_no_run_was_created(self):
+        for stderr, stdout in (("autocode: GoCode authentication check failed", ""),
+                               ("", "autocode: startup failed")):
+            with self.subTest(stderr=stderr, stdout=stdout), tempfile.TemporaryDirectory() as root:
+                completed = subprocess.CompletedProcess([], 2, stdout=stdout, stderr=stderr)
+                with patch.object(taskrun.TaskRun, "_invoke", return_value=completed), \
+                     self.assertRaises(taskrun.TaskRunError) as raised:
+                    taskrun.TaskRun.start(root, "A sample task")
+                self.assertIn("start exited 2 without creating a run", str(raised.exception))
+                self.assertIn(stderr or stdout, str(raised.exception))
+
+    def test_start_bounds_diagnostic_output_when_no_run_was_created(self):
+        with tempfile.TemporaryDirectory() as root:
+            completed = subprocess.CompletedProcess([], 2, stdout="", stderr="x" * 2000 + "cause")
+            with patch.object(taskrun.TaskRun, "_invoke", return_value=completed), \
+                 self.assertRaises(taskrun.TaskRunError) as raised:
+                taskrun.TaskRun.start(root, "A sample task")
+            self.assertTrue(str(raised.exception).endswith("cause"))
+            self.assertLess(len(str(raised.exception)), 1000)
+
     def test_show_goal_returns_the_current_displayed_brief(self):
         run = taskrun.TaskRun(Path("/work/repo"), Path("/work/repo/.autocode/runs/one"))
         completed = subprocess.CompletedProcess([], 0, stdout="Build brief r2\nAcceptance criteria:\n  [AC1] Works\n")

@@ -17,3 +17,9 @@ authentication configuration. A live retry through the A2A HTTP gateway still
 failed before saving a run; its worker traceback is needed. This change does
 not establish that a live GPT request works, nor that GoCode unmanaged mode
 selects the intended model credentials.
+
+The TaskRun client also concealed startup errors: exit 2 is accepted for a
+paused run, but startup can exit 2 before creating any run. It now includes
+the last 800 characters of CLI stderr (or stdout) when no run was created.
+Focused tests reproduced the missing diagnostics before the change and pass
+afterward. Existing callers must restart to load this client change.

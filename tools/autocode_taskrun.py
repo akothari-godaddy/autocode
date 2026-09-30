@@ -46,8 +46,11 @@ class TaskRun:
         workspace = Path(workspace).resolve()
         before = set(_runs(workspace))
         run = cls(workspace, Path(), tuple(command), tuple(options), env, timeout)
-        run._invoke("start", brief, "--in-place", "--no-chat", *run.options, advancing=True, with_run_dir=False)
+        proc = run._invoke("start", brief, "--in-place", "--no-chat", *run.options, advancing=True, with_run_dir=False)
         created = set(_runs(workspace)) - before
+        if not created:
+            detail = (proc.stderr or proc.stdout).strip()[-800:]
+            raise TaskRunError(f"start exited {proc.returncode} without creating a run: {detail}")
         if len(created) != 1:
             raise TaskRunError(f"expected one new run in {workspace}, found {sorted(map(str, created))}")
         run.run_dir = created.pop()
