@@ -6,7 +6,9 @@ try:
     from .. import autocode_stage_context as stage_context
     from .. import autocode_test_examples as test_examples, autocode_test_cases as test_cases
     from .. import autocode_assignment as assignment, autocode_check_replay as check_replay
+    from .. import autocode_bug_job as bug_job
 except ImportError:
+    import autocode_bug_job as bug_job
     import autocode_assignment as assignment
     import autocode_check_replay as check_replay
     import autocode_test_examples as test_examples
@@ -55,7 +57,8 @@ def execution_request(state, stage, state_path, schema_dir):
                                 + "\nCURRENT HANDOFF DATA\n", 1)
         metrics = {**metrics, "estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4}
     if stage == "sol":
-        prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", check_replay.VALIDATOR_NOTE + "\nCURRENT HANDOFF DATA\n", 1)
+        prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", check_replay.VALIDATOR_NOTE + bug_job.validator_note(state)
+                                + "\nCURRENT HANDOFF DATA\n", 1)
         metrics = {**metrics, "estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4}
     schema = goals.role_schema(support.read(
         schema_dir / "v2" / f"{role}-{'decision' if role == 'astra' else 'report'}.schema.json"), role)

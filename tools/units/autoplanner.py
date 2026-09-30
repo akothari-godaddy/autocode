@@ -38,7 +38,8 @@ only about something it genuinely leaves open. Trace each of its constraints to 
 BUG_DIAGNOSIS_RULE = """
 BUG FIX: bug_diagnosis in the handoff data is the Investigator's diagnosis of a reproduced bug, saved in the
 repository at its note_path. It is the requirements: plan the correction of its root_cause, not a feature.
-Every plan must uphold its invariant as an acceptance criterion, with a regression test that fails on the
+Every plan must uphold its invariant as an acceptance criterion, checked as exactly as the invariant states it
+(never "to 2 decimal places" or "within 0.001" when the rule is exact), with a regression test that fails on the
 original code and passes after the fix, and must keep the project's existing tests passing. Its test_cases
 are those regression tests in plain English: make each one an acceptance criterion quoting its given, when
 and then, and require one test per case named test_<id>_<what it checks> (T1 -> test_t1_...); the runner
