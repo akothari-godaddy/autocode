@@ -126,9 +126,10 @@ def normalize_human_boundary(state, run_dir):
                 reason = state['resolver']['human_disposition']['reason']
                 # Only what the user wrote renews the allowance: runner bookkeeping (recovery
                 # receipts, review reroutes) also lands in user_events and must not reset
-                # this bound.
+                # this bound. user_intervention is feedback the user queued while the run worked.
                 inputs = sum(1 for event in state.get('user_events', [])
-                             if isinstance(event, dict) and event.get('actor') in ('user', 'user_cli'))
+                             if isinstance(event, dict)
+                             and event.get('actor') in ('user', 'user_cli', 'user_intervention'))
                 identity = support.digest({'task_id': state.get('task_id'), 'reason': reason,
                                            'user_inputs': inputs})
                 restarts = state['resolver'].setdefault('deferred_approval_restarts', {})
