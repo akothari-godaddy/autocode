@@ -59,10 +59,10 @@ def build_parser(unit, default_models) -> argparse.ArgumentParser:
                         help="Override the independent plan-reviewer model for the saved engine")
     parser.add_argument("--plan-reviewer-reasoning-effort", choices=["low", "medium", "high", "xhigh", "max"],
                         help="Override independent plan-reviewer reasoning effort")
-    parser.add_argument("--test-command", help="New runs: shell command for the project's test suite, used by the "
-                        "runner's regression proof on bug-fix tasks (default: detected)")
-    parser.add_argument("--regression-command", help="New runs: shell command that runs only the new or changed "
-                        "tests of a bug fix (default: derived from the detected test framework)")
+    parser.add_argument("--test-command", help="Shell command for the project's test suite (default: detected); "
+                        "repair a saved command at a reconciled pause with --resume-paused")
+    parser.add_argument("--regression-command", help="Shell command for new or changed regression tests (default: derived); "
+                        "repair a saved command at a reconciled pause with --resume-paused")
     parser.add_argument("--max-iterations", type=int, help="Total iteration ceiling (new-run default: unlimited; resumes keep saved limits)")
     parser.add_argument('--unlimited-iterations',action='store_true',help='Remove only the iteration ceiling; other safety and usage limits remain')
     for role, model in DEFAULT_ROLE_MODELS.items():
