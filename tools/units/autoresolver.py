@@ -31,10 +31,12 @@ PROBE_TIMEOUT = 120  # seconds per discuss probe; a probe checks one claim, it i
 
 
 def prepare_answer(state):
-    """The Analyst inherits the planner model on its own route and session, effort capped
-    at medium, with the same scratch-copy rule as the Investigator."""
+    """The Analyst inherits the Plan Reviewer's model (the Resolver's when there is none) on its
+    own route and session, effort capped at medium, with the same scratch-copy rule as the
+    Investigator. Like the Architect: GPT-6 Astra stays reserved for the Resolver (docs/models.md)."""
     state["phase"] = "INVESTIGATING"
-    state["settings"]["roles"].setdefault("analyst", capped_route(state["settings"]["roles"]["astra"]))
+    roles = state["settings"]["roles"]
+    roles.setdefault("analyst", capped_route(roles.get("plan_reviewer") or roles["astra"]))
     prompt, metrics = discuss_job.prompt(
         state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
         state["settings"].get("context_soft_tokens", 10000),
@@ -43,11 +45,13 @@ def prepare_answer(state):
 
 
 def prepare_investigation(state):
-    """The Investigator inherits the planner model on its own route and session, so its
-    reproduction context never leaks into later planning or review. It may write, but only
-    to a scratch copy of its own; the runner rejects any change to the workspace itself."""
+    """The Investigator inherits the Plan Reviewer's model (the Resolver's when there is none) on
+    its own route and session, so its reproduction context never leaks into later planning or
+    review. It may write, but only to a scratch copy of its own; the runner rejects any change
+    to the workspace itself. GPT-6 Astra stays reserved for the Resolver (docs/models.md)."""
     state["phase"] = "INVESTIGATING"
-    state["settings"]["roles"].setdefault("investigator", copy.deepcopy(state["settings"]["roles"]["astra"]))
+    roles = state["settings"]["roles"]
+    roles.setdefault("investigator", copy.deepcopy(roles.get("plan_reviewer") or roles["astra"]))
     prompt, metrics = bug_job.prompt(
         state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
         state["settings"].get("context_soft_tokens", 10000),

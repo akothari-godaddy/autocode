@@ -57,9 +57,13 @@ class PrepareTests(unittest.TestCase):
         state = state_for(workspace)
         request = autoresolver.prepare(state, discuss_job.STAGE, "/run/state.json", None)
         self.assertEqual(("astra", "analyst", True), (request.role, request.route_role, request.allow_write))
-        self.assertEqual(("a", "medium"), (state["settings"]["roles"]["analyst"]["model"],
+        self.assertEqual(("p", "medium"), (state["settings"]["roles"]["analyst"]["model"],
                                            state["settings"]["roles"]["analyst"]["reasoning_effort"]))
         self.assertEqual("high", state["settings"]["roles"]["astra"]["reasoning_effort"])
+        without = state_for(workspace)
+        del without["settings"]["roles"]["plan_reviewer"]
+        autoresolver.prepare(without, discuss_job.STAGE, "/run/state.json", None)
+        self.assertEqual("a", without["settings"]["roles"]["analyst"]["model"])  # the Resolver's, capped
         self.assertEqual(discuss_job.SCHEMA, request.schema)
         self.assertIn("metadata cache", request.prompt)
 
