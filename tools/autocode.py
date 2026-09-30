@@ -47,7 +47,7 @@ try:
     from . import autocode_planning_artifacts as planning_artifacts
     from . import autocode_budget_recovery as budget_recovery
     from . import autocode_findings as findings_ledger
-    from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions
+    from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop
     from .autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
         assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
@@ -72,7 +72,7 @@ except ImportError:
     import autocode_planning_artifacts as planning_artifacts
     import autocode_budget_recovery as budget_recovery
     import autocode_findings as findings_ledger
-    import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions
+    import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop
     from autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
         assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
@@ -1623,157 +1623,9 @@ def _main_body(unit=None) -> int:
             code = run_actions.handle(sys.modules[__name__], args, parser, state, state_path, run_dir, workspace)
             if code is not None:
                 return code
-            def before_code_stage(current):
-                try:
-                    if consume_interventions(current, run_dir, workspace):
-                        print(f"{current['status']}: {current['stop_reason']}")
-                        raise orchestrator.LoopExit(2)
-                except interventions.InterventionError as error:
-                    raise support.Paused("PAUSED_INTERVENTION_ACK", str(error)) from error
-                if args.unit and autopilot.pending_unit(current) != args.unit:
-                    autopilot.publish_handoffs(current, run_dir)
-                    write_json(state_path, current)
-                    print(f"{args.unit}: handoff ready; next unit={autopilot.pending_unit(current)}", flush=True)
-                    raise orchestrator.LoopExit(0)
-                if milestones.apply_queued_activation(current, run_dir):
-                    print("Milestone checkpoints enabled at a safe boundary; continuing with independent validation.", flush=True)
-                workflow.guard(current)
-                if current.get("next_stage") in ("terra", "sol", "orchestrator", "completion"):
-                    dispatch.enforce_cross_model_verification(current)
-                repairing_before_upgrade = (args.resume_paused and current.get('pending_report_repair')
-                                            and milestones.owns_pause(run_dir))
-                if (run_dir / "pause-requested").exists() and not repairing_before_upgrade:
-                    raise support.Paused("PAUSED_REQUESTED", "Pause requested; previous stage saved")
-                limits = current["settings"]["limits"]
-                timeout_recovery_guard(current)
-                if iteration_limit_reached(current["iteration"], limits["iteration_ceiling"]):
-                    if not recover_default_budget(current, run_dir, workspace, 'iteration_ceiling'):
-                        raise support.Paused("PAUSED_ITERATION_LIMIT", "Saved iteration ceiling reached")
-                if limits["max_seconds"] and current.get("active_seconds",0) >= limits["max_seconds"]:
-                    if not recover_default_budget(current, run_dir, workspace, 'max_seconds'):
-                        raise support.Paused("PAUSED_TIME_LIMIT", "Saved active-time limit reached at stage boundary")
-                support.enforce_reported_token_limit(current)
-                if (not repairing_before_upgrade and (not milestones.enabled(current) or current.get('next_stage') in ('terra', 'orchestrator')) and limits["no_progress_batches"]
-                        and current.get("no_progress_batches",0) >= limits["no_progress_batches"]):
-                    raise support.Paused("PAUSED_NO_PROGRESS", "Repeated unchanged implementation batches require review")
-                # Do not silently change auth/provider when local config changes.
-                engine = current["settings"].get("engine")
-                using_opencode = engine == "opencode"
-                using_gocode = engine == "gocode"
-                if planning.enabled(current):
-                    check_joint_transports(current, workspace)
-                if using_opencode:
-                    current_settings = opencode.local_settings(workspace)
-                    drifted = opencode.transport_drift(current_settings, current["settings"]["transport_identity"])
-                elif using_gocode:
-                    current_settings = gocode.local_settings(workspace)
-                    drifted = gocode.transport_drift(current_settings, current["settings"]["transport_identity"])
-                else:
-                    current_settings = support.local_settings()
-                    drifted = support.transport_drift(current_settings, current["settings"]["transport_identity"], current["settings"]["roles"])
-                if drifted:
-                    raise support.Paused("PAUSED_TRANSPORT_CHANGED", "Local model/auth/provider settings differ from checkpoint")
-                if using_opencode and current["settings"]["transport_identity"].get("identity_version", 1) < 2:
-                    current.setdefault("configuration_changes", []).append({"at": now(),
-                        "reason": "Expanded OpenCode configuration identity; all previously recorded inputs match"})
-                    current["settings"]["transport_identity"] = current_settings
-                if current.get('pending_report_repair'):
-                    try:
-                        execute_report_repair(current, run_dir, workspace)
-                    except ReportRepairQueued:
-                        return orchestrator.SKIP
-                    # Repair completed and applied the result. Run the after
-                    # callback so chat_checkpoint and pipeline advancement fire.
-                    after_code_stage(current, current.get('next_stage', 'report_repair'), None)
-                    return orchestrator.SKIP
-
-            def dispatch_code_stage(current, stage):
-                # Admission parity with autopilot.dispatch_unit: a paused Builder
-                # retry lane blocks the serial writer launch here as well.
-                if stage == "terra":
-                    autopilot.builder_policy.guard(current)
-                try:
-                    milestones.dispatch_guard(current, stage)
-                except support.Paused as error:
-                    if (error.status != 'PAUSED_MILESTONE_TIME_LIMIT'
-                            or not recover_default_budget(current, run_dir, workspace, 'milestone_max_seconds')):
-                        raise
-                    milestones.dispatch_guard(current, stage)
-                workflow.dispatch_guard(current,stage,workspace)
-                if planning.is_planning(current, stage):
-                    if not recover_default_budget(current, run_dir, workspace, 'planning_review_call_limit'):
-                        resolver_runtime.operational_boundary(sys.modules[__name__], current, run_dir, workspace)
-                if stage == "orchestrator":
-                    return autopilot.unit_module(stage).dispatch(current, workspace, run_dir)
-                regression.before_review(current, stage, workspace, run_dir)
-                request = autopilot.prepare_request(current, stage, state_path, SCHEMA_DIR)
-                role, route_role = request.role, request.route_role
-                rotate_if_needed(current, route_role, run_dir)
-                prompt, metrics = request.prompt, request.metrics
-                current["pending_context_metrics"] = metrics
-                # Soft budget: keep exact requirements; don't silently truncate them.
-                if metrics["estimated_prompt_tokens"] > metrics["soft_budget_tokens"]:
-                    print("Context soft budget exceeded; preserving complete requirements", flush=True)
-                write_json(state_path, current)
-                schema_value = request.schema
-                schema_path = run_dir / "schemas" / f"v3-{stage}.json"
-                write_json(schema_path, support.model_output_schema(schema_value))
-                try:
-                    value, record = run_role(role=role, prompt=prompt, sandbox="workspace-write" if request.allow_write else "read-only",
-                        workspace=workspace, run_dir=run_dir, state=current,
-                        schema=schema_path,
-                        model=current["settings"]["roles"][route_role]["model"], allow_write=request.allow_write, dry_run=False)
-                    record["unit"] = autopilot.unit_for(stage)
-                    account_stage(current, record)
-                    try:
-                        commit_stage_result(current, stage, value, record, workspace, run_dir)
-                    except (ValueError, KeyError, support.Paused) as error:
-                        reject_completed_stage(current, run_dir, record, error)
-                except ReportRepairQueued:
-                    return orchestrator.SKIP
-                except support.Paused as error:
-                    capacity_recovered = automatically_recover_capacity_stage(current, run_dir, workspace, error)
-                    if capacity_recovered:
-                        recovery = current["recovery_context"]
-                        print(f"{stage}: provider capacity recovery {recovery['retry_number']}/"
-                              f"{MAX_AUTOMATIC_CAPACITY_RECOVERIES}; partial work archived for Plan Reviewer inspection", flush=True)
-                        return orchestrator.SKIP
-                    if (automatically_recover_timed_out_stage(current, run_dir, workspace, error)
-                            or automatically_recover_external_directory_denial(current, run_dir, workspace, error)):
-                        if (current.get('recovery_context') or {}).get('timeout_kind') == 'stage':
-                            recover_default_budget(current, run_dir, workspace, 'stage_timeout_seconds')
-                        print(f"{stage}: non-terminal attempt archived; continuing from recovery checkpoint", flush=True)
-                        return orchestrator.SKIP
-                    raise
-                return record
-
-            def after_code_stage(current, stage, _record):
-                print(f"{stage}: saved; next={current['next_stage']}; status={current['status']}"
-                      + workflows.describe(current, stage), flush=True)
-                autopilot.publish_handoffs(current, run_dir)
-                if milestones.enabled(current):
-                    print(milestones.status_line(current), flush=True)
-                try:
-                    if consume_interventions(current, run_dir, workspace):
-                        print(f"{current['status']}: {current['stop_reason']}")
-                        raise orchestrator.LoopExit(2)
-                except interventions.InterventionError as error:
-                    raise support.Paused("PAUSED_INTERVENTION_ACK", str(error)) from error
-                resolver_runtime.boundary(sys.modules[__name__], current, run_dir, workspace)
-                if args.chat and current["status"] in ("WAITING_FOR_USER", "AWAITING_GOAL_APPROVAL"):
-                    if not chat_checkpoint(current, run_dir):
-                        write_json(state_path, current)
-                        raise orchestrator.LoopExit(2)
-                    write_json(state_path, current)
-                if args.pause_after_stage and current["status"] == "RUNNING":
-                    raise support.Paused("PAUSED_REQUESTED", "--pause-after-stage checkpoint reached")
-            try:  # One run's agents at a time in a checkout (autocode_checkout_lock).
-                with checkout_lock.exclusive(workspace, run_dir, busy=orchestrator.LoopExit(2)):
-                    orchestrator.drive(state, dispatch_code_stage, before=before_code_stage,
-                                       persist=lambda current: (autopilot.publish_handoffs(current, run_dir), write_json(state_path, current)),
-                                       after=after_code_stage, investigate=not args.unit)
-            except orchestrator.LoopExit as stopped:
-                return stopped.code
+            code = build_loop.run(sys.modules[__name__], args, state, state_path, run_dir, workspace)
+            if code is not None:
+                return code
         except (support.Paused, ValueError, RuntimeError, OSError) as error:
             state.update(status=getattr(error,"status","PAUSED_INVALID_OUTPUT"), stop_reason=str(error), paused_at=now())
             state["phase"] = "PAUSED_OR_BLOCKED"
