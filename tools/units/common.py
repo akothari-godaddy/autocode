@@ -53,7 +53,8 @@ def execution_request(state, stage, state_path, schema_dir):
     prompt, metrics = stage_context.context_packet(state, stage, state_path)
     if stage == "terra":
         prompt = test_examples.add_to_prompt(prompt, state["workspace"], state.get("current_task"))
-        prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", test_cases.builder_note(state) + assignment.BUILD_OUTPUT_NOTE
+        prompt = prompt.replace("\nCURRENT HANDOFF DATA\n", test_cases.builder_note(state) + bug_job.builder_note(state)
+                                + assignment.BUILD_OUTPUT_NOTE
                                 + "\nCURRENT HANDOFF DATA\n", 1)
         metrics = {**metrics, "estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4}
     if stage == "sol":

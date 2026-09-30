@@ -340,6 +340,26 @@ it as evidence, even when every test passes.
 """
 
 
+# A live bugfix-cent-drift run (Claude models, 2026-09-30): the request said "Before you change anything, write
+# the root cause to docs/bugs/cent-drift.json". The runner had written it from the diagnosis and the plan kept it
+# unchanged, but the Builder followed the request, overwrote the note with a shell heredoc, and the run paused.
+BUILDER_NOTE = """
+DIAGNOSIS NOTE: {note} is already written: the runner saved it from the investigation before this task began.
+Any step of the request that asks to write the root cause or diagnosis there is done. It is not one of your files:
+do not create, rewrite or edit it (not with a shell command either), and do not list it in your changed files.
+"""
+
+
+def builder_note(state: dict) -> str:
+    """For a reproduced bug whose note the current task does not own: the note is done, leave it; "" otherwise."""
+    found = state.get("investigation") or {}
+    note = str(found.get("note_path") or "").strip()
+    owned = (state.get("current_task") or {}).get("affected_paths") or []
+    if found.get("outcome") != "reproduced" or not note or note in owned:
+        return ""
+    return BUILDER_NOTE.format(note=note)
+
+
 def validator_note(state: dict) -> str:
     """The invariant the Validator must check directly, for a reproduced bug; "" otherwise."""
     found = state.get("investigation") or {}
