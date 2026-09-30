@@ -621,11 +621,11 @@ def prepare_abandoned_completion_revalidation(state, run_dir, workspace):
         failure = (state.get('failure_history') or {}).get(last.get('failure_key'), {})
         if (failure.get('identity') != {'stage': 'astra_review', 'artifact_hash': revision,
                                        'error_class': 'PAUSED_COMPLETION_GATE'}
-                or last.get('rejection_reason') != missing
-                or any(r.get('rejection_reason') not in (missing,
+                or not str(last.get('rejection_reason') or '').startswith(missing)
+                or any(not str(r.get('rejection_reason') or '').startswith(missing) and r.get('rejection_reason') not in (
                        'OpenCode final message is not a JSON report; inspect the saved raw events') for r in retries)):
             return False
-        attempts = {r.get('failure_attempt') for r in retries if r.get('rejection_reason') == missing}
+        attempts = {r.get('failure_attempt') for r in retries if str(r.get('rejection_reason') or '').startswith(missing)}
         if not failure.get('attempts') or not set(failure['attempts']) <= attempts:
             return False
     elif state['status'] != 'PAUSED_STAGE_ABANDONED':

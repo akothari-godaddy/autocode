@@ -991,7 +991,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             if not completion_gate.completion_ready(state, value, current):
                 if not regression.complete(state, current["revision"]):
                     raise support.Paused("PAUSED_COMPLETION_GATE", regression.rejection(state))
-                raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: missing, stale, failed or unverified independent evidence")
+                raise support.Paused("PAUSED_COMPLETION_GATE", completion_gate.rejection(state))
             state.update(status="TASK_COMPLETE", completed_at=now(), final_decision=value, next_stage=None)
             if milestones.enabled(state):
                 milestones.accept(state, current)
