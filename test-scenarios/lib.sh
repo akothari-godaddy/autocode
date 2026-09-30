@@ -17,15 +17,28 @@ set -uo pipefail
 HARNESS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "$HARNESS_DIR/.." && pwd)}"
 
-# Entry: prefer an installed CLI (the pipx install is an editable mapping to
-# this checkout's tools/, with deps like psutil). AUTOCODE_BIN overrides.
+# Entry: this checkout's tools/, never a different one. AUTOCODE_BIN overrides.
+# The installed `autocode` (pipx, editable) maps to whichever checkout it was last
+# installed from, which on 2026-09-29 was not this one, so the suite silently tested
+# other code (docs/bugs/2026-09-29-stress-battery-findings.md). It is used only when
+# its `autocode_cli` package resolves to $REPO_ROOT/tools. Otherwise the repo's own
+# .venv interpreter (which has psutil) runs tools/autocode.py, else python3.
+entry_maps_to_repo() { # entry_maps_to_repo <installed autocode> -> 0 when it runs this checkout
+  local venv_python
+  venv_python="$(dirname "$(readlink "$1" 2>/dev/null || echo "$1")")/python"
+  [[ -x "$venv_python" ]] || return 1
+  [[ "$("$venv_python" -c 'import os, autocode_cli; print(os.path.dirname(os.path.realpath(autocode_cli.__file__)))' 2>/dev/null)" == "$(cd "$REPO_ROOT/tools" && pwd -P)" ]]
+}
 if [[ -n "${AUTOCODE_BIN:-}" ]]; then
   AC_ENTRY=("$AUTOCODE_BIN")
-elif [[ -x "$HOME/.local/bin/autocode" ]]; then
+elif [[ -x "$HOME/.local/bin/autocode" ]] && entry_maps_to_repo "$HOME/.local/bin/autocode"; then
   AC_ENTRY=("$HOME/.local/bin/autocode")
+elif [[ -x "$REPO_ROOT/.venv/bin/python" ]]; then
+  AC_ENTRY=("$REPO_ROOT/.venv/bin/python" "$REPO_ROOT/tools/autocode.py")
 else
   AC_ENTRY=(python3 "$REPO_ROOT/tools/autocode.py")
 fi
+echo "autocode entry: ${AC_ENTRY[*]}" >&2
 
 WORK_ROOT="${WORK_ROOT:-$(mktemp -d /tmp/autocode-sc.XXXXXX)}"
 EVIDENCE="$WORK_ROOT/evidence"
@@ -136,10 +149,12 @@ run_cli() { # run_cli <logfile> <args...>   (stdin from $CHAT_STDIN file, if set
 
 # ---- state inspection ----------------------------------------------------
 latest_run() { # latest_run <search-root>... -> run dir holding the newest state.json
-  local hits
-  hits=$(find "$@" -path '*/.autocode/runs/*/state.json' -not -path '*/.git/*' 2>/dev/null)
-  [[ -z "$hits" ]] && return 1
-  dirname "$(ls -t $hits | head -1)"
+  local newest
+  # NUL-separated so a workspace path with spaces (or unicode) is one argument.
+  newest=$(find "$@" -path '*/.autocode/runs/*/state.json' -not -path '*/.git/*' -print0 2>/dev/null \
+    | xargs -0 ls -t 2>/dev/null | head -1)
+  [[ -z "$newest" ]] && return 1
+  dirname "$newest"
 }
 
 state_file_expr() { # state_file_expr <state.json> <expr over d> -> TRUE/FALSE or the value
