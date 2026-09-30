@@ -31,3 +31,11 @@ cases cover stored and deflated corruption with absent and existing-empty
 destinations, including staging cleanup. The previous reference is retained as
 `broken/ignores-directory-crc`. The new case fails before the fix and passes
 after it; the broken variant still fails.
+
+## macOS CI fixture maintenance race
+
+CI exposed an unrelated race in the permanent-delete endpoint fixture: Git's
+background maintenance removed `.git/objects/maintenance.lock` while `copytree`
+was copying the shared seed. Disable automatic maintenance and GC in that
+disposable seed before its first commit; copies inherit the same setting.
+No dashboard production behavior changes.

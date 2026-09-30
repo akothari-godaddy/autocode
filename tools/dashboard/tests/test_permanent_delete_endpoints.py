@@ -26,6 +26,9 @@ class PermanentDeleteTests(unittest.TestCase):
         cls.seed_temp = tempfile.TemporaryDirectory()
         cls.seed = Path(cls.seed_temp.name).resolve()
         git(cls.seed, 'init', '-q')
+        # Keep the shared seed immutable while copytree walks its Git objects.
+        git(cls.seed, 'config', 'maintenance.auto', 'false')
+        git(cls.seed, 'config', 'gc.auto', '0')
         (cls.seed / 'keep.txt').write_text('source belongs to the project')
         git(cls.seed, 'add', 'keep.txt')
         git(cls.seed, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', 'commit', '-qm', 'fixture')
