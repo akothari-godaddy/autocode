@@ -124,6 +124,15 @@ and the request: count the items in a range, do the arithmetic, apply the stated
 to the example's inputs. An example whose stated result does not follow is a blocking concern naming the
 correct result: no implementation can satisfy both the rule and the example.
 """
+# A live cent-drift plan (2026-09-30) required a 175,712-cart enumeration to "finish in under about 10 seconds". The
+# Builder asserted elapsed time, the test took 10.39 s on a loaded machine, and the run stopped after two retries
+# with correct billing code: no code change could make the criterion hold.
+NO_TIMING_RULE = """
+NO TIMING CRITERIA: no acceptance criterion, verification method or test may depend on elapsed time or machine
+speed ("finishes in under 10 seconds", a timing assertion, a benchmark threshold). It passes on an idle machine and
+fails on a loaded one, and the Builder cannot fix that by fixing code. Bound the work instead: state the size of an
+enumeration and keep it to a few thousand cases that run in seconds. A plan reviewer raises a blocking concern for one.
+"""
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
 DESIGN_DELIVERABLES_RULE = """
@@ -920,6 +929,7 @@ def context(state, stage, state_path):
     if stage != "requirements_gather":
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
         design_rule += EXAMPLE_CHECK_RULE if stage in ("astra_challenge", "astra_finalize") else ""
+        design_rule += NO_TIMING_RULE
     if rows:
         design_rule += REQUIREMENT_TRACE_RULE
     design_rule += adaptive.prompt_rule(state, stage)
