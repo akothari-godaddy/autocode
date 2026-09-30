@@ -26,6 +26,12 @@ API_MODELS = {
 }
 
 
+def status_diagnostic(summary: str) -> str:
+    """Keep status identity/authentication lines without key or usage metadata."""
+    fields = ("gocode version:", "mode:", "GoCode authentication:")
+    return "; ".join(line for line in summary.splitlines() if line.startswith(fields)) or "no recognized status fields"
+
+
 def local_settings(workspace: Path) -> dict:
     """Return non-secret GoCode identity or fail before any provider request."""
     del workspace
@@ -44,14 +50,18 @@ def local_settings(workspace: Path) -> dict:
     except OSError as error:
         raise RuntimeError("GoCode status check failed; no agent was launched") from error
     else:
-        if result.returncode:
-            raise RuntimeError("GoCode has no authenticated managed route; no agent was launched")
         summary = result.stdout + result.stderr
+        if result.returncode:
+            raise RuntimeError(f"GoCode status exited {result.returncode}: {status_diagnostic(summary)}; no agent was launched")
     managed = "mode: managed" in summary and "credential bundle: present" in summary
     unmanaged_authenticated = ("mode: unmanaged" in summary
                                and "GoCode authentication: ok" in summary)
     if not (managed or unmanaged_authenticated):
-        raise RuntimeError("GoCode has no authenticated managed route; no agent was launched")
+        if "GoCode broker session expired or missing" in summary:
+            raise RuntimeError("GoCode broker session expired or missing; run `gocode auth login` "
+                               "in your Terminal; no agent was launched")
+        raise RuntimeError("GoCode has no authenticated managed route: "
+                           f"{status_diagnostic(summary)}; no agent was launched")
     version = next((line.removeprefix("gocode version: ").strip()
                     for line in summary.splitlines() if line.startswith("gocode version: ")), None)
     if timed_out:

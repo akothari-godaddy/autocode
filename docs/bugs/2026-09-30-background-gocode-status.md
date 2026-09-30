@@ -23,3 +23,22 @@ paused run, but startup can exit 2 before creating any run. It now includes
 the last 800 characters of CLI stderr (or stdout) when no run was created.
 Focused tests reproduced the missing diagnostics before the change and pass
 afterward. Existing callers must restart to load this client change.
+
+Further live diagnosis identified a distinct credential-agent failure. GoCode
+rejected a peer after an executable-path change, and a diagnostic invoked from
+the tool sandbox spawned a replacement agent that could not initialize macOS
+secure storage. The user-launched worker then reached that same failing agent.
+Stopping that specific diagnostic-created agent allowed the user's worker to
+recover it through the GoCode service; storage initialization succeeded.
+
+The live retry received a real workflow-classification response. Its Codex
+session records provider `gocode` and model `gpt-6-astra`. The run then paused
+because Serena created repository metadata during a read-only stage. Full
+conversation completion is not yet established.
+
+Authentication failures now retain only version, mode and authentication lines
+from status, with the status exit code when nonzero. Broker-session expiry has
+an explicit login instruction. Key and usage metadata remain excluded. All 17
+focused transport tests pass; broader checks retain the environment failures
+described above. Do not invoke credential-bearing GoCode probes from the tool
+sandbox: let the user's existing worker own credential-agent initialization.
