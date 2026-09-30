@@ -26,10 +26,10 @@ try:
     from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
     from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes
-    from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees
+    from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_event_log as event_log
 except ImportError:
     import autocode_dependency as dependency, autocode_status_command as status_command
-    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes
+    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes, autocode_event_log as event_log
     import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
@@ -469,7 +469,7 @@ def run_role(
     interrupted = False
     cleanup_error = None
     worker_path = run_dir / "active-processes.json"
-    with processes.interruption_handler(), prompt_file.open("r") as stdin, events.open("w") as stdout:
+    with processes.interruption_handler(), prompt_file.open("r") as stdin, event_log.open_events(events) as stdout:
         try:
             # Preparation can be slow. Linearize immediately before the durable
             # active request and launch, with submission using the same short lock.
