@@ -382,7 +382,9 @@ def report_for(stage: str, data: dict) -> dict:
     if stage == "astra_discovery":
         report = {"summary": "Scripted plan", "contract": contract(), "alternatives": [], "uncertainties": [], **planning}
         if CONFIG.get("fault") == "planner_citation" and not guided_to_fix_citation():
-            report["code_refs"] = [f"{note} (saved diagnosis: observed, reproduction, root cause)" for note in bug_notes()]
+            # Prose after an existing path is valid. A nonexistent sibling is a
+            # deterministic rejected citation, including on report-only repairs.
+            report["code_refs"] = [f"{note}.missing" for note in bug_notes()]
         return report
     if stage == "astra_challenge":
         return {"summary": "Scripted plan review: no concerns", "concerns": []}
@@ -529,7 +531,7 @@ def bug_notes() -> list[str]:
 
 def guided_to_fix_citation() -> bool:
     """Fault "planner_citation" (scenarios/catalog/stuck-planner-citation): the scripted Planner
-    repeats a mistake seen live, citing the bug note with prose after its path, until an
+    repeatedly cites a nonexistent .missing sibling of the saved bug note until an
     Investigator's guidance in its prompt names the actual problem (code_refs, or the exact path).
     Vague guidance leaves it stuck: the scenario judges the real Investigator, not this script."""
     marker = "INVESTIGATOR GUIDANCE"

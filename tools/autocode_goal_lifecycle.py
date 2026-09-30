@@ -16,7 +16,7 @@ import uuid
 
 try:
     from . import autocode_util as s, autocode_workflows as workflows, autocode_milestones as checkpoints
-    from . import autocode_findings as findings, autocode_resolver_human as human
+    from . import autocode_findings as findings, autocode_resolver_human as human, autocode_verification_plan as verification_plan
     from .autocode_goals import (
         BODY_SCHEMA, BRIEF_FIELDS, LEGACY_BODY_SCHEMA, PLANNING_BODY_SCHEMA, approved, check_delegable,
         handoff_ref, initial_decision, invalidate, missing_human_reviews, open_obligations,
@@ -24,7 +24,7 @@ try:
         sealed, start_clarification_episode, token, validate_requirements_body)
 except ImportError:
     import autocode_util as s, autocode_workflows as workflows, autocode_milestones as checkpoints
-    import autocode_findings as findings, autocode_resolver_human as human
+    import autocode_findings as findings, autocode_resolver_human as human, autocode_verification_plan as verification_plan
     from autocode_goals import (
         BODY_SCHEMA, BRIEF_FIELDS, LEGACY_BODY_SCHEMA, PLANNING_BODY_SCHEMA, approved, check_delegable,
         handoff_ref, initial_decision, invalidate, missing_human_reviews, open_obligations,
@@ -36,6 +36,8 @@ def validate_body(state, body, *, ready=False, allow_legacy=False):
     legacy = allow_legacy and not any(key in body for key in BRIEF_FIELDS)
     s.validate_schema(body, PLANNING_BODY_SCHEMA if "initial_task" in body else LEGACY_BODY_SCHEMA if legacy else BODY_SCHEMA)
     if "initial_task" in body and not (body["initial_task"]["kind"] == "none" and body["open_blocking_questions"]):
+        first = body["initial_task"]
+        verification_plan.require_scaffolding(state.get("workspace"), first["affected_paths"], first["validation_plan"])
         probe = {"goal_contract": {"body": body, "revision": 0, "hash": "draft"}}
         assign_task(probe, initial_decision(body), {"revision": "draft"})
     questions = body["open_blocking_questions"]
@@ -54,6 +56,8 @@ def validate_body(state, body, *, ready=False, allow_legacy=False):
         if (not milestone["objective"].strip() or not covered or len(set(covered)) != len(covered)
                 or not set(covered) <= criterion_ids):
             raise ValueError("Each milestone needs an objective and existing acceptance criterion IDs")
+        verification_plan.require_scaffolding(state.get("workspace"), milestone.get("affected_paths", []),
+            [row["verification_method"] for row in criteria if row["id"] in covered])
     if any("depends_on" in milestone for milestone in milestones):
         if any("depends_on" not in milestone for milestone in milestones):
             raise ValueError("Every milestone must declare depends_on when dependencies are planned")
@@ -523,6 +527,7 @@ def assign_task(state, decision, current):
     if task_paths and milestones and spec["milestone_id"] not in previous_batch:
         owned = milestones.get(spec["milestone_id"], {}).get("affected_paths", [])
         task_paths = list(dict.fromkeys(task_paths + owned))
+    verification_plan.require_scaffolding(state.get("workspace"), task_paths, spec["validation_plan"])
     recovery = state.get("recovery_context") or {}
     previous_task = state.get("current_task") or {}
     if (spec["kind"] == "implement" and recovery.get("timeout_kind")

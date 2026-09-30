@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -26,6 +27,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import profiles
+from .processes import CallTimeout, SupervisionUnavailable, run_cli
 from .project import overlay_paths
 
 REPO = Path(__file__).resolve().parents[2]
@@ -51,6 +53,28 @@ def leaves_for_person(need: dict) -> bool:
 
 class DriveError(RuntimeError):
     """The harness could not take the run any further."""
+
+
+def _question_answer(question: dict) -> str:
+    """Do not mistake an explicit absence of a default for a user decision."""
+    default = question.get("proposed_default")
+    no_default = re.compile(r"^\s*no\s+(?:proposed\s+|recommended\s+)?default"
+                            r"(?:\s*[.;:!?—–-]|\s*$|\s+(?:is\s+)?"
+                            r"(?:available|provided|specified|selected|offered)\b)", re.I)
+    if not (isinstance(default, str) and no_default.match(default)):
+        options = question.get("options") or []
+        return default or (options[0] if options else "yes")
+
+    for option in question.get("options") or []:
+        if not isinstance(option, str) or not option.strip() or no_default.match(option):
+            continue
+        if re.match(r"^\s*(?:other\b|(?:specify|provide|choose)\s+(?:another|your own)\b|"
+                    r"(?:ask|consult)\s+(?:the\s+)?user\b)",
+                    option, re.I):
+            continue
+        return option
+    raise DriveError(f"question {question['id']} explicitly has no default and no concrete option; "
+                     "a user answer is required")
 
 
 def fake_setup(scenario, root: Path, solution: Path) -> tuple[list[str], dict]:
@@ -114,10 +138,13 @@ class Driver:
                *([] if action else ["--no-chat", *self.flags]), *extra]
         started = time.monotonic()
         try:
-            proc = subprocess.run(cmd, env=self.env, cwd=self.root, capture_output=True, text=True,
-                                  timeout=remaining)
-        except subprocess.TimeoutExpired:
-            raise DriveError(f"{kind} was still running when the time budget ran out") from None
+            proc = run_cli(cmd, env=self.env, cwd=self.root, timeout=remaining)
+        except SupervisionUnavailable as error:
+            raise DriveError(str(error)) from None
+        except CallTimeout as error:
+            detail = ("; cleanup incomplete: " + "; ".join(error.cleanup_errors)
+                      if error.cleanup_errors else "; captured workers stopped")
+            raise DriveError(f"{kind} was still running when the time budget ran out{detail}") from None
         if record:
             step = {"kind": kind, "args": list(extra), "exit": proc.returncode,
                     "seconds": round(time.monotonic() - started, 1),
@@ -180,15 +207,16 @@ class Driver:
             # is consumed by the first answered invocation, so per-question
             # calls would answer once and then fail the token check.
             pairs = []
+            answers = []
             for question in need["questions"]:
-                options = question.get("options") or []
-                answer = question.get("proposed_default") or (options[0] if options else "yes")
-                self.answers.append({"id": question["id"], "question": question.get("question"),
-                                     "why": question.get("why"), "answer": answer})
+                answer = _question_answer(question)
+                answers.append({"id": question["id"], "question": question.get("question"),
+                                "why": question.get("why"), "answer": answer})
                 pairs.append(f"{question['id']}={answer}")
             args = [item for pair in pairs for item in ("--answer", pair)]
             if need.get("resolver_token"):
                 args += ["--resolver-token", need["resolver_token"]]
+            self.answers.extend(answers)
             self.call("answer", *args, action=True)
         elif kind == "review":
             for criterion in need["criteria"]:
@@ -232,6 +260,42 @@ def default_autocode() -> list[str]:
     return [sys.executable, str(REPO / "tools" / "autocode.py")]
 
 
+def model_routes(state: dict) -> list[dict]:
+    """Audit recorded model requests, including an unfinished final attempt.
+
+    Role settings can change after a launch, so they cannot establish which
+    models were requested. An active record can precede process creation.
+    Unknown routes stay unknown instead of being inferred.
+    """
+    records = list(state.get("stages") or [])
+    if state.get("active_stage"):
+        records.append(state["active_stage"])
+    routes = []
+    for record in records:
+        if record.get("runner_owned") or record.get("stage") == "orchestrator":
+            continue
+        model = record.get("model")
+        command = record.get("command") or []
+        for i, arg in enumerate(command):
+            if arg == "--model" and i + 1 < len(command):
+                model = command[i + 1]
+                break
+            if isinstance(arg, str) and arg.startswith("--model="):
+                model = arg.partition("=")[2]
+                break
+        else:
+            # Python's module switch is not a model flag. Prefer an explicit
+            # long flag above; only native provider commands use this alias.
+            if command and Path(command[0]).name in {"codex", "opencode", "kilo", "kilocode"}:
+                for i, arg in enumerate(command[:-1]):
+                    if arg == "-m":
+                        model = command[i + 1]
+                        break
+        routes.append({"stage": record.get("stage"), "engine": record.get("engine"),
+                       "model": model or None})
+    return routes
+
+
 def metrics(state: dict) -> dict:
     """Stage counts, model time and tokens, from the run's own stage records.
 
@@ -255,6 +319,7 @@ def metrics(state: dict) -> dict:
     model_stage_names = [stage.get("stage") for stage in stages
                          if not stage.get("runner_owned") and stage.get("stage") != "orchestrator"]
     return {"stages": len(stages), "stage_names": [stage.get("stage") for stage in stages],
+            "model_routes": model_routes(state),
             "model_stages": len(model_stage_names), "model_stage_names": model_stage_names,
             "model_seconds": round(sum(stage.get("duration_seconds") or 0 for stage in stages), 1),
             "report_repairs": sum(1 for name in model_stage_names if str(name).endswith("_report_repair")),

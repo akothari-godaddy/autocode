@@ -7,6 +7,8 @@ from harness.oracle import Check, load_json, mentions, python_change_checks, run
 
 DIAGNOSIS_FIELDS = ("observed", "reproduction", "root_cause", "affected_paths", "invariant")
 NOTE = "docs/bugs/word-count.json"
+INVALID_CITATION = NOTE + ".missing"
+INVESTIGATOR_STAGES = {"investigate_stuck", "investigate_stuck_report_repair"}
 
 
 def check(project, scenario, run=None):
@@ -36,9 +38,22 @@ def investigation_checks(project):
     checks.append(Check("diagnosis_names_the_rejected_citation",
                         mentions(text, ("code_ref", "code ref", NOTE, "citation", "cite")), text[:300]))
     model = row.get("model") or ""
-    checks.append(Check("investigator_was_a_real_openai_model", model.startswith("openai/gpt-6"), model))
+    stages = state.get("stages") or []
+    live_investigator = [stage for stage in stages if stage.get("stage") in INVESTIGATOR_STAGES
+                         and stage.get("engine") == "opencode"
+                         and (stage.get("launch_route") or {}).get("model") == model]
+    checks.append(Check("investigator_was_a_real_openai_model",
+                        model.startswith("openai/gpt-6") and bool(live_investigator), model))
+    other_live = [stage.get("stage") for stage in stages if not stage.get("runner_owned")
+                  and stage.get("engine") not in (None, "runner", "codex")
+                  and stage.get("stage") not in INVESTIGATOR_STAGES]
+    checks.append(Check("only_investigator_used_live_provider", not other_live, str(other_live)))
     kept = [entry for entry in (state.get("failure_history") or {}).values()
             if (entry.get("identity") or {}).get("stage") == "astra_discovery"]
     checks.append(Check("failure_history_kept", bool(kept) and max(e.get("count", 0) for e in kept) >= 1,
                         str([e.get("count") for e in kept])))
+    rejected = [entry.get("last_error", "") for entry in kept]
+    checks.append(Check("missing_citation_fault_was_exercised",
+                        any(INVALID_CITATION in error and "not a file" in error for error in rejected),
+                        str(rejected)[:500]))
     return checks

@@ -82,9 +82,9 @@ def require_mode(args) -> None:
         sys.exit("run needs --fake or --profile NAME")
     if args.profile and not args.i_authorize_live_model_spend:
         sys.exit(f"refusing to spend on live models: add --i-authorize-live-model-spend (profile {args.profile})")
-    if not args.autocode and importlib.util.find_spec("psutil") is None:
-        sys.exit("AutoCode needs psutil, which this Python lacks: run with the project's virtualenv "
-                 "(.venv/bin/python scenarios/run.py ...) or pass --autocode")
+    if importlib.util.find_spec("psutil") is None:
+        sys.exit("Scenario process supervision needs psutil, which this Python lacks: run with the project's "
+                 "virtualenv (.venv/bin/python scenarios/run.py ...), including for custom --autocode commands")
 
 
 def cmd_run(args) -> int:
@@ -128,6 +128,8 @@ def run_one(scenario, args) -> dict:
     stamp, out = evidence_directory(args.out, f"{scenario.id}-{mode}")
     result = {"scenario": scenario.id, "title": scenario.title, "category": scenario.category, "mode": mode,
               "autocode": autocode_revision(), "started_at": stamp, "evidence": str(out)}
+    if not args.fake:
+        result["profile"] = profiles.resolve(args.profile)
     skip = [f"requires {tool}" for tool in scenario.missing_tools()]
     solution = scenario.dir / args.fake_solution
     if args.fake and not scenario.fake_check:

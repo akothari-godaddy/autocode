@@ -54,6 +54,18 @@ class ReplayTests(unittest.TestCase):
                     self.assertIn(word, message)
                 self.assertIn("clean checkout", message)
 
+    def test_an_unrelated_success_does_not_replace_the_approved_command(self):
+        calls = []
+        state = {"current_task": {"validation_plan": ["python3 -m unittest test_greet.py"]}}
+        def run(workspace, out, *, command, timeout):
+            calls.append(command)
+            return receipt(1 if "unittest" in command else 0, tail="wrong greeting")
+        with self.assertRaisesRegex(ValueError, "test_greet.py.*exited 1"):
+            check_replay.replay([{"command": "python3 -c 'print(1)'", "exit_code": 0,
+                                  "evidence_ref": "event:a"}], "/ws", self.run_dir, self.record, run,
+                                 approved_state=state)
+        self.assertEqual(["python3 -c 'print(1)'", "python3 -m unittest test_greet.py"], calls)
+
 
 class ScratchReplayTests(unittest.TestCase):
     """The real scratch runner: the clean copy is the source as it is now, and only that."""
@@ -94,6 +106,19 @@ class ScratchReplayTests(unittest.TestCase):
         with self.assertRaises(ValueError) as unrelated:
             self.replay("test -f local-only.txt")
         self.assertNotIn(check_replay.RUN_FILES_HINT, str(unrelated.exception))
+
+    def test_documentation_command_template_is_checked_as_text_without_execution(self):
+        (self.workspace / "README.md").write_text("Use python3 -m temperature VALUE UNIT\n")
+        command = "python3 -c \"from pathlib import Path; assert 'python3 -m temperature VALUE UNIT' in Path('README.md').read_text()\""
+        state = {"current_task": {"validation_plan": [
+            "Inspect README.md and verify the exact text `python3 -m temperature VALUE UNIT` "
+            "without invoking the metavariable template as a command."]}}
+        result = check_replay.replay([{"command": command, "exit_code": 0, "evidence_ref": "event:a"}],
+                                    self.workspace, self.run_dir,
+                                    {"output": "sol-01.json", "source_revision": "r"}, verify.scratch_run,
+                                    approved_state=state)
+        self.assertEqual("PASS", result["verdict"])
+        self.assertEqual([command], [row["command"] for row in result["checks"]])
 
     def test_a_command_naming_the_workspace_runs_against_the_copy(self):
         self.replay(f"cat {self.workspace}/new.txt && touch {self.workspace}/written-by-check.txt")

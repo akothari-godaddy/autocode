@@ -7,13 +7,13 @@ own completion claim, decides whether the work is right.
 ```sh
 PY=.venv/bin/python                               # AutoCode needs psutil from the project virtualenv
 $PY scenarios/run.py list                         # the catalog
-$PY scenarios/run.py check                        # prove every oracle (seconds; no AutoCode, no models)
-$PY scenarios/run.py run --fake                   # every scenario through AutoCode with a scripted model (under a minute, no spend)
+$PY scenarios/run.py check                        # prove every oracle (no AutoCode, no models)
+$PY scenarios/run.py run --fake                   # every scenario through AutoCode with a scripted model (no spend)
 $PY scenarios/run.py run bugfix-iso-weeks --profile glm53-openai --i-authorize-live-model-spend
 $PY scenarios/run.py route --fake                 # which workflow AutoCode recognizes for each prompt in routing.toml
 $PY scenarios/run.py compare --fake               # AutoCode vs a plain agent on the same oracles (scripted; no spend)
 $PY scenarios/run.py stats                        # per scenario and mode: runs, passes, pass streak, time, model stages
-$PY -m unittest scenarios/test_harness.py         # the harness's own tests (under a minute)
+$PY -m unittest scenarios/test_harness.py         # the harness's own tests, including all catalog controls
 ```
 
 Results land in `.scenario-runs/<time>-<id>-<mode>/`: `result.json` (verdict,
@@ -194,7 +194,7 @@ live comparison with matched models and a recorded profile.
 | `bugfix-duplicate-on-timeout` | bugfix | A retry after an uncertain timeout renews a domain twice. Hidden tests inject lost replies before and after processing; removing retries or raising the deadline both fail. Requires a root-cause note and no requirements gathering. |
 | `bugfix-stale-prices` | bugfix | Checkout charges stale prices because cache invalidation is left to each write path. The fix belongs at the store's write path (every cache hears every write); either fix route passes, with no requirements gathering. Patching today's callers or dropping the cache both fail hidden tests. |
 | `bugfix-cent-drift` | bugfix | Invoice, charge and refunds each round money their own way and drift by a cent. The fix touches every billing module, needs one half-up money rule, and leaves an accounting choice open (tax per line or per invoice), so it must take the planned path: diagnosis, Planner, Plan Reviewer, the user's approval, no requirements gathering. Deriving only the charge from the invoice, or rounding everything with float `round()`, both fail hidden tests. |
-| `stuck-planner-citation` | bugfix | The stuck-stage Investigator, with a real model. Every stage is scripted except the Investigator (`--investigator-model openai/gpt-6-sol`, high); the scripted Planner repeats a mistake seen live (prose after a cited path) until repairs run out. Passes only if the real Investigator names the cause and its guidance gets the retried Planner through. One real model call: skipped without `--i-authorize-live-model-spend`. |
+| `stuck-planner-citation` | bugfix | The stuck-stage Investigator, with a real model. Every stage is scripted except the Investigator (`--investigator-model openai/gpt-6-sol`, high); the scripted Planner repeatedly cites a nonexistent `.missing` sibling until repairs run out. Passes only if the real Investigator names the cause and its guidance gets the retried Planner through. Requires a real model call; interruptions or report repairs can add calls. Skipped without `--i-authorize-live-model-spend`. |
 | `bugfix-trivial` | bugfix | An off-by-one. Correctness is easy; the check is proportionality: no requirements gathering, no plan-review rounds, no questions, at most five model stages. |
 | `bugfix-not-reproducible` | bugfix | The reported bug does not exist in this code. Passes by saying so or asking; a "defensive" change to working code fails. |
 | `feature-refund-window` | feature | Built to reach AutoResolver (#59): the seed's `store_date()` helper ignores the store's UTC-8 offset, and the cap is on the running total of partial refunds. A plausible first attempt passes its own tests and fails hidden boundary tests; the oracle checks that AutoResolver's diagnosis names a planted defect. Runs that never reach `astra_resolve` are `NOT_EXERCISED` (always, with the scripted model). |
@@ -264,12 +264,37 @@ versions for the runs you want to compare.
 
 ## Adding a scenario
 
+The expanded engineering ladder is documented in [LADDER.md](LADDER.md), from
+small command-line tools to durable queues, transactional data, security
+boundaries, and dependency-driven projects. Each rung has a reference solution
+and defective controls; an oracle self-check is not a live AutoCode pass.
+
+For an OpenAI-only campaign using the existing ChatGPT OAuth connection:
+
+```sh
+$PY scenarios/run.py run <scenario> --profile codex-only --i-authorize-live-model-spend \
+    --max-seconds 1200 --max-stage-seconds 480 --max-reported-tokens 2000000 --max-iterations 6
+```
+
+This profile uses GPT-5.6 Terra for requirements, planning and building, and
+GPT-5.6 Sol for review, validation and recovery. Execution roles are pinned,
+including checkers, and the Investigator is explicitly OpenAI. Every live
+result records the profile; `metrics.model_routes` records requested models
+from saved commands, including an unfinished final attempt. An active record
+can precede process creation; it is not proof of a completed model call. Missing
+route evidence stays unknown. These runs have different models and environments
+from the historical `glm53-openai` qualification and are reported separately.
+
+Run offline checks with an interpreter that has psutil. AutoCode also requires
+permission to inspect its child processes; a sandbox that blocks process
+enumeration produces a launch blocker, not evidence of a model failure.
+
 ```
 catalog/<id>/
   scenario.toml     title, category, optional requires = ["go"], [fake] check = "...",
                     optional [fake] flags = [...] (extra CLI flags), fault = "name" (a scripted
                     mistake in harness/fake_codex.py), live_investigator = true (the scripted run
-                    still makes one real model call; needs --i-authorize-live-model-spend),
+                    still uses a real Investigator; needs --i-authorize-live-model-spend),
                     [run] max_steps, timeout_minutes, expected = "complete"|"stop"|"any", known_failure = "why",
                           requires_stages = ["astra_resolve"] (a model stage the run must reach to count)
                     [[turn]] after = "complete"|"stop"|"needs:<kind>", say = "follow-up message" (optional, repeatable)
@@ -299,6 +324,11 @@ Rules for oracles, so a verdict means something:
 - For a read-only job, end with `only_changed_under(project, "<report dir>/")`.
 
 ## Relation to older harnesses
+
+[Adversarial CLI tests](ADVERSARIAL.md) attack completion evidence, recovery,
+approval, concurrent writers, crash/resume, budgets and atomic persistence. Run
+`python scenarios/adversarial.py --jobs 4` with the venv interpreter. These tests
+preserve failing product invariants and use no live models.
 
 `tools/live_trial.py` and `tools/live_scenarios.py` hold the scenarios this
 catalog was ported from (LIVE-01, 02, 05, 06). They stay until the work in

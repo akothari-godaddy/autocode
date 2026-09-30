@@ -100,6 +100,15 @@ For independent parallel milestones, use distinct milestone-specific criterion I
 affected_paths: the scheduler serializes milestones that share criterion IDs. Scope each criterion to its
 own milestone; put cross-component integration checks in a dependent milestone. Do not weaken coverage or
 rename protected criteria in an existing contract without the required user-backed change.
+TEST COMMAND PREREQUISITES: include every missing package marker required by your validation command in
+affected_paths before approval. `python3 -m unittest discover -s tests -t .` needs tests/__init__.py;
+assign that file explicitly (or tests/) when it does not exist. Never leave the Builder to expand scope.
+NUMERIC BOUNDARIES: when the public contract accepts Python integers without a documented bound, include
+examples at 2**63-1, 2**63, and 10**5000 wherever those inputs are valid, and large negative values for signed
+domains. Prove persistence, exact arithmetic, stale/unknown identifiers, and transaction rollback at those
+boundaries. SQLite INTEGER bindings stop at 64 bits and SQL arithmetic can promote overflow to REAL; use
+lossless storage and application integer arithmetic for unbounded values. Decimal int/str conversion can
+hit Python's digit limit too. Preserve the public contract; do not invent a bound to fit the implementation.
 """
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
