@@ -44,6 +44,23 @@ class EntryStage(unittest.TestCase):
         self.assertEqual(state["next_stage"], workflows.INVESTIGATE_STAGE)
 
 
+class NewRunsOnly(unittest.TestCase):
+    def test_turning_the_flag_on_for_a_saved_run_is_refused(self):
+        self.assertTrue(adaptive.resume_refused({"engine": "opencode"}, True))
+
+    def test_repeating_the_flag_on_an_adaptive_run_or_omitting_it_is_allowed(self):
+        self.assertFalse(adaptive.resume_refused({"adaptive_planning": True}, True))
+        self.assertFalse(adaptive.resume_refused({"engine": "opencode"}, False))
+
+    def test_configure_refuses_before_touching_the_saved_run(self):
+        import argparse
+        import autocode_configure as configure
+        args = argparse.Namespace(adaptive_planning=True)
+        with self.assertRaisesRegex(ValueError, "new-run policy"):
+            configure.configure(args, {"settings": {"engine": "opencode"}}, planning=None, milestones=None,
+                                autopilot=None)
+
+
 class Schemas(unittest.TestCase):
     def test_recognizer_asks_for_clarity_only_in_adaptive_runs(self):
         self.assertNotIn("clarity", autoplanner.schema_for(OFF, autoplanner.RECOGNIZE)["properties"])

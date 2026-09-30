@@ -22,9 +22,15 @@ build plan, and the Validator and Completion Owner still judge the work.
 This module is pure. It imports nothing from the runner; callers pass state in.
 
 State keys written by callers from these decisions:
-    workflow.clarity: "clear" | "vague", saved by autocode_workflows.apply
-    planning.adaptive: {"size", "signals", "review_limit", "approved_at"}, saved by
-        units.autoplanner.after_challenge; read by the status view and the stress test
+    workflow.clarity: "clear" | "vague", saved by autocode_workflows.apply. Evidence of why
+        Requirements was skipped; nothing in tools/ branches on it after recognition.
+        scenarios/harness/plan_compare.py reads it from state.json.
+    planning.adaptive: {"size", "signals", "review_limit", "challenges", "approved_at",
+        "final_stage"}, saved by units.autoplanner.after_challenge. Read by
+        units.autoplanner.after_revise (challenges), autocode_resolver_human._decision
+        (final_stage: which review is the final planning evidence), review_notes here (for
+        autocode_goal_lifecycle.render), and plan_compare.summarize via state.json. The status
+        view (autocode_run_view) does not show either key yet.
 """
 from __future__ import annotations
 
@@ -74,6 +80,13 @@ or what the revision introduced.
 
 def enabled(state: dict) -> bool:
     return bool((state.get("settings") or {}).get(SETTING))
+
+
+def resume_refused(saved_settings: dict, requested: bool) -> bool:
+    """Whether --adaptive-planning on a resumed run would change it. A saved run keeps its planning flow, so
+    turning the flag on for one that lacks it is refused; repeating it on an adaptive run is harmless (drivers
+    pass the same launch flags on every resume, as with --joint-planning)."""
+    return bool(requested) and not saved_settings.get(SETTING)
 
 
 def recognizer_rule(state: dict) -> str:

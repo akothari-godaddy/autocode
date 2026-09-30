@@ -30,6 +30,11 @@ What does not change:
 
 - You approve every build plan. Adaptive planning removes model calls, never
   your approval.
+- A build named with `--workflow build` skips recognition, so nobody judges its
+  clarity and the Requirements stage always runs.
+- The flag applies only to new runs. Resuming a run that was started without
+  it, with the flag added, is refused, so an existing run keeps its planning
+  flow. Repeating the flag on an adaptive run is fine.
 - Questions work as before. On the fast path the Planner asks them itself.
 - The Validator and Completion Owner still judge the work, and bug-fix, review,
   design and discuss workflows are unaffected.
