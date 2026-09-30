@@ -22,25 +22,6 @@ import autopilot
 
 
 class GoCodeTransportTests(unittest.TestCase):
-    @unittest.skipUnless(sys.platform == 'darwin', 'macOS GoCode terminal startup')
-    def test_macos_status_can_complete_when_gocode_requires_a_terminal(self):
-        # The real CLI prints successful status but does not exit when hosted
-        # with pipes; its interactive Terminal invocation finishes normally.
-        with tempfile.TemporaryDirectory() as directory:
-            executable = Path(directory) / 'gocode'
-            executable.write_text(
-                '#!' + sys.executable + '\nimport sys\n'
-                'if not (sys.stdin.isatty() and sys.stdout.isatty()):\n'
-                '    raise SystemExit(7)\n'
-                'print("gocode version: fixture")\n'
-                'print("mode: unmanaged")\n'
-                'print("GoCode authentication: ok via GoCode Client Service")\n')
-            executable.chmod(0o755)
-            with patch.object(gocode.shutil, 'which', return_value=str(executable)):
-                identity = gocode.local_settings(Path(directory))
-        self.assertEqual('gocode', identity['engine'])
-        self.assertEqual('unmanaged', identity['mode'])
-
     def test_direct_adapter_uses_gocode_then_codex_never_opencode(self):
         command = gocode.launch(
             role="terra", workspace=Path("/workspace"), session=None,

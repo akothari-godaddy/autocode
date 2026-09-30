@@ -9,7 +9,6 @@ from __future__ import annotations
 from pathlib import Path
 import shutil
 import subprocess
-import sys
 
 
 DEFAULT_MODELS = {
@@ -33,14 +32,8 @@ def local_settings(workspace: Path) -> dict:
     executable = shutil.which("gocode")
     if not executable:
         raise RuntimeError("GoCode is not on PATH; no agent was launched")
-    command = [executable, "status"]
-    if sys.platform == "darwin":
-        # macOS GoCode can print a complete status and remain alive with pipe
-        # stdio. Give this read-only probe a terminal without recording it or
-        # supplying input; interactive auth prompts still time out safely.
-        command = ["/usr/bin/script", "-q", "/dev/null", *command]
     try:
-        result = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=45)
+        result = subprocess.run([executable, "status"], capture_output=True, text=True, timeout=45)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise RuntimeError("GoCode status check failed; no agent was launched") from error
     summary = result.stdout + result.stderr
