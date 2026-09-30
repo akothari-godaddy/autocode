@@ -47,7 +47,7 @@ try:
     from . import autocode_planning_artifacts as planning_artifacts
     from . import autocode_budget_recovery as budget_recovery
     from . import autocode_findings as findings_ledger
-    from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop
+    from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from .autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
         assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
@@ -72,7 +72,7 @@ except ImportError:
     import autocode_planning_artifacts as planning_artifacts
     import autocode_budget_recovery as budget_recovery
     import autocode_findings as findings_ledger
-    import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop
+    import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
         assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
@@ -1433,78 +1433,10 @@ def _main_body(unit=None) -> int:
         print("Input rejected: Feedback and follow-ups must be nonempty", file=sys.stderr)
         return 2
 
-    if args.ui_run and args.figma_file:
-        parser.error("Choose --ui-run or --figma-file")
-    if args.run_dir and (args.ui_run or args.figma_review):
-        parser.error("Figma inputs and review policy are fixed for a saved run")
-    if args.ui_run:
-        handoff = figma.load_handoff(args.ui_run)
-        args.figma_file = handoff["figma_file"]
-        args.task = (args.task or handoff["task"]) + "\n\nAccepted UI brief:\n" + handoff["brief"]
-    if args.figma_file:
-        args.figma_file = figma.design_url(args.figma_file)
-        if args.engine not in (None, "codex"):
-            parser.error("Figma implementation uses --engine codex")
-        args.engine = "codex"
-    elif args.figma_review:
-        parser.error("--figma-review requires --figma-file or --ui-run")
-    workspace = args.workspace.resolve()
-    if args.run_dir:
-        if not (workspace / ".git").exists():
-            parser.error(f"workspace is not a Git repository: {workspace}")
-        run_dir = args.run_dir.resolve()
-        state_path = run_dir / "state.json"
-        state = read_json(state_path)
-        task = state["task"]
-        workspace = task_workspaces.resume_workspace(workspace, state)
-    else:
-        if not args.task:
-            parser.error("task is required unless --run-dir is supplied")
-        task = args.task
-        if not (workspace / ".git").exists():
-            if args.dry_run or args.status:
-                parser.error(f"workspace is not a Git repository: {workspace}")
-            try:
-                workspace = task_workspaces.bootstrap(workspace, task)
-            except ValueError as error:
-                parser.error(str(error))
-            # A new task project is already private to this task. Avoid a
-            # second hidden worktree so users can find the generated files.
-            args.in_place = True
-            print(f"Created task project: {workspace}", flush=True)
-        if not args.in_place and not args.dry_run and not args.status:
-            isolated = task_workspaces.create(workspace, task)
-            workspace = Path(isolated["workspace"])
-            print(f"Task worktree: {workspace}\nBranch: {isolated['branch']}\nStarting from committed HEAD; the original checkout is unchanged.", flush=True)
-        run_dir = workspace / ".autocode" / "runs" / f"{dt.datetime.now().strftime('%Y%m%d-%H%M%S')}-{slug(task)}-{uuid.uuid4().hex[:8]}"
-        state_path = run_dir / "state.json"
-        state = {"version": 2, "target": "code", "task": task, "workspace": str(workspace), "created_at": now(),
-                 "iteration": 1, "status": "RUNNING", "sessions": {}, "history": [], "stages": [],
-                 "no_progress_batches": 0,
-                 "next_stage": "astra_plan", "acceptance_criteria": []}
-        isolated = task_workspaces.metadata(workspace)
-        if isolated:
-            state.update(project_workspace=isolated["project_workspace"], task_branch=isolated["branch"])
-        # The revision a bug fix is proven against (autocode_regression).
-        state["base_commit"] = (isolated or {}).get("base_commit") or regression.head(workspace)
-        if args.ui_run:
-            state["ui_run"] = str(args.ui_run.resolve())
-        if args.legacy_iteration_ceiling is None and args.max_iterations is not None:
-            args.legacy_iteration_ceiling = args.max_iterations
-
-    if state["workspace"] != str(workspace):
-        parser.error("workspace differs from checkpoint; use the original --workspace")
-    if not run_dir.is_relative_to(workspace / ".autocode" / "runs"):
-        parser.error("run-dir must belong to this project's .autocode/runs")
-    registry.configure_workspace_storage(workspace)
-    if args.request_milestone_checkpoints:
-        request = milestones.queue_activation(run_dir, args.max_milestone_seconds)
-        print(json.dumps({'queued': True, 'run_dir': str(run_dir), 'request': request,
-                          'effect': 'Pause at the next boundary; next launch applies checkpoints without starting a provider'}, indent=2))
-        return 0
-    if args.status or args.dry_run:
-        status_command.render(sys.modules[__name__], state, args, workspace, run_dir)
-        return 0
+    resolved = run_setup.resolve(sys.modules[__name__], args, parser)
+    if isinstance(resolved, int):
+        return resolved
+    workspace, run_dir, state_path, state = resolved
     saved_provider = dict(state.get("settings") or {})
     if state.get("settings") and "provider" not in saved_provider:
         saved_provider["provider"] = "opencode"
@@ -1518,107 +1450,7 @@ def _main_body(unit=None) -> int:
     support.assert_no_legacy_process(run_dir, workspace)
     task_workspaces.keep_out_of_git(workspace)
     with support.run_lock(run_dir):
-        support.assert_no_legacy_process(run_dir, workspace)
-        if args.run_dir:
-            # A competing user command may have finished between the first read
-            # and lock acquisition. Never overwrite its event with stale state.
-            state = read_json(state_path)
-            if state["workspace"] != str(workspace):
-                parser.error("workspace differs from the locked checkpoint")
-            recovery = state.get("recovery_context") or {}
-            archived = (state.get("stages") or [{}])[-1]
-            if (args.resume_paused and not state.get("active_stage")
-                    and state.get("pending_report_repair")
-                    and archived.get("abandoned") and archived.get("report_only")
-                    and recovery.get("attempt_id") == attempt_id(archived)):
-                state.setdefault("report_repair_archive", []).append({
-                    "reason": "Reconciled previously abandoned report repair",
-                    "repair": state.pop("pending_report_repair")})
-                write_json(state_path, state)
-        settings = configure(args, state)
-        if args.run_dir and args.autoresolver_managed_limits:
-            origins = settings.setdefault('budget_origins', {})
-            for kind in BUDGET_ARGUMENTS:
-                if origins.get(kind) == 'user_explicit':
-                    origins[kind] = 'resolver_delegated'
-        # A new checkpoint must exist before it is registered, so a failed registry
-        # update leaves the same run directory available for an explicit retry.
-        if not args.run_dir:
-            state["settings"] = settings = model_catalogue.choose(settings, opencode, workspace, interactive=args.chat)
-            if settings.get('planning_flow') == 'v2':
-                if state.get('next_stage') == workflows.STAGE:
-                    # Recognition still runs first; v2 only moves where the build pipeline starts.
-                    state['workflow']['then'] = planning.entry_stage(state)
-                else:
-                    state['next_stage'] = planning.entry_stage(state)
-            write_json(state_path, state)
-        try:
-            registry.register_run(workspace, run_dir, state)
-        except registry.RegistryError as error:
-            message = f"Registry registration failed for {run_dir}: {error}"
-            state.update(status="PAUSED_REGISTRY", phase="PAUSED_OR_BLOCKED", stop_reason=message, paused_at=now())
-            write_json(state_path, state)
-            raise support.Paused("PAUSED_REGISTRY", message) from error
-        if args.run_dir and args.autoresolver_managed_limits:
-            published = resolver_human.current(state)
-            if published and published['scope'] == 'operational_exhaustion':
-                proposal = state['resolver']['human_escalations'][published['request_id']]['identity']['proposal']
-                kind = proposal['origin'].get('budget', {}).get('kind')
-                pause_status = proposal['origin'].get('pause_status')
-                if kind and settings.get('budget_origins', {}).get(kind) == 'resolver_delegated':
-                    if resolver_human.supersede_operational(state,
-                            'User delegated this finite harness limit to bounded AutoResolver recovery'):
-                        state['_authorized_bound_change'] = {'pause_status': pause_status, 'at': now()}
-        if state.get("settings") and settings != state["settings"]:
-            published = state.get(resolver_human.PUBLIC) or {}
-            entry = state.get('resolver', {}).get('human_escalations', {}).get(published.get('request_id'), {})
-            paused_for = entry.get('identity', {}).get('proposal', {}).get('origin', {}).get('pause_status')
-            relevant = {'PAUSED_ITERATION_LIMIT': ('max_iterations', 'legacy_iteration_ceiling', 'unlimited_iterations'),
-                        'PAUSED_TIME_LIMIT': ('max_seconds',),
-                        'PAUSED_MILESTONE_TIME_LIMIT': ('max_milestone_seconds',),
-                        'PAUSED_USAGE_UNKNOWN': ('max_reported_tokens',)}
-            if (paused_for == 'PAUSED_BUDGET' and entry.get('identity', {}).get('proposal', {}).get('origin', {})
-                    .get('budget', {}).get('kind') == 'max_reported_tokens'):
-                relevant[paused_for] = ('max_reported_tokens',)
-            if any(flag in args._explicit_budget_flags for flag in relevant.get(paused_for, ())):
-                if resolver_human.supersede_operational(state, 'Operator explicitly changed the exhausted bound'):
-                    state['_authorized_bound_change'] = {'pause_status': paused_for, 'at': now()}
-            if args.autoresolver_managed_limits and entry.get('identity', {}).get('proposal', {}).get('origin', {}).get('budget', {}).get('kind'):
-                kind = entry['identity']['proposal']['origin']['budget']['kind']
-                if settings.get('budget_origins', {}).get(kind) == 'resolver_delegated':
-                    if resolver_human.supersede_operational(state, 'User delegated this finite harness limit to bounded AutoResolver recovery'):
-                        state['_authorized_bound_change'] = {'pause_status': paused_for, 'at': now()}
-            previous_settings = state["settings"]
-            enabling_joint = settings.get("joint_planning") and not previous_settings.get("joint_planning")
-            if enabling_joint:
-                backup = run_dir / f"state.pre-joint-planning-{uuid.uuid4().hex[:8]}.json"
-                write_json(backup, state)
-                state.setdefault("planning_migrations", []).append({"at": now(), "backup": str(backup),
-                    "goal_token": goals.token(state["goal_contract"]), "next_stage": state.get("next_stage"),
-                    "reason": "Explicitly enabled independent planning; existing work and sessions retained"})
-            state.setdefault("configuration_changes", []).append({"at":now(),"previous":state["settings"],"selected":settings,
-                "reason":"Explicit launch arguments at a saved stage boundary"})
-            state["settings"] = settings
-            if enabling_joint and settings.get("engine") == "codex":
-                state["goal_contract"].update(approval_status="draft", approval_event=None)
-                goals.invalidate(state, "Independent requirements and plan review requested before further execution")
-                state.update(status="RUNNING", phase="DISCOVERING", next_stage="requirements_gather",
-                             pending_questions=[])
-                state.pop("stop_reason", None)
-                state.pop("paused_at", None)
-            write_json(state_path, state)
-        state["settings"] = settings
-        if args.run_dir and settings.get('planning_flow') == 'v2' and planning_artifacts.reconcile_orphans(state, run_dir):
-            write_json(state_path, state)
-        state["intervention_capability"] = {"supported": True, "version": interventions.INBOX_VERSION}
-        if state.get("version",1) == 1:
-            backup = run_dir / "state.pre-v2.json"
-            if not backup.exists():
-                write_json(backup, state)
-            state = support.migrate_v1(state, run_dir, workspace, settings, SCHEMA_DIR)
-            if not state["stages"] and state["iteration"] == 0:
-                state["iteration"] = 1
-            write_json(state_path, state)
+        state = run_setup.load_locked(sys.modules[__name__], args, parser, state, state_path, run_dir, workspace)
         try:
             code = run_actions.handle(sys.modules[__name__], args, parser, state, state_path, run_dir, workspace)
             if code is not None:
