@@ -6,6 +6,9 @@ wrote a complete report with Bash, then returned a structured output without its
 """
 import importlib.util
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -36,6 +39,50 @@ class PromptTests(unittest.TestCase):
 
     def test_a_prompt_without_the_instruction_is_unchanged(self):
         self.assertEqual("Answer the question.", claude_stage.adapt("Answer the question."))
+
+
+FAKE_CLAUDE = """#!{python}
+import json, sys
+sys.stdin.read()
+report = {{"summary": "done"}}
+rows = [{{"type": "assistant", "message": {{"content": [{{"type": "tool_use", "id": "t1", "name": "StructuredOutput",
+                                                       "input": report}}]}}}},
+        {{"type": "user", "message": {{"content": [{{"type": "tool_result", "tool_use_id": "t1",
+                                                  "content": "Structured output provided successfully",
+                                                  "is_error": {rejected}}}]}}}},
+        {{"type": "result", "is_error": True, "result": "API Error: Server error mid-response",
+          "usage": {{"input_tokens": 5}}, "total_cost_usd": 0.5}}]
+for row in rows:
+    print(json.dumps(row))
+"""
+
+
+class StreamTests(unittest.TestCase):
+    """A report the CLI accepted survives an API error that ends the stream (live ladder-16, 2026-09-30)."""
+
+    def stage(self, rejected):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            claude = root / "claude"
+            claude.write_text(FAKE_CLAUDE.format(python=sys.executable, rejected=rejected))
+            claude.chmod(0o755)
+            (root / "schema.json").write_text("{}")
+            env = {**os.environ, "PATH": f"{root}{os.pathsep}{os.environ['PATH']}"}
+            done = subprocess.run([sys.executable, str(EXAMPLE / "claude_stage.py"), str(root), "workspace-write",
+                                   "claude-haiku", "", str(root / "schema.json"), str(root / "report.json")],
+                                  input="Build it.", capture_output=True, text=True, env=env, timeout=60)
+            events = [json.loads(line) for line in done.stdout.splitlines()]
+            report = json.loads((root / "report.json").read_text()) if (root / "report.json").exists() else None
+            return done.returncode, events[-1], report
+
+    def test_an_accepted_report_is_kept_when_the_api_fails_afterwards(self):
+        code, last, report = self.stage(rejected=False)
+        self.assertEqual((0, "turn.completed", {"summary": "done"}), (code, last["type"], report))
+
+    def test_a_report_the_cli_rejected_is_not_used(self):
+        code, last, report = self.stage(rejected=True)
+        self.assertEqual((1, "turn.failed", None), (code, last["type"], report))
+        self.assertIn("Server error mid-response", last["error"]["message"])
 
 
 class BatchTests(unittest.TestCase):

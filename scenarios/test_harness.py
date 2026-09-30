@@ -655,6 +655,17 @@ class FakeSchemaTests(unittest.TestCase):
                           "kind": "none", "nested": {"n": 0}}, report)
 
 
+class HybridScenarioTests(unittest.TestCase):
+    def test_a_hybrid_scenario_is_skipped_under_a_live_profile(self):
+        with tempfile.TemporaryDirectory(prefix="scenario-test-") as out:
+            args = argparse.Namespace(fake=False, profile="codex-only", fake_solution="reference", out=Path(out),
+                                      autocode=None, max_steps=None, timeout_minutes=10,
+                                      i_authorize_live_model_spend=True)
+            result = run.run_one(catalog.load("stuck-planner-citation"), args)
+        self.assertEqual(verdict.SKIPPED, result["verdict"])
+        self.assertIn("run it with --fake --i-authorize-live-model-spend", result["summary"])
+
+
 class FakeRunTests(unittest.TestCase):
     """End to end through AutoCode's real CLI, with the scripted model (about 30 s each)."""
 

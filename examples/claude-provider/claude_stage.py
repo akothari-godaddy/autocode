@@ -70,7 +70,10 @@ def run(workspace, sandbox, model, effort, schema, report, prompt):
     child.stdin.write(prompt)
     child.stdin.close()
 
-    text, last_emit, tools, result = {}, {}, {}, None
+    # A report the CLI accepted through its StructuredOutput tool. A live ladder-16 Builder (2026-09-30) submitted
+    # its report that way, then the API failed mid-response ("Server error mid-response"), the result carried no
+    # structured_output, and the finished stage was thrown away. AutoCode validates the report either way.
+    text, last_emit, tools, result, offered, accepted = {}, {}, {}, None, {}, None
     for line in child.stdout:
         try:
             row = json.loads(line)
@@ -95,6 +98,8 @@ def run(workspace, sandbox, model, effort, schema, report, prompt):
             for block in (row.get("message") or {}).get("content") or []:
                 if block.get("type") == "tool_use":
                     name, args = block.get("name"), block.get("input") or {}
+                    if name == "StructuredOutput" and isinstance(args, dict):
+                        offered[block["id"]] = args
                     shown = args.get("command") if name == "Bash" and isinstance(args.get("command"), str) \
                         else name + " " + json.dumps(args)[:400]
                     tools[block["id"]] = shown
@@ -104,6 +109,8 @@ def run(workspace, sandbox, model, effort, schema, report, prompt):
             for block in (row.get("message") or {}).get("content") or []:
                 if isinstance(block, dict) and block.get("type") == "tool_result":
                     body = block.get("content")
+                    if block.get("tool_use_id") in offered and not block.get("is_error"):
+                        accepted = offered[block["tool_use_id"]]
                     if isinstance(body, list):
                         body = "".join(part.get("text", "") for part in body if isinstance(part, dict))
                     emit({"type": "item.completed", "item": {
@@ -121,6 +128,8 @@ def run(workspace, sandbox, model, effort, schema, report, prompt):
     totals = {"input_tokens": fresh + cached, "cached_input_tokens": cached,
               "output_tokens": usage.get("output_tokens") or 0, "reasoning_output_tokens": 0}
     report_value = (result or {}).get("structured_output")
+    if not (result and not result.get("is_error") and isinstance(report_value, dict)) and accepted is not None:
+        report_value, result = accepted, {**(result or {}), "is_error": False}
     if result and not result.get("is_error") and isinstance(report_value, dict):
         Path(report).write_text(json.dumps(report_value, indent=2) + "\n")
         emit({"type": "turn.completed", "usage": totals, "cost_usd": result.get("total_cost_usd"), "model": model})
