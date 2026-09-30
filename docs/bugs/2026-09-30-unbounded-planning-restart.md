@@ -24,7 +24,9 @@ same loop needs a deferral that repeats: the source revision moving between the
 final review and approval, or a final token that never matches.
 
 The fix counts restarts in `resolver.deferred_approval_restarts`, keyed by task, deferral reason and
-the number of saved user events, so new user input renews the allowance. It pauses with a status
+the number of user-authored events (actor `user` or `user_cli`), so new user input renews the
+allowance; runner bookkeeping that also lands in `user_events` (recovery receipts, review reroutes)
+does not. It pauses with a status
 of its own, not `PAUSED_PLANNING_BUDGET`, because nothing about the review allowance is wrong, and it
 does not leave the run at `RESOLVER_PENDING`, whose message ("AutoResolver is evaluating an internal
 decision") would not be true here. The pause prepares a fresh planning cycle first, so

@@ -64,6 +64,15 @@ class DeferredApprovalRestarts(unittest.TestCase):
         ask_for_approval(self.state, self.run_dir)
         self.assertEqual(("RUNNING", "astra_challenge"), (self.state["status"], self.state["next_stage"]))
 
+    def test_runner_bookkeeping_does_not_renew_the_allowance(self):
+        # Recovery receipts, reroutes and other runner events land in user_events too; the
+        # pause message says "since your last input", so only user-authored events may renew.
+        for _ in range(2):
+            ask_for_approval(self.state, self.run_dir)
+        self.state["user_events"].append({"kind": "automatic_timeout_recovery", "actor": "runner"})
+        ask_for_approval(self.state, self.run_dir)
+        self.assertEqual("PAUSED_APPROVAL_DEFERRED", self.state["status"])
+
 
 if __name__ == "__main__":
     unittest.main()

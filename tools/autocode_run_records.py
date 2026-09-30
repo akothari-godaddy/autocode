@@ -124,8 +124,13 @@ def normalize_human_boundary(state, run_dir):
                 # recurring would spend review calls without limit (docs/bugs/2026-09-30-unbounded-
                 # planning-restart.md). Restarts are counted per reason since the user's last input.
                 reason = state['resolver']['human_disposition']['reason']
+                # Only what the user wrote renews the allowance: runner bookkeeping (recovery
+                # receipts, review reroutes) also lands in user_events and must not reset
+                # this bound.
+                inputs = sum(1 for event in state.get('user_events', [])
+                             if isinstance(event, dict) and event.get('actor') in ('user', 'user_cli'))
                 identity = support.digest({'task_id': state.get('task_id'), 'reason': reason,
-                                           'user_events': len(state.get('user_events', []))})
+                                           'user_inputs': inputs})
                 restarts = state['resolver'].setdefault('deferred_approval_restarts', {})
                 planning.start(state)
                 if restarts.get(identity, 0) >= MAX_DEFERRED_APPROVAL_RESTARTS:
