@@ -293,6 +293,24 @@ class InvariantTests(unittest.TestCase):
         self.assertIn(state["investigation"]["invariant"], request.prompt)
 
 
+class DiagnosisNoteTests(unittest.TestCase):
+    """A live bugfix-cent-drift run (2026-09-30): the request said to write the root cause to the note, and a
+    planned Builder overwrote the note the runner had already written, so the run paused for a person."""
+
+    def builder_prompt(self, state):
+        from units import common
+        return common.execution_request(state, "terra", Path(state["workspace"]) / "state.json",
+                                        Path(bug_job.__file__).resolve().parent / "autocode-schemas").prompt
+
+    def test_a_builder_that_does_not_own_the_note_is_told_it_is_written(self):
+        state = approved_small_fix()
+        self.assertNotIn("DIAGNOSIS NOTE", self.builder_prompt(state))  # the short path's task owns the note
+        state["current_task"]["affected_paths"] = ["epp/client.py", "tests/test_client.py"]  # a planned task
+        prompt = self.builder_prompt(state)
+        self.assertIn("DIAGNOSIS NOTE: docs/bugs/duplicate-renew.json is already written", prompt)
+        self.assertEqual("", bug_job.builder_note({**state, "investigation": diagnosis("not_reproduced")}))
+
+
 class FullPathTests(unittest.TestCase):
     """With the short path off, a small reproduced bug is planned and put to the user like any other."""
 

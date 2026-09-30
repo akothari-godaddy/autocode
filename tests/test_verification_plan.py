@@ -19,7 +19,13 @@ class CommandsTests(unittest.TestCase):
             ("Inspect README.md and verify the exact text `python3 -m temperature VALUE UNIT` "
              "without invoking the metavariable template as a command.", []),
             ("Run python3 -m unittest tests.test_greet", ["python3 -m unittest tests.test_greet"]),
-            ("test: test_c1_hello", []), ("Execute CLI cases", [])):
+            ("test: test_c1_hello", []), ("Execute CLI cases", []),
+            # Prose after a plain command (live bugfix-trivial, 2026-09-30): replayed as a command, it never passes.
+            ("python3 -m unittest -v passes; Validator reads the diff", []),
+            ("Run python3 -m unittest -v via capture and read the diff", []),
+            ("python3 -m unittest discover -s tests -t .", ["python3 -m unittest discover -s tests -t ."]),
+            ("python3 -c 'assert f(1, 2) == 3'", ["python3 -c 'assert f(1, 2) == 3'"]),
+            ("pytest --verify --output=out.xml tests", ["pytest --verify --output=out.xml tests"])):
             with self.subTest(text=text):
                 self.assertEqual(expected, plan.commands(text))
 
