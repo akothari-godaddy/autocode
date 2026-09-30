@@ -22,6 +22,27 @@ from harness import baseline, catalog, compare, oracle, processes, profiles, rou
 from harness.driver import Driver, DriveError, leaves_for_person, metrics, model_routes, split_by_turn, turn_state  # noqa: E402
 
 
+class OracleCommandTests(unittest.TestCase):
+    def test_non_executable_deliveries_are_failed_checks_not_oracle_errors(self):
+        with tempfile.TemporaryDirectory() as root:
+            project = Path(root)
+            for mode, contents in ((0o644, b"!<arch>\n"), (0o755, b"not an executable\n")):
+                with self.subTest(mode=oct(mode)):
+                    binary = project / "policy.bin"
+                    binary.write_bytes(contents)
+                    binary.chmod(mode)
+                    result = oracle.run(["./policy.bin"], project)
+                    self.assertEqual(126, result.returncode)
+                    self.assertEqual("", result.stdout)
+                    self.assertIn("policy.bin", result.stderr)
+
+    def test_missing_executable_remains_exit_127(self):
+        with tempfile.TemporaryDirectory() as root:
+            result = oracle.run(["./missing"], Path(root))
+            self.assertEqual(127, result.returncode)
+            self.assertIn("missing", result.stderr)
+
+
 class EvidenceDirectoryTests(unittest.TestCase):
     def test_simultaneous_runs_with_the_same_timestamp_have_separate_evidence(self):
         with tempfile.TemporaryDirectory() as root, patch.object(run, "datetime") as clock:

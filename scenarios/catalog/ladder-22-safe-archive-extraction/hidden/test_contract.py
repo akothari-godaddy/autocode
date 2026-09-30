@@ -58,3 +58,27 @@ class ArchiveContract(unittest.TestCase):
                 self.assertFalse(self.target.exists())
                 self.assertEqual((self.root/'sentinel').read_text(),'keep')
                 self.assertEqual({p.name for p in self.root.iterdir()},{'sentinel','input.zip'})
+
+    def test_corrupt_directory_payload_is_rejected_before_publication(self):
+        import struct
+        for compression in (zipfile.ZIP_STORED, zipfile.ZIP_DEFLATED):
+            for existing_destination in (False, True):
+                with self.subTest(compression=compression, existing_destination=existing_destination):
+                    if self.target.exists():
+                        self.target.rmdir()
+                    if existing_destination:
+                        self.target.mkdir()
+                    with zipfile.ZipFile(self.archive, "w", compression=compression) as archive:
+                        archive.writestr("folder/", b"x" * 4096)
+                    raw = bytearray(self.archive.read_bytes())
+                    name_length, extra_length = struct.unpack_from("<HH", raw, 26)
+                    raw[30 + name_length + extra_length] = 7
+                    self.archive.write_bytes(raw)
+                    with self.assertRaises(ValueError):
+                        extract(self.archive, self.target)
+                    self.assertEqual(existing_destination, self.target.exists())
+                    if existing_destination:
+                        self.assertEqual([], list(self.target.iterdir()))
+                    self.assertEqual("keep", (self.root / "sentinel").read_text())
+                    expected = {"sentinel", "input.zip"} | ({"output"} if existing_destination else set())
+                    self.assertEqual(expected, {p.name for p in self.root.iterdir()})

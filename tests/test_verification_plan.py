@@ -29,6 +29,16 @@ class CommandsTests(unittest.TestCase):
             with self.subTest(text=text):
                 self.assertEqual(expected, plan.commands(text))
 
+    def test_live_unquoted_verification_prose_stays_with_the_validator(self):
+        for method in (
+            "Run python3 -m unittest -v after the correction and require a successful exit with the complete suite passing.",
+            "Run python3 -m unittest -v and confirm it exits successfully.",
+        ):
+            with self.subTest(method=method):
+                self.assertEqual([], plan.commands(method))
+        self.assertEqual(["python3 -m unittest -v"], plan.commands(
+            "Run `python3 -m unittest -v` and confirm it exits successfully."))
+
     def test_later_milestone_commands_are_not_forced_on_the_current_task(self):
         state = {"goal_contract": {"body": {"acceptance_criteria": [
             {"id": "C1", "verification_method": "go test ./first"},

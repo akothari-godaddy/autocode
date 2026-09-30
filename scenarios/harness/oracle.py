@@ -27,7 +27,7 @@ class Check:
 
 
 def run(cmd: list[str], cwd: Path, *, timeout: int = 120, input: str | None = None) -> subprocess.CompletedProcess:
-    """Run a command without raising: timeouts exit -1, a missing binary exits 127."""
+    """Capture command failures: timeout -1, missing binary 127, cannot execute 126."""
     try:
         return subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout, input=input)
     except subprocess.TimeoutExpired as error:
@@ -35,6 +35,8 @@ def run(cmd: list[str], cwd: Path, *, timeout: int = 120, input: str | None = No
         return subprocess.CompletedProcess(cmd, -1, out, f"TIMEOUT after {timeout}s")
     except FileNotFoundError as error:
         return subprocess.CompletedProcess(cmd, 127, "", str(error))
+    except OSError as error:
+        return subprocess.CompletedProcess(cmd, 126, "", str(error))
 
 
 def tail(proc: subprocess.CompletedProcess, limit: int = 600) -> str:
