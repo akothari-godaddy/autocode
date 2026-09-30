@@ -424,8 +424,10 @@ class AssignmentScenarios(unittest.TestCase):
         self.approve(milestones, criteria)
         self.state["settings"]["orchestration"]["enabled"] = False
         self.assertEqual({}, s.snapshot(self.root)["files"])
-        self.assertRegex(self.serial_attempt("new_file_escape"), "outside the assigned paths")
-        (self.root / "unrelated.txt").unlink()
+        # The runner removes the out-of-scope file the attempt created, so the retry is not refused for it.
+        self.assertRegex(self.serial_attempt("new_file_escape"),
+                         "outside the assigned paths; the runner removed the files they created.*unrelated.txt")
+        self.assertFalse((self.root / "unrelated.txt").exists())
         self.assertIsNone(self.serial_attempt("no_change"))
         self.assertEqual("sol", self.state["next_stage"])
         self.assertEqual(["src/new.py"], self.state["changed_files"])

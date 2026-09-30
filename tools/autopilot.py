@@ -618,10 +618,8 @@ def assert_within_assignment(state, record):
     if outside is None:
         raise support.Paused("PAUSED_ASSIGNMENT_SCOPE",
                              "The assignment's starting snapshot is missing; edits retained for inspection")
-    if outside:
-        raise support.Paused("PAUSED_ASSIGNMENT_SCOPE",
-                             "Builder attempts for this task changed files outside the assigned paths; "
-                             "edits retained for inspection: " + ", ".join(outside))
+    if outside:  # files the assignment created are removed, so a retry is not refused for them
+        raise support.Paused("PAUSED_ASSIGNMENT_SCOPE", assignment.undo_created(outside, state.get("stages", []), record, state.get("workspace")))
 
 
 def retained_validated_candidate(state, value, record, workspace):

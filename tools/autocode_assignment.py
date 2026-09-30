@@ -15,6 +15,11 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+try:
+    from . import autocode_stray_writes as stray
+except ImportError:
+    import autocode_stray_writes as stray
+
 BUILDER = "terra"
 
 
@@ -69,6 +74,34 @@ def retained_changes(stages, record):
         # With no earlier attempt, this attempt's runner-measured delta is the whole delta.
         return sorted(record.get("changed_files") or []) if _same_attempt(first, record) else None
     return sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+
+
+def undo_created(paths, stages, record, workspace) -> str:
+    """Remove the out-of-scope files this assignment created, then return the refusal that names what happened.
+
+    A rejected attempt's out-of-scope edits stay in the tree, and the gate measures the whole assignment, so one
+    file an attempt should not have written refuses every retry. Two live greenfield-todo-cli runs (Claude models,
+    2026-09-30) stopped that way: the milestone-1 Builder also wrote README.md, which the plan gave to milestone 2.
+    A file absent from the starting snapshot and unchanged since this attempt is deleted, as autocode_stray_writes
+    does for read-only stages. An edit or deletion of a file that existed, or a file changed since, is kept for a
+    person to inspect."""
+    before = _snapshot(stages, starting_attempt(stages, record), "before_ref")
+    after = _snapshot(stages, record, "after_ref")
+    removed, kept = [], []
+    for name in paths:
+        target = Path(workspace) / name if workspace else None
+        if (target is not None and before is not None and after is not None and name not in before
+                and name in after and target.is_file() and stray.current(target) == after[name]):
+            target.unlink()
+            removed.append(name)
+        else:
+            kept.append(name)
+    message = "Builder attempts for this task changed files outside the assigned paths"
+    if removed:
+        message += "; the runner removed the files they created, so a retry starts without them: " + ", ".join(removed)
+    if kept:
+        message += "; edits retained for inspection: " + ", ".join(kept)
+    return message
 
 
 BUILD_OUTPUT_NOTE = """
