@@ -355,7 +355,7 @@ def apply(state: dict, value: dict, record: dict, workspace, run_probe=None) -> 
     """``run_probe(command, files)`` runs the probe in a scratch tree with ``files`` copied in (the unit
     passes autocode_verify.scratch_run); without it a probed diagnosis is rejected rather than trusted."""
     check(value, record.get("changed_files"))
-    run_dir = Path(record["output"]).parent if record.get("output") else None
+    run_dir = state.get("run_dir") or (Path(record["output"]).parent if record.get("output") else None)
     cited = cited_files(value, workspace, run_dir)
     probe = value.get("probe", "").strip()
     runner = (lambda command: run_probe(command, cited)) if run_probe else \

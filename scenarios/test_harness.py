@@ -7,18 +7,19 @@ PASS and a plausible wrong one is judged FALSE_COMPLETE.
 import argparse
 import ast
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import run  # noqa: E402
-from harness import baseline, catalog, compare, oracle, routing, stats, verdict  # noqa: E402
-from harness.driver import leaves_for_person, metrics, split_by_turn, turn_state  # noqa: E402
+from harness import baseline, catalog, compare, oracle, processes, profiles, routing, stats, verdict  # noqa: E402
+from harness.driver import Driver, DriveError, leaves_for_person, metrics, model_routes, split_by_turn, turn_state  # noqa: E402
 
 
 class EvidenceDirectoryTests(unittest.TestCase):
@@ -36,6 +37,307 @@ class EvidenceDirectoryTests(unittest.TestCase):
                 (path / "result.json").write_text(str(index))
             for index, (_, path) in enumerate(rows):
                 self.assertEqual(str(index), (path / "result.json").read_text())
+
+
+class DesignOrderingQuestionTests(unittest.TestCase):
+    def test_ordering_decision_in_question_or_options_and_unrelated_questions(self):
+        from harness.project import materialize
+        scenario = catalog.load("design-review-planted")
+        original = json.loads((scenario.reference / "review/design-review.json").read_text())
+        cases = [
+            (True, {"question": "What must happen to later events for a domain when one event cannot be processed?",
+                    "options": ["Quarantine the domain until replay completes in order.",
+                                "Allow later events and abandon strict sequence processing."]}),
+            (True, {"question": "Which partition key should the topic use?", "options": ["domain", "registry"]}),
+            (False, {"question": "Must every consumer be idempotent or only billing?",
+                     "options": ["billing only", "all consumers"]}),
+            (False, {"question": "", "options": ["preserve sequence"]}),
+            (False, {"id": "partition-ordering", "question": "What should happen?", "options": ["ask later"]}),
+        ]
+        with tempfile.TemporaryDirectory() as root:
+            project = materialize(scenario.seed, Path(root) / "project", scenario.reference)
+            for expected, question in cases:
+                with self.subTest(question=question):
+                    report = {**original, "questions": [question]}
+                    (project / "review/design-review.json").write_text(json.dumps(report))
+                    result = verdict.evaluate(scenario, project)
+                    self.assertEqual("", result.error)
+                    ordering = [check for check in result.checks if check.name == "asks_about_ordering_requirement"]
+                    self.assertEqual(1, len(ordering))
+                    self.assertEqual(expected, ordering[0].ok)
+                    self.assertTrue(all(check.ok for check in result.checks
+                                        if check.name != "asks_about_ordering_requirement"))
+
+
+class ProcessDependencyTests(unittest.TestCase):
+    def test_catalog_list_imports_without_psutil(self):
+        script = """
+import builtins, runpy, sys
+original_import = builtins.__import__
+def without_psutil(name, *args, **kwargs):
+    if name == "psutil":
+        raise ModuleNotFoundError("No module named 'psutil'", name="psutil")
+    return original_import(name, *args, **kwargs)
+builtins.__import__ = without_psutil
+sys.argv = [sys.argv[1], "list"]
+runpy.run_path(sys.argv[0], run_name="__main__")
+"""
+        result = subprocess.run([sys.executable, "-c", script, str(Path(run.__file__).resolve())],
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("ladder-17-transaction-ledger", result.stdout)
+
+    def test_custom_cli_without_psutil_fails_before_spawning(self):
+        driver = Driver(Path.cwd(), Path.cwd(), [], {}, autocode=["custom-autocode"],
+                        max_steps=1, timeout_seconds=60)
+        with patch.object(processes, "psutil", None), patch.object(processes.subprocess, "Popen") as launch:
+            with self.assertRaisesRegex(DriveError, "supervision requires psutil.*including with --autocode"):
+                driver.call("start", task="Build")
+        launch.assert_not_called()
+        self.assertEqual([], driver.steps)
+
+    def test_default_cli_keeps_friendly_missing_dependency_diagnostic(self):
+        args = argparse.Namespace(fake=True, profile=None, autocode=None)
+        with patch.object(run.importlib.util, "find_spec", return_value=None):
+            with self.assertRaisesRegex(SystemExit, "supervision needs psutil.*virtualenv"):
+                run.require_mode(args)
+
+
+class DriverTimeoutTests(unittest.TestCase):
+    def setUp(self):
+        self.events = []
+        self.parent = self.process(100)
+        self.child = Mock(pid=100, returncode=0)
+        self.child.communicate.return_value = ("output", "error")
+        for name, value in (("Popen", self.child),):
+            patcher = patch.object(processes.subprocess, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        patcher = patch.object(processes.psutil, "Process", return_value=self.parent)
+        self.lookup = patcher.start()
+        self.addCleanup(patcher.stop)
+        patcher = patch.object(processes.psutil, "wait_procs", return_value=([], []))
+        self.wait = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def process(self, pid, *, children=(), stubborn=False):
+        process = Mock(pid=pid)
+        process.is_running.return_value = True
+        process.status.return_value = processes.psutil.STATUS_RUNNING
+        process.children.side_effect = lambda **kwargs: (self.events.append((pid, "capture")) or list(children))
+        def signal(method):
+            self.events.append((pid, method))
+            if not stubborn:
+                process.is_running.return_value = False
+        process.terminate.side_effect = lambda: signal("terminate")
+        process.kill.side_effect = lambda: signal("kill")
+        return process
+
+    def timed_out(self, graceful=("partial", "")):
+        self.child.communicate.side_effect = [subprocess.TimeoutExpired(["cli"], 10),
+                                               graceful, ("partial", "")]
+
+    def run_cli(self):
+        return processes.run_cli(["cli"], env={"SAFE": "value"}, cwd=Path.cwd(), timeout=10)
+
+    def test_normal_exit_preserves_completed_process_and_does_not_signal(self):
+        self.child.returncode = 2
+        result = self.run_cli()
+        self.assertEqual((["cli"], 2, "output", "error"),
+                         (result.args, result.returncode, result.stdout, result.stderr))
+        self.child.communicate.assert_called_once_with(timeout=10)
+        self.parent.terminate.assert_not_called()
+        self.parent.kill.assert_not_called()
+        self.wait.assert_not_called()
+
+    def test_timeout_captures_detached_provider_before_parent_exit_and_kills_only_owned(self):
+        provider = self.process(101)
+        provider.session_id = 101  # Separate provider session, still a child of the CLI.
+        unrelated = self.process(999)
+        self.parent.children.side_effect = lambda **kwargs: (self.events.append((100, "capture")) or [provider])
+        self.timed_out()
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        self.assertEqual([], caught.exception.cleanup_errors)
+        self.assertLess(self.events.index((100, "capture")), self.events.index((100, "terminate")))
+        provider.kill.assert_called_once_with()
+        self.parent.kill.assert_not_called()  # Gracefully exited, so no second signal.
+        unrelated.terminate.assert_not_called()
+        unrelated.kill.assert_not_called()
+        self.lookup.assert_called_once_with(100)
+        self.assertEqual([self.parent, provider], self.wait.call_args.args[0])
+
+    def test_cleanup_captures_late_grandchildren_and_skips_reused_identity(self):
+        late = self.process(103)
+        provider = self.process(101, children=[late])
+        reused = self.process(102)
+        self.parent.children.side_effect = lambda **kwargs: [provider, reused]
+        def graceful(*args, **kwargs):
+            reused.is_running.return_value = False  # Captured PID now belongs to a different process.
+            return "partial", ""
+        def communicate(*, timeout):
+            if timeout == 10:
+                raise subprocess.TimeoutExpired(["cli"], 10)
+            if timeout == 5:
+                return graceful()
+            return "", ""
+        self.child.communicate.side_effect = communicate
+        with self.assertRaises(processes.CallTimeout):
+            self.run_cli()
+        late.kill.assert_called_once_with()
+        provider.kill.assert_called_once_with()
+        reused.kill.assert_not_called()
+
+    def test_cleanup_failures_are_retained_in_timeout(self):
+        self.parent.children.side_effect = processes.psutil.AccessDenied(100)
+        self.timed_out()
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        self.assertTrue(any("cannot capture descendants" in item for item in caught.exception.cleanup_errors))
+        self.parent.terminate.assert_called_once_with()
+
+    def test_missing_identity_stops_direct_child_and_reports_incomplete_ownership(self):
+        self.lookup.side_effect = processes.psutil.AccessDenied(100)
+        self.timed_out()
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        self.assertTrue(any("cannot capture CLI PID 100 identity" in item for item in caught.exception.cleanup_errors))
+        self.child.terminate.assert_called_once_with()
+        self.child.kill.assert_called_once_with()
+
+    def test_interruption_stops_owned_workers_and_preserves_interrupt(self):
+        provider = self.process(101)
+        self.parent.children.side_effect = lambda **kwargs: [provider]
+        self.child.communicate.side_effect = [KeyboardInterrupt(), ("", ""), ("", "")]
+        with self.assertRaises(KeyboardInterrupt):
+            self.run_cli()
+        provider.kill.assert_called_once_with()
+
+    def test_direct_child_exit_race_does_not_prevent_cleanup(self):
+        self.lookup.side_effect = processes.psutil.NoSuchProcess(100)
+        self.child.terminate.side_effect = ProcessLookupError()
+        self.child.kill.side_effect = ProcessLookupError()
+        self.timed_out()
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        self.assertEqual(1, len(caught.exception.cleanup_errors))
+        self.assertIn("cannot capture CLI PID 100 identity", caught.exception.cleanup_errors[0])
+
+    def test_repeated_decode_error_still_kills_captured_workers_and_preserves_error(self):
+        provider = self.process(101)
+        self.parent.children.side_effect = lambda **kwargs: [provider]
+        error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid byte")
+        self.child.communicate.side_effect = error
+        with self.assertRaises(UnicodeDecodeError) as caught:
+            self.run_cli()
+        self.assertIs(error, caught.exception)
+        provider.kill.assert_called_once_with()
+        self.assertIn("UnicodeDecodeError", " ".join(caught.exception.__notes__))
+        self.child.stdout.close.assert_called_once_with()
+
+    def test_second_interrupt_during_cleanup_does_not_skip_owned_workers(self):
+        provider = self.process(101)
+        self.parent.children.side_effect = lambda **kwargs: [provider]
+        self.child.communicate.side_effect = [subprocess.TimeoutExpired(["cli"], 10), KeyboardInterrupt(), ("", "")]
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        provider.kill.assert_called_once_with()
+        self.assertTrue(any("KeyboardInterrupt" in item for item in caught.exception.cleanup_errors))
+
+    def test_signal_denial_is_not_reported_as_successful_cleanup(self):
+        provider = self.process(101)
+        provider.kill.side_effect = processes.psutil.AccessDenied(101)
+        self.parent.children.side_effect = lambda **kwargs: [provider]
+        self.timed_out()
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        self.assertTrue(any("cannot kill owned PID 101" in item for item in caught.exception.cleanup_errors))
+
+    def test_survivors_and_unclosed_pipes_are_reported(self):
+        provider = self.process(101, stubborn=True)
+        self.parent.children.side_effect = lambda **kwargs: [provider]
+        self.child.communicate.side_effect = subprocess.TimeoutExpired(["cli"], 10)
+        self.wait.return_value = ([], [provider])
+        with self.assertRaises(processes.CallTimeout) as caught:
+            self.run_cli()
+        self.assertTrue(any("PID 101 remains alive" in item for item in caught.exception.cleanup_errors))
+        self.assertTrue(any("output pipes remain open" in item for item in caught.exception.cleanup_errors))
+        self.child.stdout.close.assert_called_once_with()
+        self.child.stderr.close.assert_called_once_with()
+
+    def test_driver_does_not_hide_cleanup_failure(self):
+        driver = Driver(Path.cwd(), Path.cwd(), [], {}, autocode=["cli"], max_steps=1, timeout_seconds=60)
+        with patch("harness.driver.run_cli", side_effect=processes.CallTimeout(["cli"], 10, ["owned PID 101 remains alive"])):
+            with self.assertRaisesRegex(DriveError, "cleanup incomplete: owned PID 101 remains alive"):
+                driver.call("start", task="Build")
+        self.assertEqual([], driver.steps)
+
+
+class DriverAnswerTests(unittest.TestCase):
+    def setUp(self):
+        self.driver = Driver(Path.cwd(), Path.cwd(), [], {}, autocode=[], max_steps=1, timeout_seconds=60)
+        call_patch = patch.object(self.driver, "call")
+        self.call = call_patch.start()
+        self.addCleanup(call_patch.stop)
+
+    def test_explicit_no_default_uses_the_offered_rounding_rule(self):
+        selected = "Round to nearest with ties to even, producing `-273.2 C`."
+        question = {"id": "Q1", "question": "Which one-decimal rounding rule?",
+                    "proposed_default": "No default; this is a requested-output decision that requires user selection.",
+                    "options": [selected,
+                                "Round to nearest with ties away from zero, producing `-273.2 C`.",
+                                "Specify another rounding rule and the required literal output."]}
+        self.driver.serve({"kind": "answer", "questions": [question], "resolver_token": "token"})
+        self.call.assert_called_once_with("answer", "--answer", f"Q1={selected}",
+                                          "--resolver-token", "token", action=True)
+        self.assertEqual([selected], [answer["answer"] for answer in self.driver.answers])
+
+    def test_substantive_default_is_preserved_even_when_it_is_not_an_option(self):
+        for default in ("Keep the existing behavior.",
+                        "No default value should be persisted; reject absent keys."):
+            with self.subTest(default=default):
+                self.call.reset_mock()
+                self.driver.serve({"kind": "answer", "questions": [
+                    {"id": "Q1", "proposed_default": default, "options": ["Use another behavior."]}]})
+                self.call.assert_called_once_with("answer", "--answer", f"Q1={default}", action=True)
+
+    def test_placeholder_options_are_skipped_for_a_concrete_choice(self):
+        for default in ("No default", " NO DEFAULT: user selection required.",
+                        "No proposed default is available."):
+            with self.subTest(default=default):
+                self.call.reset_mock()
+                self.driver.serve({"kind": "answer", "questions": [
+                    {"id": "Q1", "proposed_default": default,
+                     "options": ["", "No default; ask the user.", "Other (please specify)",
+                                 "Specify another rounding rule.", "Use ties to even."]}]})
+                self.call.assert_called_once_with("answer", "--answer", "Q1=Use ties to even.", action=True)
+
+    def test_no_concrete_choice_refuses_the_batch_without_recording_unsent_answers(self):
+        for options in ([], ["Other", "Specify another result.", "Ask the user.", "No default."]):
+            with self.subTest(options=options):
+                need = {"kind": "answer", "resolver_token": "token", "questions": [
+                    {"id": "Q1", "proposed_default": "Keep current behavior."},
+                    {"id": "Q2", "proposed_default": "No default; user selection required.",
+                     "options": options}]}
+                with self.assertRaisesRegex(DriveError, "Q2.*no concrete option"):
+                    self.driver.serve(need)
+                self.call.assert_not_called()
+                self.assertEqual([], self.driver.answers)
+
+    def test_multiple_answers_are_submitted_with_one_resolver_token(self):
+        self.driver.serve({"kind": "answer", "resolver_token": "shared", "questions": [
+            {"id": "Q1", "proposed_default": "Preserve records."},
+            {"id": "Q2", "proposed_default": "No default.", "options": ["Use ties to even."]}]})
+        self.call.assert_called_once_with("answer", "--answer", "Q1=Preserve records.",
+                                          "--answer", "Q2=Use ties to even.",
+                                          "--resolver-token", "shared", action=True)
+        self.assertEqual(["Q1", "Q2"], [answer["id"] for answer in self.driver.answers])
+
+    def test_existing_missing_default_fallbacks_remain_unchanged(self):
+        self.driver.serve({"kind": "answer", "questions": [
+            {"id": "Q1", "options": ["Keep data.", "Remove data."]}, {"id": "Q2"}]})
+        self.call.assert_called_once_with("answer", "--answer", "Q1=Keep data.",
+                                          "--answer", "Q2=yes", action=True)
 
 
 class CatalogTests(unittest.TestCase):
@@ -99,6 +401,13 @@ class JudgeTests(unittest.TestCase):
         self.assertEqual(verdict.FALSE_COMPLETE, verdict.judge("TASK_COMPLETE", self.passing, "stop")[0])
         self.assertEqual(verdict.PASS, verdict.judge("WAITING_FOR_USER", self.passing, "any")[0])
         self.assertEqual(verdict.PASS, verdict.judge("TASK_COMPLETE", self.passing, "any")[0])
+
+    def test_resolver_waiting_for_manual_resume_is_an_honest_blocker(self):
+        for result in (self.passing, self.failing):
+            with self.subTest(passed=result.passed):
+                self.assertEqual(verdict.HONEST_BLOCKER, verdict.judge("RESOLVER_PENDING", result)[0])
+        self.assertEqual(verdict.ERROR, verdict.judge("RESOLVER_PENDING", verdict.OracleResult(error="boom"))[0])
+        self.assertEqual(verdict.ERROR, verdict.judge("RESOLVER_PENDING_UNKNOWN", self.passing)[0])
 
     def test_an_oracle_with_no_checks_does_not_pass(self):
         self.assertFalse(verdict.OracleResult([]).passed)
@@ -266,6 +575,40 @@ class StatsTests(unittest.TestCase):
         row, = stats.summarize([old, skipped])
         self.assertEqual((1, 3, None), (row["runs"], row["median_model_stages"], row["median_wall_minutes"]))
         self.assertIn("s", stats.format_table([row]))
+
+
+class ModelProfileTests(unittest.TestCase):
+    def test_route_audit_uses_launch_history_and_keeps_unknowns(self):
+        state = {"settings": {"roles": {"terra": {"model": "replacement"}}},
+                 "stages": [{"stage": "terra", "engine": "opencode", "model": "stale",
+                             "command": ["opencode", "run", "--model", "openai/original"]},
+                            {"stage": "orchestrator", "runner_owned": True},
+                            {"stage": "sol", "engine": "opencode"}],
+                 "active_stage": {"stage": "astra_review", "engine": "opencode",
+                                  "command": ["opencode", "run", "--model=openai/checker"]}}
+        self.assertEqual(["openai/original", None, "openai/checker"],
+                         [row["model"] for row in model_routes(state)])
+
+    def test_python_module_switch_is_not_a_model(self):
+        commands = [["python3", "-m", "provider_cli", "--model", "openai/builder"],
+                    ["python3", "-m", "provider_cli"],
+                    ["/usr/local/bin/opencode", "run", "-m", "openai/checker"]]
+        state = {"stages": [{"stage": "terra", "command": command} for command in commands]}
+        self.assertEqual(["openai/builder", None, "openai/checker"],
+                         [row["model"] for row in model_routes(state)])
+
+    def test_codex_only_covers_recovery_routes_and_pins_checkers(self):
+        profile = profiles.resolve("codex-only")
+        flags = profiles.flags(profile)
+        self.assertEqual("opencode", flags[flags.index("--provider") + 1])
+        for flag in (*profiles.MODEL_FLAGS.values(), "--investigator-model", "--resolver-model"):
+            self.assertTrue(flags[flags.index(flag) + 1].startswith("openai/"), flag)
+        pins = {flags[i + 1] for i, flag in enumerate(flags) if flag == "--pin-model-role"}
+        self.assertEqual({"astra", "terra", "sol", "completion"}, pins)
+        models = profile["models"]
+        for producer, checker in (("planner", "reviewer"), ("builder", "validator"),
+                                  ("builder", "completion")):
+            self.assertNotEqual(models[producer], models[checker])
 
 
 class FakeSchemaTests(unittest.TestCase):

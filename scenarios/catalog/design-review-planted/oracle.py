@@ -15,7 +15,8 @@ ALSO_REAL = {
     "dead_letter_ordering": (PLANTED["ordering"][0], ("dlq", "dead-letter", "dead letter")),
 }
 # processor.py already requires per-domain order, so the decision left to the user is
-# how to key for it; a question about the partition key asks it.
+# how to preserve it; a question about the partition key or sequence-safe failure
+# handling asks it. Options are part of that decision, even when the stem is terse.
 ORDERING_QUESTION = ("order", "sequence", "partition")
 
 
@@ -27,6 +28,15 @@ def area_of(concern):
     if len(declared) == 1 and mentions(body, *PLANTED[declared[0]]):
         return declared[0]
     return next((area for area, groups in PLANTED.items() if mentions(body, *groups)), None)
+
+
+def asks_about_ordering(question):
+    stem = question.get("question")
+    if not isinstance(stem, str) or not stem.strip():
+        return False
+    options = question.get("options")
+    options = [option for option in options if isinstance(option, str)] if isinstance(options, list) else []
+    return mentions([stem, *options], ORDERING_QUESTION)
 
 
 def check(project, scenario, run=None):
@@ -44,7 +54,7 @@ def check(project, scenario, run=None):
         checks.append(Check("no_invented_blockers", not false, f"blocking but already answered by the design: {false}"))
         questions = [q for q in report.get("questions") or [] if isinstance(q, dict)]
         checks.append(Check("asks_about_ordering_requirement",
-                            any(mentions(q.get("question", ""), ORDERING_QUESTION) for q in questions)))
+                            any(asks_about_ordering(question) for question in questions)))
     checks.append(only_changed_under(project, "review/"))
     checks += run_checks(run, workflow="design", no_build=True)
     return checks

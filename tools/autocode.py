@@ -490,7 +490,7 @@ def run_role(
                 child_stdin = (subprocess.DEVNULL if engine == "opencode" and configured_tool
                                and getattr(opencode, "PROMPT_MODE", "stdin") == "file" else stdin)
                 child = subprocess.Popen(command, cwd=workspace, stdin=child_stdin, stdout=stdout, stderr=subprocess.STDOUT,
-                                         text=True, **child_options)
+                                         text=True, **checkout_lock.child_options(workspace, child_options))
                 record["pid"] = child.pid
         except support.Paused:
             # Admission lost to a submission: no request or provider was started.

@@ -8,6 +8,23 @@ from __future__ import annotations
 ROLES = ("requirements", "planner", "reviewer", "builder", "validator", "resolver", "completion")
 
 PROFILES = {
+    # Bounded qualification using the same OAuth models as the September 29
+    # smoke test. Pin execution roles and the Investigator: recovery must not
+    # move a checker to GLM or use Kilo's non-OpenAI Investigator default.
+    "codex-only": {
+        "provider": "opencode",
+        "models": {
+            "requirements": "openai/gpt-5.6-terra", "planner": "openai/gpt-5.6-terra",
+            "reviewer": "openai/gpt-5.6-sol", "builder": "openai/gpt-5.6-terra",
+            "validator": "openai/gpt-5.6-sol", "completion": "openai/gpt-5.6-sol",
+            "resolver": "openai/gpt-5.6-sol",
+        },
+        "effort": {role: "medium" for role in ROLES},
+        "extra": ["--engine", "opencode", "--investigator-model", "openai/gpt-5.6-sol",
+                  "--resolver-model", "openai/gpt-5.6-sol", "--max-parallel-builders", "1",
+                  "--pin-model-role", "astra", "--pin-model-role", "terra",
+                  "--pin-model-role", "sol", "--pin-model-role", "completion"],
+    },
     # Runner defaults: no model flags, so AutoCode's DEFAULT_ROLE_MODELS apply.
     "default": {"provider": "opencode", "passthrough": True},
     "glm53": {

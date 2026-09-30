@@ -22,6 +22,7 @@ try:
     from . import autocode_support as support
     from . import autocode_workflow as workflow
     from . import autocode_run_records as records
+    from . import autocode_validation_recovery as validation_recovery
 except ImportError:
     import autocode_escalation as escalation
     import autocode_failures as failures
@@ -34,6 +35,7 @@ except ImportError:
     import autocode_support as support
     import autocode_workflow as workflow
     import autocode_run_records as records
+    import autocode_validation_recovery as validation_recovery
 
 
 def recover_legacy_report_repair(state, run_dir, workspace):
@@ -460,12 +462,7 @@ def automatically_recover_external_directory_denial(state, run_dir, workspace, e
     failures.record(state, record, error, records.now())
     originals = records.archive_rejected_stage(state, run_dir, record, record["rejection_reason"])
     state["sessions"].pop(record.get("route_role", record["role"]), None)
-    if state.get("validation"):
-        state.setdefault("validation_archive", []).append({
-            "reason": "External-directory denial before terminal implementation report", "validation": state.pop("validation")})
-    state["human_reviews"] = {}
-    state.pop("displayed_review", None)
-    next_stage = record["stage"]
+    next_stage = validation_recovery.permission_retry(state, record, review_stage=workflow.review_stage(state))
     recovery = {"at": records.now(), "attempt_id": records.attempt_id(record), "role": record["role"],
                 "stage": record["stage"], "source_revision": after["revision"],
                 "changed_files": record["changed_files"], "events": record["events"],

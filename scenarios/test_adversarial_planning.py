@@ -1,0 +1,43 @@
+"""A missing test prerequisite is repaired before approval or stops before a writer."""
+import json
+import shutil
+from pathlib import Path
+
+from .harness.adversarial import AdversarialCase
+
+
+class PlanningAttacks(AdversarialCase):
+    def setUp(self):
+        super().setUp()
+        reference = self.root / "reference"
+        shutil.copytree(self.scenario.reference, reference)
+        (reference / "tests").mkdir()
+        (reference / "test_greet.py").rename(reference / "tests/test_greet.py")
+        (reference / "tests/__init__.py").write_text("")
+        config = json.loads(self.config_path.read_text())
+        config.update(reference=str(reference), check="python3 -m unittest discover -s tests -t .",
+                      paths=["greet.py", "tests/test_greet.py", "README.md"])
+        self.config_path.write_text(json.dumps(config))
+
+    def test_missing_package_is_added_to_the_plan_before_approval_and_completes(self):
+        self.set_fault("planning", "repair_scaffolding")
+        self.start_to_approval()
+        self.assertTrue(self.trace("scaffolding_repaired"), self.root)
+        plans = self.trace("scaffolding_plan")
+        self.assertNotIn("tests/__init__.py", plans[0]["assigned"])
+        self.assertIn("tests/__init__.py", plans[-1]["assigned"])
+        self.assertFalse(self.trace("stage_enter", "terra"), "No Builder before approval")
+        self.approve()
+        self.assertEqual("TASK_COMPLETE", self.finish()["status"])
+        self.assertTrue((self.project / "tests/__init__.py").is_file())
+
+    def test_persistent_impossible_scope_stops_before_approval_or_builder(self):
+        self.set_fault("planning", "persist_missing_scaffolding")
+        view = self.driver.drive(self.scenario.brief)
+        plans = self.trace("scaffolding_plan")
+        self.assertGreaterEqual(len(plans), 2, self.root)
+        self.assertLessEqual(len(plans), 4, "Plan repair must remain bounded")
+        self.assertTrue(all("tests/__init__.py" not in row["assigned"] for row in plans))
+        self.assertNotEqual("approve_plan", (view.get("needs") or {}).get("kind"))
+        self.assertFalse(self.trace("stage_enter", "terra"))
+        self.assertFalse(view["done"])

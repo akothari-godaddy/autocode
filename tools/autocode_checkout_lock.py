@@ -11,7 +11,7 @@ so a run that finds the checkout busy can say which run has it.
 A run that finds it busy changes nothing: it says who holds the checkout and exits,
 and the same command works once the other run's agents have stopped. Saving an
 answer, approval or other action that launches no agent does not need the checkout
-and is not blocked. Lower layer only: files and ``fcntl``.
+and is not blocked. This runtime helper uses files, ``fcntl`` and process identity.
 """
 from __future__ import annotations
 
@@ -23,7 +23,13 @@ import os
 from pathlib import Path
 import sys
 
+try:
+    from . import autocode_process as processes
+except ImportError:
+    import autocode_process as processes
+
 STATUS = "PAUSED_WORKSPACE_BUSY"
+_writer_handles = {}
 
 
 class CheckoutBusy(RuntimeError):
@@ -45,9 +51,44 @@ def lock_path(workspace) -> Path:
 def holder(workspace) -> dict:
     """Who last held the checkout ({} if unknown); only meaningful while it is held."""
     try:
-        return json.loads(lock_path(workspace).read_text() or "{}")
+        value = json.loads(lock_path(workspace).read_text() or "{}")
+        return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
+
+
+def orphaned_workers(previous):
+    """A controller's flock can die before its provider; retain that ownership.
+
+    Consult only the last holder's durable, birth-identified process receipt.
+    Unreadable receipts remain busy; stale PIDs never establish ownership.
+    """
+    if not previous.get("run_dir"):
+        return False
+    marker = Path(previous["run_dir"]) / "active-processes.json"
+    try:
+        saved = json.loads(marker.read_text())
+        if not isinstance(saved, dict):
+            return True
+        return not saved.get("processes") or bool(processes.live_processes(saved["processes"]))
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError, processes.ProcessError):
+        return True
+
+
+def child_options(workspace, options):
+    """Keep the kernel lock alive across a crash before the first process receipt.
+
+    Popen explicitly inherits only this descriptor and any already allowed
+    descriptors. A provider's exit closes its copy. The durable process receipt
+    covers providers and descendants after supervision has recorded them.
+    """
+    handle = _writer_handles.get(str(Path(workspace).resolve()))
+    if handle is None:
+        return options
+    return {**options, "pass_fds": tuple(dict.fromkeys((*options.get("pass_fds", ()), handle.fileno()))),
+            "close_fds": True}
 
 
 @contextlib.contextmanager
@@ -68,14 +109,26 @@ def exclusive(workspace, run_dir, *, busy=None):
                 raise CheckoutBusy(message) from None
             print(message, file=sys.stderr, flush=True)
             raise busy from None
+        # Check under the lock before overwriting the former holder.
+        if orphaned_workers(holder(workspace)):
+            message = busy_message(workspace)
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            if busy is None:
+                raise CheckoutBusy(message)
+            print(message, file=sys.stderr, flush=True)
+            raise busy
         try:
             handle.seek(0)
             handle.truncate()
             handle.write(json.dumps({"run_dir": str(run_dir), "pid": os.getpid(),
                                      "since": dt.datetime.now(dt.timezone.utc).isoformat()}))
             handle.flush()
+            _writer_handles[str(Path(workspace).resolve())] = handle
             yield
         finally:
-            handle.seek(0)
-            handle.truncate()
-            fcntl.flock(handle, fcntl.LOCK_UN)
+            _writer_handles.pop(str(Path(workspace).resolve()), None)
+            if not orphaned_workers({"run_dir": str(run_dir)}):
+                handle.seek(0)
+                handle.truncate()
+            # Close our copy without LOCK_UN: a surviving child's copy must
+            # retain the kernel lock even before its first receipt exists.

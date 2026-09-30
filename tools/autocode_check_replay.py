@@ -26,6 +26,11 @@ import datetime as dt
 import json
 from pathlib import Path
 
+try:
+    from . import autocode_verification_plan as verification_plan, autocode_test_quality as test_quality
+except ImportError:
+    import autocode_verification_plan as verification_plan, autocode_test_quality as test_quality
+
 PASS, FAIL = "PASS", "FAIL"
 # Told to the Validator with every request. A live Validator showed "fails without __init__.py" as a check
 # exiting 1 inside a PASS report, which the runner refuses (parallel-diamond, 2026-09-29).
@@ -37,6 +42,11 @@ test that asserts the error. Never cite a check that exits non-zero in a PASS.
 The clean copy is the repository's source only: no ignored files and no .autocode/. A check that reads run files
 (state.json, regression/proof-*/verification.json) cannot pass there. regression_proof in your handoff is the
 runner's own executed evidence: cite its verdict and source_revision directly, never a command that reads it.
+The runner also executes explicit commands from the approved verification methods and current_task.validation_plan;
+another successful command cannot replace them. Empty Python test bodies cannot establish behavioral coverage.
+For an unbounded integer contract, test 2**63-1, 2**63, and 10**5000 (plus large negative values when valid),
+including persistence, arithmetic and invalid/stale identifiers. Check that SQLite neither overflows bindings
+nor promotes exact arithmetic to REAL. Decimal conversion limits must not reject otherwise valid integers.
 """
 # A Validator closed a proof-linked finding with a check that read the proof from .autocode/, twice
 # (fix run B, 2026-09-29); each replay failed and the run paused. The rejection says why.
@@ -46,9 +56,15 @@ TIMEOUT_SECONDS = 900
 TAIL_CHARS = 600
 
 
-def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS) -> dict:
+def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS, approved_state=None) -> dict:
     """Re-run each distinct check command; return the result or raise ValueError on the first that fails."""
     out = Path(run_dir) / "check-replay" / Path(record.get("output") or "validation").stem
+    checks = list(checks)
+    prescribed = verification_plan.approved_commands(approved_state or {})
+    reported = {check["command"] for check in checks}
+    checks += [{"command": command, "exit_code": 0, "evidence_ref": "approved-plan"}
+               for command in prescribed if command not in reported]
+    test_quality.require_behavioral_tests(workspace, [check["command"] for check in checks])
     rows, seen = [], {}
     for check in checks:
         command = check["command"]
@@ -82,4 +98,3 @@ def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_S
             "checkout of this source; a check that needs a server or other setup must start and stop it itself."
             + (RUN_FILES_HINT if ".autocode" in row["command"] else ""))
     return result
-
