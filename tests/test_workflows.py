@@ -60,6 +60,15 @@ class ModuleTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "predates"):
             workflows.pin({**fresh(), "next_stage": "astra_discovery"}, "build")
 
+    def test_the_plan_for_approval_states_the_job_kind_and_how_to_correct_it(self):
+        self.assertEqual("", workflows.approval_note({}))
+        recognized = {"workflow": {"kind": "discuss", "reason": "A tradeoff question. ", "source": "model"}}
+        note = workflows.approval_note(recognized)
+        self.assertIn("Job kind: discuss (recognized: A tradeoff question)", note)
+        self.assertIn("Do not approve; start a new run with --workflow build|bugfix|review|design|discuss", note)
+        named = {"workflow": {"kind": "review", "reason": "Named by the user with --workflow", "source": "user"}}
+        self.assertIn("Job kind: review (named by you with --workflow)", workflows.approval_note(named))
+
     def test_describe_reports_the_recognition_and_how_to_override_it(self):
         state = fresh()
         workflows.begin(state, "requirements_gather")

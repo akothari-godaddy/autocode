@@ -55,6 +55,27 @@ Completion Owner proposes completion or rework for Autopilot to evaluate. They a
 from the same approved brief; you do not explain the product to each agent or relay
 their prompts. The runner saves decisions, tasks and evidence so it can resume.
 
+## The job kind and the older settings
+
+Three settings decide "which process runs". They answer different questions and do not override
+one another:
+
+| Setting | Question it answers | Where it applies |
+| --- | --- | --- |
+| **Job kind** (`workflow.kind`: build, bugfix, review, design, discuss) | What you get back, and so which stages run at all. | Every run. Recognized from your request, or named with `--workflow`. Fixed once recognition has run. |
+| **Workflow mode** (`settings.workflow.mode`: `glm_first_v1`, `glm_final_audit_v2`, or the legacy default) | Who checks the build: which role reviews each milestone and which audits the whole task. | Only inside the build pipeline, so only for `build` and a reproduced `bugfix`. `review`, `design` and `discuss` never reach it. |
+| **Task-lane mode** (`ui` or `code` on an item of `autocode tasks`) | Which loop one lane task runs: the Figma design loop, or a normal code run. | Only in `autocode tasks`. A `code` item is an ordinary run and gets its own job kind. A `ui` item uses the Figma path and has no job kind. |
+
+So the kind decides whether the build pipeline runs, the workflow mode tunes who checks inside it,
+and the lane mode picks between two loops before either applies. If two seem to disagree, the job
+kind wins: a `review` run never builds, whatever the mode says.
+
+The kind is shown where you approve a plan (`Job kind: build (recognized: ...)`), because the two
+mistakes are not equally bad. Reading "build" as "discuss" costs a little time; reading "discuss" as
+"build" writes code you never asked for. If the kind is wrong, do not approve: start a new run with
+`--workflow KIND`. A follow-up message on a finished run (`--follow-up`) is recognized again and
+still needs its own plan approval.
+
 ## Four units controlled by Autopilot
 
 The same repository contains four callable units:

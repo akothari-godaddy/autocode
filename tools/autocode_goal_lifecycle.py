@@ -247,6 +247,8 @@ def render(state):
                   f"AutoResolver token: {public['request_token']}"]
     if public and public["scope"] == "goal_approval":
         lines.append(f"Approval token: {token(contract)}")
+    if workflows.approval_note(state):
+        lines += ["", workflows.approval_note(state)]
     if state.get("discovery_summary"):
         lines += ["", "Planning: " + state["discovery_summary"]]
     lines += plan_preview(state)

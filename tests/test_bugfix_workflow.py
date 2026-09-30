@@ -65,6 +65,7 @@ class BugfixWorkflow(unittest.TestCase):
         # The job type is part of the approved contract and shown at approval.
         self.assertEqual("bugfix", approved["goal_contract"]["body"]["task_kind"])
         self.assertIn("Job type: bug fix", lifecycle.render(approved))
+        self.assertIn("Job kind: build (recognized:", lifecycle.render(approved))  # the offline fixture recognizes every request as a build
         self.assertEqual("TASK_COMPLETE", final["status"])
         stages = [row["stage"] for row in final["stages"]]
         self.assertEqual(PLANNING + EXECUTION, stages)
