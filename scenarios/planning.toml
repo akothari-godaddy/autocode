@@ -1,0 +1,75 @@
+# Planning stress corpus: build requests AutoPlanner plans, run only as far as the
+# plan the user is asked to approve. `scenarios/run.py plan-compare` plans each one
+# twice, with today's fixed pipeline and with --adaptive-planning, and compares the
+# plans, the calls they took and the questions they asked (docs/adaptive-planning.md).
+#
+# Each case plans against a catalog scenario's seed. `brief` defaults to that
+# scenario's brief.md. `expect` is what a good adaptive run should decide; the
+# comparison reports it but does not fail on it. `[case.fake]` scripts what the
+# scripted model says in fake mode, so every adaptive path runs offline:
+#   clarity         the recognizer's answer (default "clear")
+#   blocking_review 1 makes the first plan review blocking, so the revise path runs
+
+[[case]]
+id = "tiny-greeting"
+seed = "greenfield-greeting-cli"
+expect = { clarity = "clear", size = "small" }
+
+[[case]]
+id = "small-json-flag"
+seed = "feature-timesheet-by-project"
+brief = "Add a --json option to `python3 -m timesheet report` that prints the same rows as a JSON array of objects with keys week and hours, instead of the text table. Without the option the output is unchanged. Add tests for both."
+expect = { clarity = "clear", size = "small" }
+
+[[case]]
+id = "feature-by-project"
+seed = "feature-timesheet-by-project"
+expect = { clarity = "clear", size = "small" }
+
+[[case]]
+id = "extend-record-query"
+seed = "ladder-07-stable-record-query"
+expect = { clarity = "clear", size = "small" }
+fake = { blocking_review = 1 }
+
+[[case]]
+id = "tenant-http-api"
+seed = "ladder-16-tenant-http-api"
+expect = { clarity = "clear", size = "medium" }
+
+[[case]]
+id = "transactional-outbox"
+seed = "ladder-19-transactional-outbox"
+expect = { clarity = "clear", size = "medium" }
+
+[[case]]
+id = "deployment-planner"
+seed = "ladder-24-deployment-config-plan"
+expect = { clarity = "clear", size = "large" }
+
+[[case]]
+id = "diamond-four-milestones"
+seed = "parallel-diamond"
+expect = { clarity = "clear", size = "large" }
+fake = { blocking_review = 1 }
+
+[[case]]
+id = "vague-timesheet-useful"
+seed = "feature-timesheet-by-project"
+brief = "Project managers say the timesheet report is not very useful to them. Make it more useful for them."
+expect = { clarity = "vague" }
+fake = { clarity = "vague" }
+
+[[case]]
+id = "vague-refunds"
+seed = "feature-refund-window"
+brief = "Customers keep asking us for refunds and we handle them by hand. Add refund support to the shop."
+expect = { clarity = "vague" }
+fake = { clarity = "vague" }
+
+[[case]]
+id = "vague-reading-list"
+seed = "greenfield-greeting-cli"
+brief = "I want a little command-line tool to keep track of the books I am reading."
+expect = { clarity = "vague" }
+fake = { clarity = "vague", blocking_review = 1 }

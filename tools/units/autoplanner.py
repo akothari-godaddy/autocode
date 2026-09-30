@@ -12,7 +12,7 @@ try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
     from .. import autocode_stage_context as stage_context
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
-    from .. import autocode_follow_up as follow_up
+    from .. import autocode_follow_up as follow_up, autocode_adaptive_planning as adaptive
 except ImportError:
     import autocode_test_cases as test_cases
     import autocode_goals as goals
@@ -22,6 +22,7 @@ except ImportError:
     import autocode_bug_job as bug_job
     import autocode_follow_up as follow_up
     import autocode_workflows as workflows
+    import autocode_adaptive_planning as adaptive
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
 # A build that implements an approved design (autocode_design_check_job) skips requirements
@@ -910,6 +911,7 @@ def context(state, stage, state_path):
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
     if rows:
         design_rule += REQUIREMENT_TRACE_RULE
+    design_rule += adaptive.prompt_rule(state, stage)
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
@@ -925,7 +927,7 @@ def prepare(state, stage, state_path, schema_dir):
         prompt, metrics = workflows.prompt(state, workspace_inventory(state["workspace"], state["task"]),
                                           state["settings"].get("context_soft_tokens", 10000),
                                           engine_for(state["settings"], route_for(state, stage, role)))
-        return ModelRequest(role, route_for(state, stage, role), prompt, metrics, workflows.SCHEMA, False)
+        return ModelRequest(role, route_for(state, stage, role), prompt, metrics, schema_for(state, stage), False)
     if stage not in STAGES + V2_STAGES:
         raise ValueError(f"Autoplanner cannot run {stage}")
     joint = is_planning(state, stage)
@@ -938,7 +940,50 @@ def prepare(state, stage, state_path, schema_dir):
         raise
     role = role_for(state, stage)
     return ModelRequest(role, route_for(state, stage, role), prompt, metrics,
-                        SCHEMAS[stage] if joint else goals.DISCOVERY_SCHEMA, False)
+                        schema_for(state, stage) if joint else goals.DISCOVERY_SCHEMA, False)
+
+
+def schema_for(state, stage):
+    """The report schema for a planning stage in this run (adaptive runs extend two of them)."""
+    if stage == RECOGNIZE:
+        return adaptive.recognizer_schema(state, SCHEMAS[stage])
+    return adaptive.report_schema(state, stage, SCHEMAS[stage], goals.PLANNING_BODY_SCHEMA)
+
+
+def after_challenge(state, value, record):
+    """Where the first review leads. In an adaptive run, a review with no blocking concern approves
+    the Planner's draft as the final plan (autocode_adaptive_planning); otherwise the Planner revises."""
+    if not adaptive.enabled(state):
+        state["next_stage"] = "glm_revise"
+        return
+    planning, contract = state["planning"], state["goal_contract"]
+    if "adaptive" not in planning:
+        planning["adaptive"] = {**adaptive.plan_size(contract["body"]), "approved_at": None, "challenges": 0}
+        if planning.get("review_call_limit_origin") != "user_explicit":
+            planning["review_call_limit"] = adaptive.review_limit(planning["adaptive"]["size"], review_call_limit(state))
+        planning["adaptive"]["review_limit"] = review_call_limit(state)
+    planning["adaptive"]["challenges"] += 1
+    if adaptive.blocking(value["concerns"]) or not adaptive.approvable(contract["body"]):
+        state["next_stage"] = "glm_revise"
+        return
+    try:
+        from .. import autocode_goal_lifecycle as lifecycle
+    except ImportError:
+        import autocode_goal_lifecycle as lifecycle
+    # The same path a final review takes: install the approved body and queue the user's approval.
+    lifecycle.install_draft(state, copy.deepcopy(contract["body"]), origin="adaptive_review_approval", record=record)
+    planning["final_token"] = goals.token(state["goal_contract"])
+    planning["adaptive"].update(approved_at=f"astra_challenge#{planning['adaptive']['challenges']}",
+                                final_stage="astra_challenge")
+
+
+def after_revise(state):
+    """After a revision: the final review, or in an adaptive run another first-style review while budget allows."""
+    if not adaptive.enabled(state):
+        return "astra_finalize"
+    planning = state["planning"]
+    return adaptive.after_revise(review_call_limit(state), planning["astra_calls"],
+                                 (planning.get("adaptive") or {}).get("challenges", 0))
 
 
 def recognize(state, value, record):
