@@ -27,7 +27,7 @@ function harness(storage=new Map()) {
     renderDocument:value=>new Element('pre',JSON.stringify(value)),messageBody:value=>new Element('p',value),planList:()=>new Element(),
     stageName:()=> 'Saved step',stageSucceeded:()=>true,human:value=>String(value),
     taskArchiveBlocked:()=>false,projectBlocked:()=>false,interruptedAttempt:()=>null,
-    sessionCheckpoints:()=>[],renderSessionCheckpoints:()=>null,renderMessageHistory:()=>{},
+    sessionCheckpoints:()=>[],renderSessionCheckpoints:()=>null,renderMessageHistory:()=>{},renderWorkflowTimeline:()=>{},approveBuildState:new Map(),
     monitorDetailsPanel:()=>new Element(),output:()=>{},renderPrimaryAction:()=>{},renderTaskAttention:()=>{},renderTaskNow:()=>{},
     resizeComposer:()=>{},requestAnimationFrame:callback=>callback(),dashboardNotice:value=>notices.push(value),
     document:{querySelectorAll:()=>flatten($('#conversation')).filter(row=>row.dataset.questionCard)},

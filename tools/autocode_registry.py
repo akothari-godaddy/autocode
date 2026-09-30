@@ -422,6 +422,26 @@ def registry_import(selected_root: Path, *, max_depth: int = DEFAULT_IMPORT_MAX_
     return result
 
 
+def forget_deleted(workspace: Path, run_dir: Path) -> dict[str, Any]:
+    """Remove only an absent run's exact discovery pointer; never delete files."""
+    workspace, run_dir = Path(workspace), Path(run_dir)
+    if (not workspace.is_absolute() or not run_dir.is_absolute()
+            or str(workspace.resolve()) != str(workspace) or str(run_dir.resolve()) != str(run_dir)
+            or run_dir.parent != workspace / '.autocode/runs' or os.path.lexists(run_dir)):
+        raise RegistryError('invalid_deleted_run', 'Only an absent canonical direct run may be forgotten')
+    with _locked_registry() as path:
+        document = _read_registry(path)
+        removed = [key for key, value in document['runs'].items()
+                   if value.get('workspace') == str(workspace) and value.get('run_dir') == str(run_dir)]
+        for key in removed:
+            del document['runs'][key]
+        if not any(value.get('workspace') == str(workspace) for value in document['runs'].values()):
+            document['workspaces'] = {key: value for key, value in document['workspaces'].items()
+                                      if value.get('workspace') != str(workspace)}
+        util.atomic_json(path, document)
+    return {'registry_version': REGISTRY_VERSION, 'operation': 'forget-deleted', 'removed': removed}
+
+
 def cli(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Read the per-user Autocode run registry")
     subcommands = parser.add_subparsers(dest="operation", required=True)
@@ -433,12 +453,18 @@ def cli(argv: list[str]) -> int:
     command.add_argument("--max-depth", type=int, default=DEFAULT_IMPORT_MAX_DEPTH)
     command.add_argument("--directory-budget", type=int, default=DEFAULT_IMPORT_DIRECTORY_BUDGET)
     command.add_argument("--json", action="store_true", help="Accepted for argument-array compatibility; JSON is always emitted")
+    command = subcommands.add_parser('forget-deleted')
+    command.add_argument('--workspace', type=Path, required=True)
+    command.add_argument('--run-dir', type=Path, required=True)
+    command.add_argument('--json', action='store_true')
     args = parser.parse_args(argv)
     try:
         if args.operation == "location":
             result = location()
         elif args.operation == "list":
             result = listing()
+        elif args.operation == 'forget-deleted':
+            result = forget_deleted(args.workspace, args.run_dir)
         else:
             result = registry_import(args.selected_root, max_depth=args.max_depth,
                                      directory_budget=args.directory_budget)

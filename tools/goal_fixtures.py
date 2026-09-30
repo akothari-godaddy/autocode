@@ -1,5 +1,53 @@
 """Offline contract fixtures used by regression and subprocess smoke tests."""
 import copy
+from pathlib import Path
+
+
+def write_greeting_source(workspace, *, revision=None):
+    """A real fixture artifact; revision markers vary source without breaking behavior."""
+    marker = f"# Fixture revision: {revision}\n" if revision is not None else ""
+    (Path(workspace) / "greet.py").write_text(marker + '''import sys
+
+def main():
+    if len(sys.argv) != 2 or not sys.argv[1].strip():
+        print("A nonempty name is required", file=sys.stderr)
+        return 2
+    print("Hello, " + sys.argv[1])
+    return 0
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+''')
+
+
+def seed_greeting_workspace(workspace):
+    """Give check-replay a discoverable suite that exercises the fixture contract."""
+    root = Path(workspace)
+    write_greeting_source(root)
+    (root / "test_greeting.py").write_text('''from pathlib import Path
+import subprocess
+import sys
+import unittest
+
+class GreetingTests(unittest.TestCase):
+    def invoke(self, name):
+        return subprocess.run([sys.executable, str(Path(__file__).with_name("greet.py")), name],
+                              capture_output=True, text=True)
+
+    def test_greets_a_valid_name(self):
+        result = self.invoke("Ada")
+        self.assertEqual(0, result.returncode)
+        self.assertEqual("Hello, Ada\\n", result.stdout)
+        self.assertEqual("", result.stderr)
+
+    def test_rejects_empty_and_whitespace_names(self):
+        for name in ("", "   "):
+            with self.subTest(name=name):
+                result = self.invoke(name)
+                self.assertEqual(2, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertIn("nonempty name", result.stderr)
+''')
 
 
 def assert_operational_wait(test, state, pause_status):

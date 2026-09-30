@@ -19,7 +19,7 @@ import autocode_interventions as interventions
 import autocode_support as s
 import autocode_goals as g
 import autocode_goal_lifecycle as lifecycle
-from goal_fixtures import assert_operational_wait, body, envelope
+from goal_fixtures import assert_operational_wait, body, envelope, seed_greeting_workspace
 
 
 class GoalTests(unittest.TestCase):
@@ -47,6 +47,8 @@ class GoalTests(unittest.TestCase):
         self.registry_environment.start()
         self.addCleanup(self.registry_environment.stop)
         subprocess.run(["git", "init", "-q", str(self.root)], check=True)
+        seed_greeting_workspace(self.root)
+        subprocess.run(["git", "-C", str(self.root), "add", "greet.py", "test_greeting.py"], check=True)
         subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture", "-c", "user.email=f@example.test",
                         "commit", "--allow-empty", "-qm", "fixture"], check=True)
         # The fixture's AutoCode registry lives in the temporary directory but is not

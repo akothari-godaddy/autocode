@@ -291,7 +291,13 @@ Path('continued').write_text('must not continue after cancellation')
             self.assertIn(fragment, script)
         for call in capture.call_args_list:
             self.assertNotIn('--no-sandbox', ' '.join(call.args[0]))
-            self.assertNotIn('install', ' '.join(call.args[0]))
+            # A checkout directory may itself contain 'install'. Inspect
+            # executable arguments and inline code, not incidental paths.
+            args = call.args[0]
+            self.assertFalse(any(arg in ('install', 'add') for arg in args))
+            self.assertNotIn(Path(args[0]).name, ('pip', 'pip3', 'npm', 'npx', 'yarn', 'pnpm'))
+            inline = args[2] if args[0] == 'node' else args[-1]
+            self.assertNotRegex(inline, r'\b(?:pip|npm|playwright|puppeteer)\s+install\b')
             self.assertEqual('host-only', call.kwargs['scope'])
             self.assertLessEqual(call.kwargs['timeout'], 2)
         node = [call.args[0] for call in capture.call_args_list if call.args[0][0] == 'node']

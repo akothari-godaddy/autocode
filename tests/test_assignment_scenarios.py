@@ -410,6 +410,13 @@ class AssignmentScenarios(unittest.TestCase):
         self.assertEqual("sol", self.state["next_stage"])
 
     def test_empty_starting_tree_retains_new_file_for_validation(self):
+        # This scenario requires a genuinely empty starting tree, unlike the
+        # shared contract fixture used by tests that replay validation.
+        for name in ("greet.py", "test_greeting.py"):
+            (self.root / name).unlink()
+        subprocess.run(["git", "-C", str(self.root), "add", "-u"], check=True)
+        subprocess.run(["git", "-C", str(self.root), "-c", "user.name=Fixture",
+                        "-c", "user.email=fixture@example.test", "commit", "-qm", "empty fixture"], check=True)
         criteria = [{"id": "C1", "criterion": "Create the new source file",
                      "verification_method": "Read src/new.py", "human_review": False}]
         milestones = [{"id": "M1", "objective": "Create src/new.py", "depends_on": [],

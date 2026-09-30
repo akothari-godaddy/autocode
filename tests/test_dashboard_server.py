@@ -3,6 +3,8 @@ import socket
 import socketserver
 import sys
 import unittest
+from pathlib import Path
+import tempfile
 from unittest.mock import MagicMock, patch
 
 from dashboard import agent_console
@@ -17,6 +19,22 @@ class Stop(Exception):
 
 
 class DashboardServerBindTests(unittest.TestCase):
+    def test_source_package_initializes_continuous_conversation_store(self):
+        # This namespace is used by repository consumers, independently of
+        # direct dashboard-script and installed autocode_cli launches.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            console = agent_console.Console([root], root / "unused-runner.py", lambda: None,
+                                             conversation_root=root / "conversations",
+                                             conversation_provider=lambda *_: "offline",
+                                             conversation_planner=lambda *_: "offline")
+            try:
+                self.assertEqual([], console.conversations.list())
+                self.assertIs(console.conversations.new, console.conversations.continuous)
+            finally:
+                console.conversations.close()
+                console.pool.shutdown(wait=True)
+
     def test_loopback_server_binds_without_reverse_dns(self):
         with patch.object(socket, "getfqdn", forbidden):
             server = agent_console.LoopbackHTTPServer(("127.0.0.1", 0), agent_console.Handler)

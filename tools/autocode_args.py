@@ -26,6 +26,10 @@ def build_parser(unit, default_models) -> argparse.ArgumentParser:
     parser.add_argument("--unit", choices=autopilot.UNITS, default=unit,
                         help="Run only this unit, stopping before the next unit; default runs Autopilot")
     parser.add_argument("--run-dir", type=Path, help="Existing run directory to resume")
+    parser.add_argument("--conversation-handoff", type=Path,
+                        help="Validated conversation receipt to attach when creating a task; never grants approval")
+    parser.add_argument("--expected-goal-token",
+                        help="Require this exact already-approved plan before continuing a dashboard Build request")
     parser.add_argument("--in-place", action="store_true", help="Use this checkout directly; otherwise new tasks get independent worktrees from HEAD")
     parser.add_argument("--workflow", choices=workflows.WORKFLOWS, help="Name the kind of job instead of having the recognizer read it from the request (a new run, or a saved run whose recognizer has not run yet)")
     parser.add_argument("--max-parallel-builders", type=int,

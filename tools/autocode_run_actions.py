@@ -17,6 +17,7 @@ import sys
 try:
     from . import autopilot
     from . import autocode_dependency as dependency
+    from . import autocode_conversation_ingress as conversation_ingress
     from . import autocode_dispatch as dispatch
     from . import autocode_follow_up as follow_up
     from . import autocode_goals as goals
@@ -34,6 +35,7 @@ try:
 except ImportError:
     import autopilot
     import autocode_dependency as dependency
+    import autocode_conversation_ingress as conversation_ingress
     import autocode_dispatch as dispatch
     import autocode_follow_up as follow_up
     import autocode_goals as goals
@@ -52,6 +54,15 @@ except ImportError:
 
 def handle(runner, args, parser, state, state_path, run_dir, workspace):
     """Apply this invocation's action to the saved run; return an exit code to stop, or None to build."""
+    try:
+        conversation_ingress.require_expected_goal(state, getattr(args, 'expected_goal_token', None),
+                                                   token_for=goals.token, is_approved=goals.approved)
+        if conversation_ingress.ingest(state, run_dir, workspace, getattr(args, 'conversation_handoff', None),
+                                       existing_run=bool(args.run_dir)):
+            runner.write_json(state_path, state)
+    except ValueError as error:
+        print(f'Input rejected: {error}', file=sys.stderr)
+        return 2
     dependency_result = dependency.apply(args, state, run_dir, resolver_human.current(state), runner.write_json,
                                          lambda: support.snapshot(workspace)["revision"])
     if dependency_result is not None:
@@ -411,7 +422,16 @@ def handle(runner, args, parser, state, state_path, run_dir, workspace):
         raise support.Paused("PAUSED_UNANSWERED_QUESTION", "Pending questions cannot be bypassed by resume")
     if runner.migrate_opencode_roles(state, run_dir, workspace):
         print("Saved roles now use OpenCode; previous sessions archived and task progress retained.", flush=True)
+    try:
+        conversation_ingress.require_expected_goal(state, getattr(args, 'expected_goal_token', None),
+                                                   token_for=goals.token, is_approved=goals.approved)
+    except ValueError as error:
+        print(f'Input rejected: {error}', file=sys.stderr)
+        return 2
     if state["settings"].get("engine") == "opencode":
         runner.opencode.check_models({r: config for r, config in state["settings"]["roles"].items()
                                if planning.engine_for(state["settings"], r) == "opencode"}, workspace)
+    if conversation_ingress.record_build_start(state, getattr(args, 'expected_goal_token', None),
+                                               token_for=goals.token, is_approved=goals.approved):
+        runner.write_json(state_path, state)
     return None
