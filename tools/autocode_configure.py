@@ -20,10 +20,12 @@ try:
     from . import autocode_support as support, autocode_goals as goals, autocode_providers
     from . import autocode_opencode, autocode_gocode as gocode, autocode_figma as figma
     from . import autocode_budget_recovery as budget_recovery, autocode_verification_config as verification_config
+    from . import autocode_planner_routes as planner_routes
 except ImportError:
     import autocode_support as support, autocode_goals as goals, autocode_providers
     import autocode_opencode, autocode_gocode as gocode, autocode_figma as figma
     import autocode_budget_recovery as budget_recovery, autocode_verification_config as verification_config
+    import autocode_planner_routes as planner_routes
 
 DEFAULT_ROLE_MODELS = {
     "astra": "gpt-5.6-sol",
@@ -312,6 +314,8 @@ def configure(args, state, *, planning, milestones, autopilot, opencode=None):
             configure_gocode_joint(settings, args, fresh=True, planning=planning)
         else:
             configure_joint(settings, args, fresh=True, planning=planning, opencode=opencode)
+    if getattr(args, 'conversation_handoff', None):
+        planner_routes.configure_runner_profile(settings, args)
     if getattr(args, 'planning_v2', False):
         settings['planning_flow'] = 'v2'
     if getattr(args,'unlimited_iterations',False):

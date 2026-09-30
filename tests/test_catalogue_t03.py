@@ -21,13 +21,14 @@ import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
 from . import test_autocode as base
-from goal_fixtures import approve_fixture, body, envelope
+from goal_fixtures import approve_fixture, body, envelope, seed_greeting_workspace, write_greeting_source
 
 
 class SessionCase(kit.CatalogueCase):
     def setUp(self):
         kit.CatalogueCase.setUp(self)
         base.RetrofitTest.setUp(self)
+        seed_greeting_workspace(self.root)
         approve_fixture(self.state, runner.goals)
         first = self.decision("CONTINUE")
         first["next_task"] = {"kind": "implement", "milestone_id": "M1", "requirements": ["Greet names"],
@@ -93,7 +94,7 @@ class SessionScenarios(SessionCase):
     def test_ses01_independent_reviewer_context(self):
         """SES-01. Existing: test_planning session/expected_session assertions and
         test_autocode.test_role_launch_keeps_explicit_session_model_effort_and_sandbox."""
-        (self.root / "greet.py").write_text("print('hello')\n")
+        write_greeting_source(self.root, revision="builder")
         terra_events = self.run / "terra.jsonl"
         terra_events.write_text(json.dumps({"type": "item.completed", "item": {
             "id": "build1", "type": "command_execution", "command": "python3 -m unittest",

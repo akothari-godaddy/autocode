@@ -135,7 +135,11 @@ const restored = [];
 context.location = {hash: '#' + route};
 context.stored = () => 'new';
 context.filterTasks = (...args) => restored.push(args);
-vm.runInContext(source.slice(source.indexOf('function restoreSelection()'), source.indexOf("window.addEventListener('hashchange'")), context);
+// Exercise the route-restoration function without executing unrelated DOM setup.
+const restoreStart = source.indexOf('function restoreSelection()');
+const restoreEnd = source.indexOf('\n}\n', restoreStart) + 3;
+assert.ok(restoreStart >= 0 && restoreEnd > restoreStart);
+vm.runInContext(source.slice(restoreStart, restoreEnd), context);
 context.restoreSelection();
 assert.deepEqual(restored.pop(), ['attention', project]);
 context.location.hash = '#tasks&filter=invalid&project=' + encodeURIComponent(project);

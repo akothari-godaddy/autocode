@@ -464,6 +464,10 @@ class LegacyConsole:
   if engine=='opencode':
    chosen=self.joint_models(d);efforts=self.joint_efforts(d)
    extra=[goal,'--engine','opencode','--provider',self.run_provider,'--joint-planning','--no-chat']
+   if d.get('conversation_handoff'):
+    handoff=Path(d['conversation_handoff']).resolve()
+    if not handoff.is_relative_to(ws/'.autocode/conversation-handoffs'):raise ValueError('Conversation handoff must be staged in the selected project')
+    extra+=['--conversation-handoff',str(handoff)]
    for role,value in chosen.items():extra+=['--'+role.replace('_','-')+'-model',value]
    for role,value in efforts.items():extra+=['--'+role.replace('_','-')+'-reasoning-effort',value]
    return self.enqueue(ws,None,'Create OpenCode task' if self.run_provider=='opencode' else 'Create '+self.run_provider+' task',extra)
@@ -520,23 +524,37 @@ class LegacyConsole:
    for role,value in efforts.items():extra+=['--'+role.replace('_','-')+'-reasoning-effort',value]
    return self.enqueue(ws,run,'Save reasoning settings',extra+['--show-goal','--no-chat'])
   if action=='set_model':return self.confirm_model_replacement(d,ws,run,v)
-  if action=='continue':return self.enqueue(ws,run,'Continue',[])
+  if action=='continue':
+   expected=d.get('expected_goal_token')
+   if expected is not None and (not isinstance(expected,str) or expected!=v.get('goal_token') or d.get('token')!=expected or d.get('confirmation')!=expected or obj(v.get('goal')).get('approval_status')!='approved'):raise ValueError('The approved plan changed. Reload before building.')
+   return self.enqueue(ws,run,'Continue',['--expected-goal-token',expected] if expected is not None else [])
   raise ValueError('Unknown action')
 try:
  from .dashboard_backend import RegistryInterventionMixin
  from .dashboard_chat import ConversationMixin
  from .dashboard_project_controls import ProjectRemovalMixin
  from .dashboard_tasks import TaskArchiveMixin
+ from .dashboard_delete import PermanentDeleteMixin
  from .dashboard_evidence import stage_evidence
 except ImportError:  # Support running this file directly from a source checkout.
  from dashboard_backend import RegistryInterventionMixin
  from dashboard_chat import ConversationMixin
  from dashboard_project_controls import ProjectRemovalMixin
  from dashboard_tasks import TaskArchiveMixin
+ from dashboard_delete import PermanentDeleteMixin
  from dashboard_evidence import stage_evidence
 
-class Console(TaskArchiveMixin, ProjectRemovalMixin, ConversationMixin, RegistryInterventionMixin, LegacyConsole):
- pass
+class Console(PermanentDeleteMixin, TaskArchiveMixin, ProjectRemovalMixin, ConversationMixin, RegistryInterventionMixin, LegacyConsole):
+ def model_catalogue(self,refresh=False):
+  result=self.catalogue.fetch(refresh=refresh)
+  try:
+   from ..autocode_planner_routes import MANDATED_ROUTES, RUNNER_POLICY_ROLES
+  except ImportError:
+   from autocode_planner_routes import MANDATED_ROUTES, RUNNER_POLICY_ROLES
+  route_roles={**RUNNER_POLICY_ROLES,'glm':'requirements_gatherer'}
+  return {**result,'conversation_defaults':{role:MANDATED_ROUTES[name]['model'] for role,name in route_roles.items()},
+          'conversation_efforts':{role:MANDATED_ROUTES[name]['reasoning_effort'] for role,name in route_roles.items()},
+          'conversation_routes':MANDATED_ROUTES}
 
 # Static presentation is kept separate from the read-only adapter and mutation API.
 INDEX = Path(__file__).with_name('dashboard.html').read_text()
@@ -554,7 +572,7 @@ class Handler(BaseHTTPRequestHandler):
  @property
  def console(self):return self.server.console
  def reply(self,c,x,t='application/json'):
-  raw=x.encode() if isinstance(x,str) else json.dumps(x).encode();self.send_response(c);self.send_header('Content-Type',t+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
+  raw=x if isinstance(x,bytes) else x.encode() if isinstance(x,str) else json.dumps(x).encode();self.send_response(c);self.send_header('Content-Type',t+'; charset=utf-8');self.send_header('Content-Length',str(len(raw)));self.end_headers();self.wfile.write(raw)
  def same_origin(self):
   hosts=self.headers.get_all('Host') or []
   if len(hosts)!=1 or hosts[0] not in self.server.hosts:return False
@@ -585,8 +603,13 @@ class Handler(BaseHTTPRequestHandler):
   if p.path=='/':return self.reply(200,INDEX,'text/html')
   if p.path=='/static/style.css':return self.reply(200,STYLE,'text/css')
   if p.path=='/static/app.js':return self.reply(200,APP,'application/javascript')
+  if p.path.startswith('/static/fonts/'):
+   fonts=('Inter-Regular.woff2','Inter-SemiBold.woff2','JetBrainsMono-Regular.woff2')
+   name=p.path[len('/static/fonts/'):]
+   if name not in fonts:return self.reply(404,{'error':'Font asset unavailable'})
+   return self.reply(200,(Path(__file__).parent/'assets/fonts'/name).read_bytes(),'font/woff2')
   if p.path=='/api/runs':return self.reply(200,self.console.dashboard_snapshot())
-  if p.path=='/api/models':return self.reply(200,self.console.catalogue.fetch())
+  if p.path=='/api/models':return self.reply(200,self.console.model_catalogue())
   if p.path=='/api/evidence':
    q=parse_qs(p.query);raw=q.get('workspace',[''])[0];selected=q.get('run',[''])[0]
    if self.console.removed_project(raw) or self.console.archived_task(selected):return self.reply(404,{'error':'Restore this task and project to inspect its changes'})
@@ -609,6 +632,8 @@ class Handler(BaseHTTPRequestHandler):
    if not isinstance(d,dict):raise ValueError('JSON body must be an object')
    if self.path=='/api/projects':x=self.console.project_action(d)
    elif self.path=='/api/tasks':x=self.console.task_archive_action(d)
+   elif self.path=='/api/tasks/delete-preview':x=self.console.deletion_preview(d)
+   elif self.path=='/api/tasks/delete':x=self.console.delete_permanently(d)
    elif self.path=='/api/conversations':x=self.console.conversation_create(d)
    elif self.path=='/api/conversation/archive':x=self.console.conversation_archive(d)
    elif self.path=='/api/conversation/message':
@@ -619,7 +644,7 @@ class Handler(BaseHTTPRequestHandler):
    elif self.path=='/api/chat':x=self.console.chat(d)
    elif self.path=='/api/create':x=self.console.create(d)
    elif self.path=='/api/action':x=self.console.mutate(d)
-   elif self.path=='/api/models/refresh':x=self.console.catalogue.fetch(refresh=True)
+   elif self.path=='/api/models/refresh':x=self.console.model_catalogue(refresh=True)
    elif self.path=='/api/watch-roots':
     action=d.get('action');path=d.get('path')
     if action=='add':x={'path':str(self.console.add_runtime_watch_root(path))}

@@ -336,6 +336,10 @@ function openScenario(info, name, viewport) {
   } else if (name === 'pending-answer') {
     browser('click', '.detail-tabs [data-tab="interview"]');
     browser('wait', '120');
+  } else if (name !== 'workspace') {
+    // The original shell matrix verifies the operational summary; the separate
+    // persistent-chat matrix verifies the new default destination.
+    browser('click', '.detail-tabs [data-tab="now"]');
   }
   // Wait for the scenario-specific saved state rather than relying on an
   // arbitrary render delay before capturing the deterministic matrix.
@@ -439,7 +443,7 @@ function assertM2Scenario(name, viewport) {
   }
 
   const navigation = data('()=>[...document.querySelectorAll(".detail-tabs [role=tab]")].map(tab=>tab.textContent.trim())');
-  assert.deepEqual(navigation, ['Now', 'Conversation', 'Plan', 'Changes', 'Preview', 'Checks', 'History'], name + ' retains every labeled task destination');
+  assert.deepEqual(navigation, ['Chat', 'Plan', 'Now', 'Changes', 'Preview', 'Checks', 'History'], name + ' retains every labeled task destination');
   if(['waiting','plan','pending-answer'].includes(name)){
     const authority=data('()=>({authorized:latestRun.human_request_authorized,scope:latestRun.human_escalation?.scope,id:latestRun.human_escalation?.request_id,token:latestRun.human_escalation?.request_token,questionsMatch:JSON.stringify(latestRun.questions)===JSON.stringify(latestRun.human_escalation?.questions)})');
     assert.equal(authority.authorized,true,name+' is published by the test writer, not a raw model question');
@@ -541,7 +545,7 @@ function assertM2Scenario(name, viewport) {
     '}');
     for (const text of ['Plan revision 7', 'Origin:', 'Reviewer:', 'State:', 'Intended outcome', 'Requirements', 'Constraints', 'Implementation sequence', 'Verification criteria', 'Assumptions', 'Earlier-revision disclosure', 'Approval records this revision. Starting work is a separate action.']) assert.match(plan.text, new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     for (const criterion of exactPlanCriteria) assert.match(plan.text, new RegExp(criterion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-    assert.deepEqual(plan.buttons, ['Request changes', 'Approve plan revision 7']);
+    assert.deepEqual(plan.buttons, ['Request changes', 'Approve plan revision 7', 'Approve & build revision 7']);
     assert.equal(plan.buttons.includes('Start building'), false, 'unapproved revision cannot expose the Start building action');
   }
 
@@ -590,10 +594,10 @@ function assertM2Scenario(name, viewport) {
     assert.equal(metrics.horizontalOverflow, false, '760 px has no page-level horizontal overflow');
     assert.deepEqual(metrics.undersized, [], 'every visible tablet control has a 44 by 44 px hit area');
     assert.deepEqual(data('()=>[...document.querySelectorAll(".detail-tabs [role=tab]")].map(t=>t.textContent.trim())'),
-      ['Now', 'Conversation', 'Plan', 'Changes', 'Preview', 'Checks', 'History'], 'task destinations retain distinct labels');
+      ['Chat', 'Plan', 'Now', 'Changes', 'Preview', 'Checks', 'History'], 'task destinations retain distinct labels');
     browser('focus', '.detail-tabs [data-tab="now"]');
     browser('press', 'ArrowRight');
-    assert.equal(data('()=>document.activeElement.dataset.tab+":"+document.activeElement.getAttribute("aria-selected")'), 'interview:false',
+    assert.equal(data('()=>document.activeElement.dataset.tab+":"+document.activeElement.getAttribute("aria-selected")'), 'changes:false',
       'keyboard navigation moves focus without silently selecting a new destination');
 
     openScenario(info, 'running', {name: 'breakpoint-759', width: 759, height: 844});

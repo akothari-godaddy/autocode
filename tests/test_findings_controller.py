@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from . import test_autocode as base
-from goal_fixtures import approve_fixture
+from goal_fixtures import approve_fixture, seed_greeting_workspace
 
 runner, support = base.runner, base.s
 import autocode_findings as findings
@@ -14,6 +14,7 @@ import autocode_findings as findings
 class ControllerFindingsTests(unittest.TestCase):
     def setUp(self):
         base.RetrofitTest.setUp(self)
+        seed_greeting_workspace(self.root)
         approve_fixture(self.state, runner.goals)
         # A review needs an assigned task: approve the brief and take its first task.
         first = self.astra_decision("CONTINUE")

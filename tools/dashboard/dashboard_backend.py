@@ -354,14 +354,19 @@ class RegistryInterventionMixin:
             self.status_cache.pop(str(run), None)
         return row
 
-    def continue_run(self, workspace, run):
+    def continue_run(self, workspace, run, expected_goal_token=None):
         current = self._intervention_view(workspace, run)
         if current['mode'] == 'unavailable':
             raise ValueError(current['error'] or 'Runner status is unavailable')
         if current.get('attempt_id') and current.get('runner_status') in ('PAUSED_PROVIDER_UNCERTAIN', 'PAUSED_UNCERTAIN_STAGE'):
             raise ValueError('Inspect the interrupted attempt, then use Recover saved work before continuing. Existing edits will be retained.')
         if current['capable']:
-            return self.enqueue(workspace, run, 'Continue', ['--no-chat', '--resume-paused'])
+            extra = ['--no-chat', '--resume-paused']
+            if expected_goal_token is not None:
+                extra += ['--expected-goal-token', expected_goal_token]
+            return self.enqueue(workspace, run, 'Continue', extra)
+        if expected_goal_token is not None:
+            raise ValueError('This runner cannot confirm a revision-bound Build. Update the runner before building.')
         key = str(run)
         with self.lock:
             if key in self.pending or str(workspace) in self.workspace_busy:
@@ -403,7 +408,15 @@ class RegistryInterventionMixin:
         if not run:
             raise ValueError('Run does not belong to an available project')
         if data['action'] == 'continue':
-            return self.continue_run(workspace, run)
+            expected = data.get('expected_goal_token')
+            if expected is not None:
+                view = self.view(workspace, run)
+                if (not isinstance(expected, str) or expected != view.get('goal_token')
+                        or data.get('token') != expected or data.get('confirmation') != expected
+                        or mapping(view.get('goal')).get('approval_status') != 'approved'
+                        or mapping(mapping(view.get('conversation')).get('plan_gate')).get('pending_product_change')):
+                    raise ValueError('The approved plan changed. Reload before building.')
+            return self.continue_run(workspace, run, expected)
         if data['action'] == 'recover_stage':
             return self.recover_stage(workspace, run, data.get('attempt_id'))
         return self.intervene(workspace, run, data['action'], data.get('text', '') if data['action'] == 'feedback' else '', data.get('request_id'))

@@ -18,7 +18,7 @@ function functionSource(name) {
 }
 
 const helpers = vm.createContext({});
-vm.runInContext(functionSource('composerShouldSend') + '\n' + functionSource('draftSendBlocked'), helpers);
+vm.runInContext(functionSource('composerShouldSend') + '\n' + functionSource('conversationDeliveryBlocked') + '\n' + functionSource('conversationRetryAllowed') + '\n' + functionSource('draftSendBlocked'), helpers);
 
 assert.equal(helpers.composerShouldSend({key: 'Enter'}), true);
 assert.equal(helpers.composerShouldSend({key: 'Enter', ctrlKey: true}), true);
@@ -41,11 +41,17 @@ for (const state of [
   {task_archived: true},
   {archived_at: '2026-09-21T08:00:00Z'},
   {status: 'thinking'},
+  {pending_dispatch:{state:'UNCERTAIN',retryable:false}},
+  {planner_delivery:{state:'PROCESS_STARTED',retryable:false}},
   {status: 'error'},
   {attachment: {status: 'starting'}},
   {attachment: {status: 'linked', run: '/fixture/run'}},
   {attachment: {status: 'failed'}},
 ]) assert.equal(helpers.draftSendBlocked({...ready, ...state}, false, 'A reply'), true);
+
+assert.equal(helpers.draftSendBlocked({...ready,pending_dispatch:{state:'REPLY_COMMITTED',retryable:false},planner_delivery:{state:'REPLY_COMMITTED',retryable:false}},false,'Next turn'),false);
+assert.equal(helpers.conversationRetryAllowed({pending_dispatch:{state:'REPLY_COMMITTED',retryable:false},planner_delivery:{state:'SAFE_NOT_DISPATCHED',retryable:true}}),true);
+assert.equal(helpers.conversationRetryAllowed({pending_dispatch:{state:'UNCERTAIN',retryable:false},planner_delivery:{state:'SAFE_NOT_DISPATCHED',retryable:true}}),false);
 
 class Element {
   constructor(tag, text = '') {

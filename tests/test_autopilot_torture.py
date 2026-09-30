@@ -20,7 +20,7 @@ import autocode_goals as goals
 import autocode_goal_lifecycle as lifecycle
 import autocode_support as support
 import autopilot
-from goal_fixtures import body, envelope
+from goal_fixtures import body, envelope, write_greeting_source
 
 
 EXECUTING = {"terra", "sol", "orchestrator", "astra_review", "astra_resolve"}
@@ -68,13 +68,12 @@ class TortureBase(unittest.TestCase):
         runner.apply_result(self.state, stage, value, record, self.root, self.run)
 
     def build(self, *, changed=True, task_id=None, contract_hash=None, contract_revision=None):
-        path = self.root / "greet.py"
         if changed:
-            path.write_text(f"print({self.step!r})\n")
+            write_greeting_source(self.root, revision=self.step)
         evidence = self.fresh("build")
         evidence.write_text("built\n")
         events = evidence.with_suffix(".jsonl")
-        events.write_text(json.dumps(command_event("build", "python3 greet.py", 0, "built")) + "\n")
+        events.write_text(json.dumps(command_event("build", "python3 greet.py Ada", 0, "Hello, Ada\n")) + "\n")
         value = {**envelope(self.state), "evidence_refs": [str(evidence)], "summary": "built"}
         if task_id is not None:
             value["task_id"] = task_id

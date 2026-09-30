@@ -54,7 +54,7 @@ class ReviewCase(t06.SolControllerCase):
         lifecycle.assign_task(self.state, first, support.snapshot(self.root))
 
     def apply_terra(self):
-        (self.root / "greet.py").write_text("print('hello')\n")
+        t06.write_greeting_source(self.root, revision="builder")
         events = self.run / "terra.jsonl"
         events.write_text(json.dumps({"type": "item.completed", "item": {
             "id": "build1", "type": "command_execution", "command": "python3 -m unittest",
@@ -314,7 +314,7 @@ class ReviewCase(t06.SolControllerCase):
                                  "source_revision": support.snapshot(self.root)["revision"]},
                                 self.root, self.run)
         fid = findings.open_entries(self.state, "astra")[0]["id"]
-        (self.root / "greet.py").write_text("import sys\nsys.exit(0 if sys.argv[1:] else 2)\n")
+        t06.write_greeting_source(self.root, revision="corrected")
         # Fresh independent verification of the corrected candidate.
         report = self.sol_report(event_id="recheck")
         self.apply_sol(report, event_id="recheck")

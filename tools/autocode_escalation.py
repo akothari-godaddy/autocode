@@ -60,7 +60,13 @@ def advance(state, role, *, trigger, detail="", struggle_id=None):
     also stable: struggle remains recorded by the rejected report or validation,
     without silently inventing another provider route.
     """
-    roles = state.get("settings", {}).get("roles", {})
+    settings = state.get("settings", {})
+    # This opt-in conversation profile fixes every role's model and effort.
+    # Recovery still uses its configured Builder retry policy, including its
+    # same-Sol-High attempt; the generic ladder must not promote those routes.
+    if settings.get("conversation_profile") == "continuous-v1":
+        return None
+    roles = settings.get("roles", {})
     if struggle_id is not None and any(event.get("role") == role and event.get("struggle_id") == struggle_id
                                       for event in state.get("reasoning_escalations", [])):
         return None

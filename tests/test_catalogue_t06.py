@@ -25,7 +25,7 @@ import autocode_findings as findings
 import autocode_goals as goals
 import autocode_support as support
 from . import test_autocode as base
-from goal_fixtures import approve_fixture, envelope
+from goal_fixtures import approve_fixture, envelope, seed_greeting_workspace, write_greeting_source
 from . import LOGIN_SHELL
 
 # Every literal "/bin/zsh" string elsewhere in this file is wrapper-format
@@ -266,6 +266,7 @@ class SolControllerCase(kit.CatalogueCase):
     def setUp(self):
         kit.CatalogueCase.setUp(self)
         base.RetrofitTest.setUp(self)
+        seed_greeting_workspace(self.root)
         self.oracle = kit.CommandOracle()
         approve_fixture(self.state, runner.goals)
         first = self.decision("CONTINUE")
@@ -523,7 +524,7 @@ class CompletionEvidenceCase(SolControllerCase):
                                runner.apply_result, self.state, "astra_review", stale_complete,
                                {"output": str(self.run / "complete-stale.json")}, self.root, self.run)
         # Fresh verification on the new candidate.
-        (self.root / "greet.py").write_text("print('v2')\n")
+        write_greeting_source(self.root, revision="fresh-v2")
         fresh = self.sol_report(event_id="fresh-check")
         self.apply_sol(fresh, event_id="fresh-check")
         fresh_complete = self.decision("COMPLETE")

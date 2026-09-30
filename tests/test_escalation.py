@@ -1,4 +1,5 @@
 """Automatic reasoning/model escalation tests; no provider calls."""
+from copy import deepcopy
 from pathlib import Path
 import sys
 import unittest
@@ -89,6 +90,20 @@ class EscalationTests(unittest.TestCase):
         self.assertEqual("openai/gpt-6-astra", state["settings"]["roles"]["astra"]["model"])
         self.assertEqual("high", state["settings"]["roles"]["astra"]["reasoning_effort"])
         self.assertEqual("old-session", state["sessions"]["astra"])
+
+    def test_continuous_profile_suppresses_promotion_without_changing_legacy_routes(self):
+        for role, model, effort in (("terra", "openai/gpt-6-sol", "high"),
+                                    ("astra", "openai/gpt-6-astra", "high")):
+            with self.subTest(role=role):
+                state = self.state(role, model, effort)
+                state["settings"]["conversation_profile"] = "continuous-v1"
+                before = deepcopy(state)
+                self.assertIsNone(escalation.advance(state, role, trigger="rejected_output"))
+                self.assertEqual(before, state)
+                # The same saved role outside the opt-in profile keeps its ladder.
+                del state["settings"]["conversation_profile"]
+                self.assertIsNotNone(escalation.advance(state, role, trigger="rejected_output"))
+                self.assertEqual("xhigh", state["settings"]["roles"][role]["reasoning_effort"])
 
 
     def test_planning_roles_without_ladders_never_escalate(self):

@@ -342,7 +342,15 @@ def main():
             _lifecycle_action_count = 0
 
             def _json_command(self, *args, **kwargs):
-                operation = args[0][1]
+                command = args[0]
+                if '--status' in command:
+                    # Supply the same disposable saved task at the CLI seam used
+                    # by destructive preflight; the production guards still run.
+                    requested = Path(command[command.index('--run-dir') + 1]).resolve()
+                    if requested.parent != runs_root or not (requested / 'state.json').is_file():
+                        return None, 'Unknown disposable fixture run'
+                    return self._state(requested), None
+                operation = command[1]
                 return {'registry_version': 1, 'operation': operation, 'registry_path': str(root / 'registry.json'), 'runs': [], 'workspaces': []}, None
 
             def _intervention_view(self, workspace, run):
