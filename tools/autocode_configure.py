@@ -19,11 +19,11 @@ from pathlib import Path
 try:
     from . import autocode_support as support, autocode_goals as goals, autocode_providers
     from . import autocode_opencode, autocode_gocode as gocode, autocode_figma as figma
-    from . import autocode_budget_recovery as budget_recovery
+    from . import autocode_budget_recovery as budget_recovery, autocode_verification_config as verification_config
 except ImportError:
     import autocode_support as support, autocode_goals as goals, autocode_providers
     import autocode_opencode, autocode_gocode as gocode, autocode_figma as figma
-    import autocode_budget_recovery as budget_recovery
+    import autocode_budget_recovery as budget_recovery, autocode_verification_config as verification_config
 
 DEFAULT_ROLE_MODELS = {
     "astra": "gpt-5.6-sol",
@@ -240,7 +240,8 @@ def configure(args, state, *, planning, milestones, autopilot, opencode=None):
             if not settings.get("orchestration", {}).get("enabled"):
                 raise ValueError("Start a new run to enable milestone orchestration")
             settings["orchestration"]["max_parallel"] = args.max_parallel_builders
-        return autopilot.stuck.configure(settings, args)
+        settings = autopilot.stuck.configure(settings, args)
+        return verification_config.configure_resume(state, settings, args)
     if engine == "opencode":
         local = opencode.local_settings(state["workspace"])
     elif engine == "gocode":

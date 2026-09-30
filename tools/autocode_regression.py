@@ -155,11 +155,14 @@ def prove(state, workspace, run_dir):
     saved = state.get("regression_proof") or {}
     scope = sorted(case["id"] for case in cases(state))
     options = settings(state)
+    python = options.get("python") or verify.python_for(state.get("project_workspace") or workspace)
+    framework = verify.detect_framework(workspace, python=python)
     # Stored only in regression_proof; prove reads it before reusing evidence.
     # A repaired test environment must invalidate a prior failure (or PASS)
     # even when the source and acceptance criteria have not changed.
     execution_context = {
-        "python": options.get("python") or verify.python_for(state.get("project_workspace") or workspace),
+        "python": python,
+        "detected_framework": framework.to_dict() if framework else None,
         "test_command": options.get("test_command"),
         "regression_command": options.get("regression_command"),
         "timeout": suite_timeout(state),
@@ -168,12 +171,12 @@ def prove(state, workspace, run_dir):
             and saved.get("execution_context") == execution_context):
         return saved
     with runner_check.track(state, run_dir, STAGE, "Preparing regression checks", status.persist) as progress:
-        proof = _prove(state, workspace, run_dir, current, scope, progress)
+        proof = _prove(state, workspace, run_dir, current, scope, progress, framework)
         proof["execution_context"] = execution_context
         return proof
 
 
-def _prove(state, workspace, run_dir, current, scope, progress):
+def _prove(state, workspace, run_dir, current, scope, progress, framework):
     started = time.monotonic()
     base = base_commit(state, workspace)
     options = settings(state)
@@ -191,9 +194,6 @@ def _prove(state, workspace, run_dir, current, scope, progress):
         path = None
     else:
         dependencies = state.get("project_workspace") or str(workspace)
-        # A task worktree has no virtualenv of its own; use the project's.
-        framework = verify.detect_framework(workspace, python=options.get("python")
-                                            or verify.python_for(dependencies))
         suite = options.get("test_command") or (framework.suite if framework else None)
         base_suite = (_baseline(state, workspace, run_dir, base, framework, suite, dependencies, base_patch, progress)
                       if suite else None)

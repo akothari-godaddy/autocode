@@ -82,8 +82,8 @@ is in [Models](models.md); provider setup is in [Providers](providers.md).
 | `--max-seconds N` | Total active provider time for the run (new-run default `43200`, 12 hours; `0` disables). Checked at stage boundaries. |
 | `--no-progress-limit N` | Unchanged-batch limit (`0` disables; never disables the 3-recovery ceiling). |
 | `--max-iterations N` | Optional total iteration ceiling; new runs default to unlimited, and resumes retain their saved limit. |
-| `--test-command CMD` | New runs: the project's test suite command for a bug fix's runner-owned regression proof (default: detected; see [Bug fixes](workflow.md#bug-fixes)). |
-| `--regression-command CMD` | New runs: a command that runs only the fix's new or changed tests (default: derived from the detected framework). |
+| `--test-command CMD` | The project's test suite command for runner-owned regression proof (default: detected). Correct a saved command with `--resume-paused` at a reconciled pause before the Validator or combined checkpoint; see [Bug fixes](workflow.md#bug-fixes). |
+| `--regression-command CMD` | A command that runs only the fix's new or changed tests (default: derived). Saved corrections require the same pre-validation `--resume-paused` boundary as `--test-command`. |
 
 ### Engine, provider, and models
 
