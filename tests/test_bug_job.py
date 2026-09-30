@@ -255,6 +255,30 @@ def approved_small_fix(**overrides):
         return SmallCorrectionTests.start(SmallCorrectionTests(), **overrides)
 
 
+class InvariantTests(unittest.TestCase):
+    """A live bugfix-cent-drift run (2026-09-29) was accepted with refund_line returning 156.45999999999998:
+    its test cases compared "to 2 decimal places" and the Validator never checked the invariant itself."""
+
+    def test_the_validator_is_given_the_invariant_to_check_directly(self):
+        state = {"investigation": diagnosis(invariant="Every refunded amount is a whole number of cents.")}
+        note = bug_job.validator_note(state)
+        self.assertIn("Every refunded amount is a whole number of cents.", note)
+        self.assertIn("inputs the tests do not use", note)
+        self.assertIn("no tolerance", note)
+        for other in ({}, {"investigation": diagnosis("not_reproduced")}):
+            with self.subTest(state=other):
+                self.assertEqual("", bug_job.validator_note(other))
+
+    def test_the_validator_prompt_carries_it(self):
+        from units import common
+        with mock.patch.object(bug_job, "SMALL_CORRECTION_ENABLED", True):  # an approved one-task contract
+            state = SmallCorrectionTests.start(self, fix_size="small")
+        request = common.execution_request(state, "sol", Path(state["workspace"]) / "state.json",
+                                           Path(bug_job.__file__).resolve().parent / "autocode-schemas")
+        self.assertIn("BUG INVARIANT", request.prompt)
+        self.assertIn(state["investigation"]["invariant"], request.prompt)
+
+
 class FullPathTests(unittest.TestCase):
     """With the short path off, a small reproduced bug is planned and put to the user like any other."""
 

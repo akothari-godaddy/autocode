@@ -968,6 +968,8 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
         if modern and stage != "astra_resolve":
             # Only the reviewers reconcile findings. The resolver diagnoses them.
             findings_ledger.record_decision(state, value, record)
+        if modern and stage == "astra_review":  # only the Validator can close its own open blockers
+            value = findings_ledger.recheck_by_validator(state, value, record.get("source_revision"))
         if value["status"] in ("COMPLETE", "TASK_COMPLETE"):
             current = support.snapshot(workspace)
             if modern and findings_ledger.blocking_entries(state):
@@ -988,11 +990,7 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                 return
             if not completion_gate.completion_ready(state, value, current):
                 if not regression.complete(state, current["revision"]):
-                    proof = state.get("regression_proof") or {}
-                    reasons = "; ".join((proof.get("failures") or []) + (proof.get("unverified") or [])) or \
-                        "no proof exists for the current source"
-                    raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: this change has no passing "
-                                         f"regression proof for the current source ({reasons})")
+                    raise support.Paused("PAUSED_COMPLETION_GATE", regression.rejection(state))
                 raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: missing, stale, failed or unverified independent evidence")
             state.update(status="TASK_COMPLETE", completed_at=now(), final_decision=value, next_stage=None)
             if milestones.enabled(state):

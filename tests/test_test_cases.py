@@ -49,6 +49,24 @@ class ContractCasesTests(unittest.TestCase):
                          test_cases.contract_cases(state))
         self.assertIn('"guard:"', test_cases.builder_note(state))
 
+    def test_a_planning_revision_may_switch_test_and_guard_but_nothing_else(self):
+        # A live review-then-fix plan (2026-09-29) could not move a criterion from test: to guard:, as its
+        # Plan Reviewer asked, without asking the user.
+        import autocode_goals as goals
+
+        def revise(method, text=EXAMPLE["criterion"]):
+            state = {"goal_contract": {"body": {"acceptance_criteria": [EXAMPLE]}, "approval_status": "draft"},
+                     "answers": {}, "user_events": [], "brief_feedback": []}
+            body = {"acceptance_criteria": [{**EXAMPLE, "criterion": text, "verification_method": method}]}
+            goals.revision_guard(state, body, [], "glm_revise")
+
+        revise("guard: test_c2_subtracts")
+        revise("  GUARD:  test_c2_subtracts")
+        for method, text in (("guard: test_c2_other", EXAMPLE["criterion"]), ("Validator reads calc.py", EXAMPLE["criterion"]),
+                             ("guard: test_c2_subtracts", "Given calc.sub; when sub(5, 3) runs; then it returns 3")):
+            with self.subTest(method=method, text=text), self.assertRaisesRegex(ValueError, "without a user-backed"):
+                revise(method, text)
+
     def test_no_plan_no_cases(self):
         self.assertEqual([], test_cases.contract_cases({}))
         self.assertEqual("", test_cases.builder_note({}))

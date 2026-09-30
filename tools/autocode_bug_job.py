@@ -116,6 +116,10 @@ What to do:
      same page count") — its test must pass on the original code and after the fix, and a preserve case
      whose test fails on the original code is mis-tagged and fails the proof. Use preserve sparingly:
      only for a guard worth its own named test.
+     Each case checks the invariant as exactly as the invariant states it: when the rule is exact (whole
+     cents, at most one mutation), the case compares exactly, never "to 2 decimal places" or "differs by
+     less than 0.001", which accept the very drift the rule forbids. At least one case uses the scale the
+     report describes (several lines, realistic values), not only the smallest example.
    - fix_size: small when the cause is obvious and the fix is one bounded change in one or two files;
      large otherwise. Say large whenever the fix needs design choices or touches several modules.
    - fix_plan: the steps of the fix, and the regression test that fails before it and passes after it.
@@ -321,6 +325,27 @@ def correction_contract(state: dict) -> dict:
                                           + " that fails on the original code and passes after the fix", *naming],
                          "acceptance_criteria": ids, "validation_plan": validation},
     }
+
+
+# A live bugfix-cent-drift run (Claude models, 2026-09-29) was accepted with refund_line returning
+# 156.45999999999998: every test case compared "to 2 decimal places" or within 0.001, the Validator
+# only ran the suite, and nothing checked the diagnosis's rule ("every amount is a whole number of cents").
+VALIDATOR_INVARIANT = """
+BUG INVARIANT: this change fixes a reproduced bug. Its diagnosis states the rule a correct fix must uphold:
+{invariant}
+The Builder's tests check a few examples of it. Check the rule itself, exactly as stated: capture your own check
+that exercises it on inputs the tests do not use (for example many generated inputs, larger or multi-part ones)
+and compares exactly, with no tolerance the rule does not allow. A violation is a FAIL, with the input that shows
+it as evidence, even when every test passes.
+"""
+
+
+def validator_note(state: dict) -> str:
+    """The invariant the Validator must check directly, for a reproduced bug; "" otherwise."""
+    found = state.get("investigation") or {}
+    if found.get("outcome") != "reproduced" or not str(found.get("invariant") or "").strip():
+        return ""
+    return VALIDATOR_INVARIANT.format(invariant=found["invariant"].strip())
 
 
 def owns(state: dict) -> bool:

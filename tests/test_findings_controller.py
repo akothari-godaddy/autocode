@@ -141,6 +141,60 @@ class ControllerFindingsTests(unittest.TestCase):
         self.assertEqual(["Missing authorization check"],
                          [row["finding"] for row in findings.open_entries(self.state, "astra")])
 
+    def validated(self, task_id):
+        """A passing Validator validation of the current source, as the completion test builds it."""
+        self.state["current_task"] = {**self.state["current_task"], "id": task_id}
+        evidence = self.run / "sol.jsonl"
+        evidence.write_text(json.dumps({"type": "item.completed", "item": {"id": "check", "type": "command_execution",
+            "command": "python3 -m unittest", "exit_code": 0, "aggregated_output": "PASS"}}))
+        current = support.snapshot(self.root)
+        validation = {**{"contract_revision": self.state["goal_contract"]["revision"],
+                         "contract_hash": self.state["goal_contract"]["hash"], "task_id": task_id,
+                         "deferred_backlog": [],
+                         "user_request": {"kind": "none", "discovered": "", "impact": "", "decision_needed": "",
+                                          "options": [], "proposed_delta": ""}},
+                      "verdict": "PASS", "findings": [], "finding_dispositions": [], "unverified_criteria": [],
+                      "checks_run": ["python3 -m unittest"],
+                      "checks": [{"command": "python3 -m unittest", "exit_code": 0, "evidence_ref": "event:check"}],
+                      "criterion_results": [{"id": c["id"], "status": "PASS", "evidence_refs": ["event:check"]}
+                                            for c in self.state["acceptance_criteria"]],
+                      "end_to_end_result": {"status": "PASS", "summary": "Both CLI flows checked", "evidence_refs": ["event:check"]}}
+        runner.apply_result(self.state, "sol", validation,
+                            {"events": str(evidence), "source_revision": current["revision"], "output": str(evidence)},
+                            self.root, self.run)
+        return current
+
+    def test_open_validator_findings_send_completion_back_to_the_validator_once(self):
+        # Live greenfield and architecture runs (2026-09-29): the Validator's closing report was repaired, a
+        # repair cannot close findings, and every COMPLETE was rejected until the run stopped.
+        # An earlier Validator report raised the finding; its latest one passes without reporting it again.
+        findings.record_validation(self.state, {"findings": [{"severity": "high", "finding": "AC7 wording is wrong",
+                                                              "evidence": "event:check", "blocking": True}],
+                                                "finding_dispositions": []}, {"output": "sol-01.json"})
+        current = self.validated("task-recheck")
+        self.assertEqual(["sol"], [row["source"] for row in findings.blocking_entries(self.state)])
+        with patch.object(runner, "run_role", side_effect=AssertionError("no agent may launch")):
+            runner.apply_result(self.state, "astra_review", self.astra_decision("COMPLETE"),
+                                {"output": "complete-01.json", "source_revision": current["revision"]},
+                                self.root, self.run)
+        self.assertEqual(("RUNNING", "sol"), (self.state["status"], self.state["next_stage"]))
+        # If the Validator leaves them open again, the gate refuses completion as before.
+        with self.assertRaises(support.Paused) as caught:
+            runner.apply_result(self.state, "astra_review", self.astra_decision("COMPLETE"),
+                                {"output": "complete-02.json", "source_revision": current["revision"]},
+                                self.root, self.run)
+        self.assertEqual("PAUSED_COMPLETION_GATE", caught.exception.status)
+
+    def test_a_completion_owner_finding_still_blocks_without_a_recheck(self):
+        current = self.validated("task-own")
+        findings.record_decision(self.state, self.astra_decision("REWORK", "Missing authorization check"),
+                                 {"output": "review-02.json"})
+        with self.assertRaises(support.Paused) as caught:
+            runner.apply_result(self.state, "astra_review", self.astra_decision("COMPLETE"),
+                                {"output": "complete-01.json", "source_revision": current["revision"]},
+                                self.root, self.run)
+        self.assertEqual("PAUSED_COMPLETION_GATE", caught.exception.status)
+
     def test_completion_rejects_a_blocking_finding_in_the_decision_and_the_ledger(self):
         self.state["current_task"] = {**self.state["current_task"], "id": "task-complete"}
         # A passing Validator validation exists, so only the findings stand between the run and completion.
