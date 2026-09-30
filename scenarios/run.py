@@ -9,6 +9,7 @@
   python3 scenarios/run.py compare ID ... --fake  # AutoCode vs a plain agent, same oracle (scripted; no spend)
   python3 scenarios/run.py compare ID ... --profile openai-only --baseline opencode --i-authorize-live-model-spend
   python3 scenarios/run.py stats [ID ...]    # runs, passes, pass streak, time and model stages per scenario and mode
+  python3 scenarios/run.py plan-compare --fake  # plan planning.toml's requests today vs --adaptive-planning, up to approval
 
 Results go to .scenario-runs/<time>-<id>-<mode>/ (result.json, steps.jsonl,
 state.json, and the delivered project); a comparison adds comparison.md and
@@ -29,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from harness import baseline, catalog, compare, profiles, routing, stats, verdict  # noqa: E402
+from harness import baseline, catalog, compare, plan_compare, profiles, routing, stats, verdict  # noqa: E402
 from harness.driver import (REPO, DriveError, Driver, default_autocode, fake_setup, live_setup, metrics,  # noqa: E402
                             split_by_turn)
 from harness.project import materialize  # noqa: E402
@@ -257,6 +258,31 @@ def cmd_route(args) -> int:
     return 1
 
 
+def cmd_plan_compare(args) -> int:
+    """Plan each request in scenarios/planning.toml with today's pipeline and with adaptive planning."""
+    cases = plan_compare.load()
+    if args.rebuild:
+        records = plan_compare.rebuild(cases, args.rebuild)
+        print((args.rebuild / "comparison.md").read_text())
+        return 1 if any(record["error"] for record in records.values()) else 0
+    require_mode(args)
+    if args.ids:
+        unknown = set(args.ids) - {case.id for case in cases}
+        if unknown:
+            sys.exit(f"unknown planning cases: {', '.join(sorted(unknown))}")
+        cases = [case for case in cases if case.id in args.ids]
+    _, out = evidence_directory(args.out, f"plan-compare-{'fake' if args.fake else args.profile}")
+    (out / "run.json").write_text(json.dumps({"autocode": autocode_revision(), "mode": "fake" if args.fake else args.profile,
+                                              "profile": None if args.fake else profiles.resolve(args.profile),
+                                              "cases": [case.id for case in cases]}, indent=2))
+    records = plan_compare.run(cases, out, jobs=args.jobs, fake=args.fake, profile=args.profile,
+                               autocode=args.autocode or default_autocode(),
+                               timeout_minutes=args.timeout_minutes or 45, max_steps=args.max_steps or 40)
+    print((out / "comparison.md").read_text())
+    print(f"evidence: {out}")
+    return 1 if any(record["error"] for record in records.values()) else 0
+
+
 def cmd_compare(args) -> int:
     """Run each scenario through AutoCode and through a plain agent, and judge both with the same oracle."""
     require_mode(args)
@@ -409,6 +435,22 @@ def main(argv=None) -> int:
     route.add_argument("--autocode", nargs="+", help="AutoCode command to test (default: this checkout)")
     route.add_argument("--timeout-minutes", type=int, help="time budget per prompt (default 10)")
     route.set_defaults(func=cmd_route)
+    planning = commands.add_parser("plan-compare", help="plan planning.toml's requests with today's pipeline and "
+                                   "with --adaptive-planning, stopping at plan approval")
+    planning.add_argument("ids", nargs="*", help="case ids from scenarios/planning.toml (default: all)")
+    mode = planning.add_mutually_exclusive_group()
+    mode.add_argument("--fake", action="store_true", help="scripted model; no spend")
+    mode.add_argument("--profile", help="live model profile from harness/profiles.py")
+    planning.add_argument("--i-authorize-live-model-spend", action="store_true")
+    planning.add_argument("--jobs", type=int, default=1, help="planning runs at a time (default 1)")
+    planning.add_argument("--out", type=Path, default=REPO / ".scenario-runs")
+    planning.add_argument("--autocode", nargs="+", help="AutoCode command to test (default: this checkout)")
+    planning.add_argument("--timeout-minutes", type=int, help="time budget per planning run (default 45)")
+    planning.add_argument("--max-steps", type=int, help="CLI call budget per planning run (default 40)")
+    planning.add_argument("--rebuild", type=Path, metavar="DIR", help="rewrite DIR's comparison from its runs' "
+                          "record.json files (for a comparison that was cut short); runs nothing")
+    planning.set_defaults(func=cmd_plan_compare)
+
     summary = commands.add_parser("stats", help="runs, passes, pass streak, time and model stages from saved results")
     summary.add_argument("ids", nargs="*")
     summary.add_argument("--mode", help="only this mode: fake, or a live profile name")

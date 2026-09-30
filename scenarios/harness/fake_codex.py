@@ -194,8 +194,11 @@ def recognize(brief: str, follow_up: dict | None = None) -> dict:
         kind, signal = "build", "no other signal"
     named = re.search(r"(docs/design/[\w./-]+\.md)", brief)
     design = named.group(1) if kind == "build" and named and has(r"approved") else ""
+    # Adaptive-planning runs also ask how clear the request is; the planning stress corpus
+    # scripts the answer per case (scenarios/planning.toml), since keywords cannot judge it.
     return {"workflow": kind, "reason": f"Scripted keyword rule: {signal}", "signals": [signal],
-            "design_document": design}
+            "design_document": design,
+            **({"clarity": os.environ.get("SCENARIO_FAKE_CLARITY") or "clear"} if 'Add "clarity"' in PROMPT else {})}
 
 
 def check_design(data: dict) -> dict:
@@ -379,20 +382,39 @@ def report_for(stage: str, data: dict) -> dict:
                 "constraints": [], "acceptance_tests": [CHECK], "source_refs": source_refs(),
                 "proposed_assumptions": [], "open_questions": [], "requirements": requirements(),
                 "ignored_statements": [], "conflicts": [], "proposed_reframes": []}
+    # An adaptive-planning Planner drafts the complete plan, initial_task included.
+    adaptive = "ADAPTIVE PLANNING" in PROMPT
     if stage == "astra_discovery":
-        report = {"summary": "Scripted plan", "contract": contract(), "alternatives": [], "uncertainties": [], **planning}
+        report = {"summary": "Scripted plan", "contract": contract(final=adaptive), "alternatives": [],
+                  "uncertainties": [], **planning}
         if CONFIG.get("fault") == "planner_citation" and not guided_to_fix_citation():
             # Prose after an existing path is valid. A nonexistent sibling is a
             # deterministic rejected citation, including on report-only repairs.
             report["code_refs"] = [f"{note}.missing" for note in bug_notes()]
         return report
+    reviewed = ((((DATA.get("planning") or {}).get("reports") or {}).get("astra_challenge") or {})
+                .get("report") or {}).get("concerns") or []
     if stage == "astra_challenge":
+        # SCENARIO_FAKE_BLOCKING_REVIEW=1 makes the first review of a plan blocking, so the
+        # revise path runs; a review of a revised plan never blocks.
+        revised = "glm_revise" in ((DATA.get("planning") or {}).get("reports") or {})
+        if os.environ.get("SCENARIO_FAKE_BLOCKING_REVIEW") == "1" and not revised:
+            return {"summary": "Scripted plan review: one blocking concern", "concerns": [{
+                "id": "B1", "concern": "The plan does not say how the change is verified end to end",
+                "evidence_refs": ["task"], "requested_change": f"Run {CHECK} as the acceptance check",
+                "acceptance_test": CHECK, "blocking": True}]}
         return {"summary": "Scripted plan review: no concerns", "concerns": []}
     if stage == "glm_revise":
-        return {"summary": "Scripted revision: nothing to revise", "contract": contract(), "responses": [], **planning}
+        responses = [{"concern_id": row["id"], "response": "Adopted", "evidence_refs": ["task"],
+                      "change": row["requested_change"], "acceptance_test": row["acceptance_test"]}
+                     for row in reviewed]
+        return {"summary": "Scripted revision", "contract": contract(final=adaptive), "responses": responses,
+                **planning}
     if stage == "astra_finalize":
         final = {key: value for key, value in planning.items() if key != "code_refs"}
-        return {"summary": "Scripted final plan", "contract": contract(final=True), "decisions": [], **final}
+        decisions = [{"concern_id": row["id"], "decision": "Accepted as revised", "rationale": "Adopted",
+                      "acceptance_test": row["acceptance_test"], "resolved": True} for row in reviewed]
+        return {"summary": "Scripted final plan", "contract": contract(final=True), "decisions": decisions, **final}
     if stage == "terra" and MILESTONES:
         row = milestone_row((data.get("current_task") or {}).get("milestone_id"))
         applied = []

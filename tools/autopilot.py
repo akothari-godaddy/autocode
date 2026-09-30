@@ -504,7 +504,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
         # A pre-structured report's plain-string assumptions stay readable as legacy.
         checked = {**value, "proposed_assumptions": [row for row in value["proposed_assumptions"]
                                                      if not isinstance(row, str)]}
-    support.validate_schema(checked, planning_unit.SCHEMAS[stage])
+    support.validate_schema(checked, planning_unit.schema_for(state, stage))
     if stage == planning_unit.RECOGNIZE:
         return planning_unit.recognize(state, value, record)
     value, deferred = _clarify_discoverable(state, stage, value, record)
@@ -566,7 +566,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
             raise ValueError("Concern IDs must be nonempty and unique")
         if any(not c[k].strip() for c in concerns for k in ("concern", "requested_change", "acceptance_test")):
             raise ValueError("Each concern needs a concrete change and acceptance test")
-        state["next_stage"] = "glm_revise"
+        planning_unit.after_challenge(state, value, record)
     elif stage == "glm_revise":
         concerns = reports["astra_challenge"]["report"]["concerns"]
         planning_unit._coverage(value["responses"], concerns)
@@ -577,7 +577,7 @@ def apply_planning(state, stage, value, record, *, run_dir=None):
             reports[stage] = {"report": copy.deepcopy(value), "output": record["output"]}
             state["discovery_summary"] = value["summary"]
             return
-        state.update(status="RUNNING", phase="PLANNING", next_stage="astra_finalize", pending_questions=[])
+        state.update(status="RUNNING", phase="PLANNING", next_stage=planning_unit.after_revise(state), pending_questions=[])
     elif stage == "astra_finalize":
         concerns = reports["astra_challenge"]["report"]["concerns"]
         planning_unit._coverage(value["decisions"], concerns)

@@ -318,6 +318,10 @@ def configure(args, state, *, planning, milestones, autopilot, opencode=None):
         planner_routes.configure_runner_profile(settings, args)
     if getattr(args, 'planning_v2', False):
         settings['planning_flow'] = 'v2'
+    if getattr(args, 'adaptive_planning', False):
+        if not joint or settings.get('planning_flow') == 'v2':
+            raise ValueError("--adaptive-planning needs joint planning and the default planning flow")
+        settings['adaptive_planning'] = True
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
     return autopilot.stuck.configure(settings, args)
