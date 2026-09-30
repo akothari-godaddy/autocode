@@ -194,6 +194,21 @@ def describe(state: dict, stage: str) -> str:
             + f"\nNot what you meant? Start again with --workflow {'|'.join(WORKFLOWS)}.")
 
 
+def approval_note(state: dict) -> str:
+    """The job kind for the plan the user is asked to approve: what it is, why, and how to correct it ('' before recognition).
+
+    Read as "build" when it was really a question costs a little time; read as a question when it was really "build"
+    writes code nobody asked for, so the kind is stated where the user approves, with the way out (a run's kind is
+    fixed once recognition has run, so a wrong one is corrected by a new run)."""
+    found = state.get("workflow") or {}
+    if not found.get("kind"):
+        return ""
+    why = ("named by you with --workflow" if found.get("source") == "user"
+           else "recognized: " + ((found.get("reason") or "").strip().rstrip(".") or "no reason given"))
+    return (f"Job kind: {found['kind']} ({why}). Not what you meant? Do not approve; start a new run with "
+            f"--workflow {'|'.join(WORKFLOWS)}.")
+
+
 def approved_design(state: dict, value: dict) -> str:
     """The approved design a build asks to implement, if the recognizer named one that exists."""
     design = str(value.get("design_document") or "").strip()
