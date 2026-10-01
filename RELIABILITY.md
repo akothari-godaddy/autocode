@@ -48,3 +48,21 @@ A case passes when its agreed criteria and complete user flow pass, required hum
 reviews are satisfied, and the dashboard reflects the saved result. Missing evidence
 stays unverified. Claims of dependable project completion require these live trials;
 passing fixture tests alone does not establish model effectiveness.
+
+First run of the three cases (2026-10-01, master 68e89aa4, profile glm53-openai:
+GLM-5.3 producers on the Z.AI plan, GPT-6 verifiers on OpenCode's ChatGPT login;
+details in docs/bugs/2026-10-01-reliability-live-cases.md):
+
+- Feature in an existing project (feature-timesheet-by-project): **passed** —
+  TASK_COMPLETE, oracle 6/6, two report repairs recovered automatically.
+- Small new application (greenfield-todo-cli): **not passed** — the deliverable was
+  correct (oracle 10/10) but the run never completed: OpenCode's external_directory
+  permission stopped the validator three times, the recovery budget ran out, and the
+  run paused for a person. Blocker recorded; validator evidence paths must stay
+  workspace-contained.
+- Bug fix (bugfix-iso-weeks): **not passed** — the fix was correct (oracle 5/5) but the
+  scenario's 60-minute budget expired while AutoResolver's rework loop was still
+  running. Budget, not correctness, ended it.
+
+No case produced a false completion. Two of the three blockers are product fixes, not
+model failures; rerun both cases after they land.
