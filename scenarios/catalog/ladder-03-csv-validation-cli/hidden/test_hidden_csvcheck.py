@@ -42,7 +42,8 @@ class HiddenCsvTests(unittest.TestCase):
         # Validating a bounded age must not depend on Python's decimal conversion
         # limit: both long invalid numbers and valid zero padding are ordinary data.
         for age, invalid in (("9" * 5000, True), ("0" * 5000 + "131", True),
-                             ("0" * 5000, False), ("0" * 5000 + "130", False)):
+                             ("0" * 5000, False), ("0" * 5000 + "130", False),
+                             ("0" * 140000 + "130", False), ("9" * 140000, True)):
             with self.subTest(invalid=invalid, suffix=age[-3:]):
                 errors = [{"row": 2, "fields": ["age"]}] if invalid else []
                 self.assert_result(f'name,age,email\nUser,{age},u@d\n', int(invalid),
@@ -53,6 +54,19 @@ class HiddenCsvTests(unittest.TestCase):
             p=self.invoke(raw)
             self.assertEqual((p.returncode,p.stdout),(2,""))
             self.assertTrue(p.stderr)
+
+    def test_quote_syntax_is_fatal_in_every_field_and_after_prior_valid_records(self):
+        valid = 'name,age,email\nA,0,a@b\n'
+        for record in ('Jo"e,30,j@e\n', 'Joe,3"0,j@e\n', 'Joe,30,j@"e\n',
+                       '"Joe"x,30,j@e\n', ' "Joe",30,j@e\n', '"Joe,30,j@e\n'):
+            with self.subTest(record=record):
+                result = self.invoke(valid + record)
+                self.assertEqual((2, ""), (result.returncode, result.stdout))
+                self.assertTrue(result.stderr)
+
+    def test_escaped_quotes_and_multiline_fields_are_valid(self):
+        self.assert_result('name,age,email\r\n"Jo""e",30,j@e\r\n"Two\r\nLines",1,t@e\r\n',
+                           0, {"rows": 2, "errors": []})
 
     def test_header_only(self):
         self.assert_result('name,age,email\n',0,{"rows":0,"errors":[]})

@@ -9,8 +9,8 @@
       "id": "F1",
       "area": "ordering",
       "severity": "blocking",
-      "summary": "Messages are keyed by event kind, so a domain's create, renew and delete land on different partitions and can be consumed out of sequence. events/processor.py raises DomainStateError when seq is not the next expected value per domain.",
-      "evidence": "Design, Producer paragraph: 'keyed by event kind'. Code: Processor.process checks event.seq == last_seq[domain] + 1."
+      "summary": "Partitioning by kind breaks sequence order.",
+      "evidence": "The Producer uses event kind as the partition key."
     },
     {
       "id": "F2",
@@ -36,11 +36,11 @@
   ],
   "questions": [
     {
-      "id": "Q2",
-      "question": "Is a duplicate notification acceptable (dedup only in billing), or must every consumer be idempotent?",
+      "id": "Q1",
+      "question": "Must every consumer be idempotent or only billing?",
       "options": [
         "billing only",
-        "every consumer"
+        "all consumers"
       ]
     }
   ]

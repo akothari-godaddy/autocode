@@ -62,34 +62,21 @@ class EvidenceDirectoryTests(unittest.TestCase):
                 self.assertEqual(str(index), (path / "result.json").read_text())
 
 
-class DesignOrderingQuestionTests(unittest.TestCase):
-    def test_ordering_decision_in_question_or_options_and_unrelated_questions(self):
+class DesignOrderingGroundingTests(unittest.TestCase):
+    def test_user_questions_are_optional_when_the_existing_ordering_contract_is_grounded(self):
         from harness.project import materialize
         scenario = catalog.load("design-review-planted")
         original = json.loads((scenario.reference / "review/design-review.json").read_text())
-        cases = [
-            (True, {"question": "What must happen to later events for a domain when one event cannot be processed?",
-                    "options": ["Quarantine the domain until replay completes in order.",
-                                "Allow later events and abandon strict sequence processing."]}),
-            (True, {"question": "Which partition key should the topic use?", "options": ["domain", "registry"]}),
-            (False, {"question": "Must every consumer be idempotent or only billing?",
-                     "options": ["billing only", "all consumers"]}),
-            (False, {"question": "", "options": ["preserve sequence"]}),
-            (False, {"id": "partition-ordering", "question": "What should happen?", "options": ["ask later"]}),
-        ]
         with tempfile.TemporaryDirectory() as root:
             project = materialize(scenario.seed, Path(root) / "project", scenario.reference)
-            for expected, question in cases:
-                with self.subTest(question=question):
-                    report = {**original, "questions": [question]}
-                    (project / "review/design-review.json").write_text(json.dumps(report))
+            for questions in ([], [{"question": "Must every consumer be idempotent or only billing?",
+                                    "options": ["billing only", "all consumers"]}]):
+                with self.subTest(questions=questions):
+                    (project / "review/design-review.json").write_text(json.dumps({**original, "questions": questions}))
                     result = verdict.evaluate(scenario, project)
                     self.assertEqual("", result.error)
-                    ordering = [check for check in result.checks if check.name == "asks_about_ordering_requirement"]
-                    self.assertEqual(1, len(ordering))
-                    self.assertEqual(expected, ordering[0].ok)
-                    self.assertTrue(all(check.ok for check in result.checks
-                                        if check.name != "asks_about_ordering_requirement"))
+                    self.assertTrue(all(check.ok for check in result.checks),
+                                    [check.name for check in result.checks if not check.ok])
 
 
 class ProcessDependencyTests(unittest.TestCase):
