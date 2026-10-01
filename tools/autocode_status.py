@@ -101,13 +101,16 @@ def persist(path, state):
     import sys
     try:
         from . import autocode_util as util, autocode_checkpoints as checkpoints, autocode_activity_log as activity_log
+        from . import autocode_usage as token_usage
     except ImportError:
         import autocode_util as util
         import autocode_checkpoints as checkpoints
         import autocode_activity_log as activity_log
+        import autocode_usage as token_usage
     checkpoints.update(state)
     entry = record(state)
     util.atomic_json(path, state)
     activity_log.record(path, state)
+    token_usage.record(path, state)
     if entry:
         print(entry['text'], file=sys.stderr, flush=True)

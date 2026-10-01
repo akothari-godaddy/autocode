@@ -23,14 +23,10 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-# Historical comparison rates, USD per 1M inclusive input/output tokens.
-# These are not verified current provider prices or subscription charges.
-REFERENCE_PRICES = {
-    "zai-coding-plan/glm-5.3": {"input": 0.60, "output": 2.20},
-    # Only for pricing saved runs from before MiMo was dropped (user 2026-09-27); new runs
-    # never use it (FORBIDDEN_MODEL_MARKERS below).
-    "xiaomi-token-plan-sgp/mimo-v2.6-pro": {"input": 0.30, "output": 1.20},
-}
+try:
+    from .autocode_usage import REFERENCE_PRICES
+except ImportError:
+    from autocode_usage import REFERENCE_PRICES
 
 # Never MiMo (user 2026-09-27); OpenAI GPT-6 via the ChatGPT login replaces it.
 ALLOWED_MODEL_PREFIXES = (
