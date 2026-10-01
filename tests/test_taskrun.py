@@ -174,6 +174,14 @@ class TaskRunTests(unittest.TestCase):
 
 
 class TaskRunClientTests(unittest.TestCase):
+    def test_accept_transport_change_requires_explicit_cli_flag(self):
+        run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
+        with patch.object(run, '_invoke') as invoke, patch.object(run, 'status', return_value={}) as status:
+            run.accept_transport_change()
+        invoke.assert_called_once_with('accept transport change', '--resume-paused',
+                                       '--accept-transport-change', '--no-chat', advancing=True)
+        status.assert_called_once()
+
     def test_answer_forwards_the_current_resolver_token(self):
         run = taskrun.TaskRun(Path("/work/repo"), Path("/work/repo/.autocode/runs/one"))
         with patch.object(run, "_act", return_value={"needs": {"kind": "answer"}}) as act:

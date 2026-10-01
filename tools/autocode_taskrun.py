@@ -102,6 +102,12 @@ class TaskRun:
         self._invoke("resume", "--resume-paused", "--no-chat", *self.options, advancing=True)
         return self.status()
 
+    def accept_transport_change(self) -> dict:
+        """Explicitly accept a validated OpenCode transport change and continue."""
+        self._invoke("accept transport change", "--resume-paused", "--accept-transport-change",
+                     "--no-chat", *self.options, advancing=True)
+        return self.status()
+
     def bind_dependency(self, specification: Path) -> dict:
         return self._act("bind dependency", "--bind-dependency", str(specification))
 
