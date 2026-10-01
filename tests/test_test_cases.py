@@ -305,6 +305,17 @@ class PromptTests(unittest.TestCase):
                 prompt = autoplanner.context(state, stage, state_path)[0]
                 self.assertEqual(wanted, "CHECK EVERY WORKED EXAMPLE" in prompt)
 
+    def test_every_planning_stage_forbids_timing_criteria_except_requirements(self):
+        from tests.test_bug_job import SmallCorrectionTests
+        from units import autoplanner
+        state = SmallCorrectionTests.start(SmallCorrectionTests(), fix_size="large")
+        state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+        state_path = Path(state["workspace"]) / "state.json"
+        for stage, wanted in (("astra_discovery", True), ("astra_challenge", True), ("glm_revise", True),
+                              ("astra_finalize", True), ("requirements_gather", False)):
+            with self.subTest(stage=stage):
+                self.assertEqual(wanted, "NO TIMING CRITERIA" in autoplanner.context(state, stage, state_path)[0])
+
     def test_the_builder_is_told_to_write_the_named_tests(self):
         from tests.test_bug_job import approved_small_fix
         from units import common
