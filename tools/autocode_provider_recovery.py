@@ -123,5 +123,6 @@ def recover_startup(runtime, state, run_dir, workspace, error, *, sleep=time.sle
 def recover_dispatch(runtime, state, run_dir, workspace, error):
     """The controller's recovery boundary; other recovery policies are unchanged."""
     return (recover_startup(runtime, state, run_dir, workspace, error)
+            or runtime.automatically_recover_truncated_review(state, run_dir, workspace, error)
             or runtime.automatically_recover_timed_out_stage(state, run_dir, workspace, error)
             or runtime.automatically_recover_external_directory_denial(state, run_dir, workspace, error))
