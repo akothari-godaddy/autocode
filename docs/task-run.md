@@ -58,6 +58,7 @@ All commands take `--workspace WORKSPACE`; commands on an existing run add
 | Resume a pause | `autocode --resume-paused --no-chat [options]` | 0 complete, 2 stopped for input |
 | Accept a changed OpenCode transport | `autocode --resume-paused --accept-transport-change --no-chat [options]` | 0 complete, 2 stopped for input |
 | Answer | `autocode --answer QUESTION_ID=TEXT [--resolver-token TOKEN]` | 0 saved, 2 rejected |
+| Respond to an operational AutoResolver request | `autocode --resolver-request ID --resolver-token TOKEN --resolver-response provide_information --resolver-message TEXT` | 0 saved, 2 rejected |
 | Approve the plan | `autocode --approve-goal TOKEN` | 0 saved, 2 rejected |
 | Approve a review | `autocode --approve-review CRITERION --review-token TOKEN` | 0 saved, 2 rejected |
 | Plan feedback | `autocode --feedback TEXT` | 0 saved, 2 rejected |
@@ -73,6 +74,8 @@ requirements questions are asked, and the plan still goes to the user for
 approval. A usage error
 also exits 2, with a message starting `usage:` on stderr; the client checks for
 it so a mistyped flag is not mistaken for a pause.
+`TaskRun.respond_operational()` uses the separate AutoResolver response command;
+an operational request cannot be answered with `TaskRun.answer()`.
 `TaskRun.accept_transport_change()` uses the explicit transport-change command
 after a person inspects the new route and the saved run reports
 `PAUSED_TRANSPORT_CHANGED`.

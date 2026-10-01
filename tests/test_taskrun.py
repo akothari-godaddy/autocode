@@ -174,6 +174,15 @@ class TaskRunTests(unittest.TestCase):
 
 
 class TaskRunClientTests(unittest.TestCase):
+    def test_operational_response_uses_resolver_command_not_question_answer(self):
+        run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
+        with patch.object(run, '_act', return_value={'needs': {'kind': 'resume'}}) as act:
+            view = run.respond_operational('request-1', 'token-1', 'Cause identified')
+        act.assert_called_once_with('resolver response', '--resolver-request', 'request-1',
+                                    '--resolver-token', 'token-1', '--resolver-response',
+                                    'provide_information', '--resolver-message', 'Cause identified')
+        self.assertEqual('resume', view['needs']['kind'])
+
     def test_accept_transport_change_requires_explicit_cli_flag(self):
         run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
         with patch.object(run, '_invoke') as invoke, patch.object(run, 'status', return_value={}) as status:

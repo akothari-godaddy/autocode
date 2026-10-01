@@ -119,6 +119,12 @@ class TaskRun:
         token_args = ("--resolver-token", resolver_token) if resolver_token is not None else ()
         return self._act("answer", "--answer", f"{question_id}={text}", *token_args)
 
+    def respond_operational(self, request_id: str, request_token: str, text: str) -> dict:
+        """Send corrective information to the published AutoResolver request."""
+        return self._act("resolver response", "--resolver-request", request_id,
+                         "--resolver-token", request_token, "--resolver-response",
+                         "provide_information", "--resolver-message", text)
+
     def approve_plan(self, token: str) -> dict:
         return self._act("approve plan", "--approve-goal", token)
 
