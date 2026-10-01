@@ -28,9 +28,7 @@ def main(argv=None):
                     fields = []
                     if not name:
                         fields.append("name")
-                    bounded_age = age.lstrip("0") or "0"
-                    if (not re.fullmatch(r"[0-9]+", age) or len(bounded_age) > 3
-                            or int(bounded_age) > 130):
+                    if not re.fullmatch(r"[0-9]+", age) or not 0 <= int(age) <= 130:
                         fields.append("age")
                     if not re.fullmatch(r"[^@\s]+@[^@\s]+", email):
                         fields.append("email")

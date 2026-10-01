@@ -38,6 +38,16 @@ class HiddenCsvTests(unittest.TestCase):
         for email in ["@", "a@", "@b", "a@b@c", "a b@c", "a@b c"]:
             self.assert_result(f'name,age,email\nUser,20,{email}\n',1,{"rows":1,"errors":[{"row":2,"fields":["email"]}]})
 
+    def test_long_ascii_age_is_a_row_error_and_long_zero_padding_is_valid(self):
+        # Validating a bounded age must not depend on Python's decimal conversion
+        # limit: both long invalid numbers and valid zero padding are ordinary data.
+        for age, invalid in (("9" * 5000, True), ("0" * 5000 + "131", True),
+                             ("0" * 5000, False), ("0" * 5000 + "130", False)):
+            with self.subTest(invalid=invalid, suffix=age[-3:]):
+                errors = [{"row": 2, "fields": ["age"]}] if invalid else []
+                self.assert_result(f'name,age,email\nUser,{age},u@d\n', int(invalid),
+                                   {"rows": 1, "errors": errors})
+
     def test_fatal_errors_never_print_partial_result(self):
         for raw in [None,b'\xff', '', 'name,age\n', 'name,age,email,extra\n', 'name,age,email\nA,2,a@b\n"unterminated']:
             p=self.invoke(raw)

@@ -135,6 +135,19 @@ def artifact_review_request(state, decision, current):
         {**row, "status": "verified"} if row["id"] in human else row
         for row in decision.get("acceptance_criteria", [])]}
     if not completion_ready(state, probe, current, require_human_reviews=False):
+        # Missing human-row prose must be repaired, not turned into another validation
+        # task. Test eligibility with the real Validator references in an ephemeral
+        # probe; never accept this substitute as the owner's report or human approval.
+        refs = {row["id"]: row.get("evidence_refs", []) for row in validation.get("criterion_results", [])}
+        empty = {row["id"] for row in probe["acceptance_criteria"]
+                 if row["id"] in human and not row.get("evidence", "").strip()}
+        repair_probe = {**probe, "acceptance_criteria": [
+            {**row, "evidence": ", ".join(refs.get(row["id"], []))} if row["id"] in empty else row
+            for row in probe["acceptance_criteria"]]}
+        if empty and completion_ready(state, repair_probe, current, require_human_reviews=False):
+            raise ValueError("Human-review decision lacks current validation evidence for " + ", ".join(sorted(empty))
+                             + ": cite the existing Validator evidence while leaving human acceptance unverified; "
+                               "do not invent a user approval or request another validation solely for human acceptance")
         return None
     return {"kind": "human_review", "criteria": missing,
             "decision_needed": "Review the current artifact and explicitly approve the listed criteria",
