@@ -5,6 +5,8 @@ commands or backtick snippets explicitly requested for execution. Quoted
 documentation examples are not commands. Imports only the standard library.
 """
 from pathlib import Path, PurePosixPath
+import hashlib
+import json
 import re
 import shlex
 
@@ -73,6 +75,31 @@ def approved_commands(state):
     methods += [row.get("verification_method", "") for row in body.get("acceptance_criteria") or []
                 if not row.get("human_review") and (not ids or row.get("id") in ids)]
     return list(dict.fromkeys(command for method in methods for command in commands(method)))
+
+
+def product_checks(body, required_checks):
+    """Retain prescribed product commands once their full-verification target is due.
+
+    Contribution-only slices do not bring future product commands forward.
+    Explicit original methods cannot disappear merely because a slice declares
+    a different demonstration. Prose methods remain with the independent
+    Validator, as on the ordinary path; no command is guessed from them.
+    """
+    due = {criterion for check in required_checks if check.get("relation") == "fully_verify"
+           for criterion in check.get("criterion_ids", [])}
+    checks = []
+    for criterion in body.get("acceptance_criteria", []):
+        method = criterion.get("verification_method", "")
+        if criterion["id"] not in due or criterion.get("human_review") or not commands(method):
+            continue
+        represented = {command for check in required_checks if criterion["id"] in check.get("criterion_ids", [])
+                       for command in commands(check.get("method", ""))}
+        if set(commands(method)) <= represented:
+            continue
+        identity = hashlib.sha256(json.dumps(criterion, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        checks.append({"id": "contract-" + identity[:24], "method": method, "relation": "fully_verify",
+                       "criterion_ids": [criterion["id"]], "origin": "product_contract"})
+    return checks
 
 
 def package_markers(command):
