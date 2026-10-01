@@ -167,8 +167,10 @@ class TaskRun:
         # Advancing exits 0 when complete and 2 when stopped for input. Usage errors
         # also exit 2, so recognize argparse's message rather than trusting the code.
         usage_error = proc.returncode == 2 and proc.stderr.startswith("usage:")
+        rejected_input = proc.returncode == 2 and any(
+            message.startswith("Input rejected:") for message in (proc.stdout, proc.stderr))
         accepted = proc.returncode in (0, 2) if advancing else proc.returncode == 0
-        if usage_error or not accepted:
+        if usage_error or rejected_input or not accepted:
             detail = (proc.stderr or proc.stdout).strip()[-800:]
             raise TaskRunError(f"{name} exited {proc.returncode}: {detail}")
         return proc

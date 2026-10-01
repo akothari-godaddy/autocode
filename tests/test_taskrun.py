@@ -188,6 +188,15 @@ class TaskRunTests(unittest.TestCase):
 
 
 class TaskRunClientTests(unittest.TestCase):
+    def test_advancing_command_rejects_input_error_instead_of_treating_it_as_a_pause(self):
+        run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
+        rejected = subprocess.CompletedProcess([], 2,
+                                               stdout='Input rejected: pending report repair must be reconciled\n',
+                                               stderr='')
+        with patch.object(taskrun.subprocess, 'run', return_value=rejected), \
+                self.assertRaisesRegex(taskrun.TaskRunError, 'pending report repair'):
+            run._invoke('retry failed stage', '--resume-paused', '--retry-failed-stage', advancing=True)
+
     def test_retry_failed_stage_uses_explicit_inspected_retry(self):
         run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
         with patch.object(run, '_invoke') as invoke, patch.object(run, 'status', return_value={}) as status:
