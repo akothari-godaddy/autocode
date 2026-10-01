@@ -44,6 +44,10 @@ The clean copy is the repository's source only: no ignored files and no .autocod
 runner's own executed evidence: cite its verdict and source_revision directly, never a command that reads it.
 The runner also executes explicit commands from the approved verification methods and current_task.validation_plan;
 another successful command cannot replace them. Empty Python test bodies cannot establish behavioral coverage.
+Keep every scratch copy and test artefact inside the workspace under .autocode/ (for example .autocode/scratch/);
+the runner's changed-file measurement ignores .autocode/. Never use /tmp, mktemp or any path outside the
+workspace: the provider sandbox denies external directories and the whole attempt is lost (a live run paused
+after three such denials, 2026-10-01).
 For an unbounded integer contract, test 2**63-1, 2**63, and 10**5000 (plus large negative values when valid),
 including persistence, arithmetic and invalid/stale identifiers. Check that SQLite neither overflows bindings
 nor promotes exact arithmetic to REAL. Decimal conversion limits must not reject otherwise valid integers.

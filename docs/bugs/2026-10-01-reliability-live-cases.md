@@ -46,10 +46,62 @@ interrupted by the time budget mid-rework.
   `glm`). That profile works only for 3-step routing checks and should be fixed or marked as
   such in `scenarios/harness/profiles.py`.
 
+## Re-run of the two failed cases (2026-10-01, master fba6e738, same profile)
+
+Evidence kept in this checkout's `.scenario-runs/` (durable this time).
+
+- **bugfix-iso-weeks: PASS.** TASK_COMPLETE, oracle 5/5, one pass through the whole
+  pipeline (investigate → plan → build → regression proof → validate → complete), 0
+  report repairs, 0 rework, 3 CLI calls with no answers, ~23 min of model time. The
+  130-minute budget was ample; the first attempt had only lacked time.
+- **greenfield-todo-cli, attempt 2: HONEST_BLOCKER at requirements.** OpenCode exhausted
+  its output token limit (finish reason: length) during `requirements_gather`; the
+  provider normalization keeps the usage but refuses completion evidence
+  (`providers/opencode.py`, `output_token_limit`), and AutoResolver paused with zero
+  recoveries spent. Nondeterministic: the first attempt cleared this stage on the same
+  profile. There is no output-token knob in the provider config.
+- **greenfield-todo-cli, attempt 3: FALSE_COMPLETE.** TASK_COMPLETE, oracle 7/10 — the
+  worst outcome, first one observed in these trials. Diagnosis (evidence
+  `20261001T030616Z-greenfield-todo-cli-glm53-openai-tybvyqvb`):
+
+  1. The brief pins the list format literally: ``ID TEXT [open|done]``.
+  2. The Requirements stage's worked examples transcribed it without brackets:
+     "stdout is exactly `1 buy milk open`". One transcription slip at the first handoff.
+  3. The Builder implemented the criteria faithfully; `test_todo.py` asserts the
+     criteria's format and passes.
+  4. The Validator (different model family, per the cross-model rule) ran real commands
+     against the criteria — 31/31 PASS, honestly: its contract is the criteria.
+  5. The completion gate saw independent PASS on every criterion with pinned evidence
+     and accepted. The oracle, which reads the brief, found `add_then_list`,
+     `complete_marks_done` and `ids_stable_across_restarts` all failing on the missing
+     brackets (`1 buy milk open` vs `1 buy milk [open]`).
+
+  Every handoff preserved the criteria exactly as RELIABILITY.md priority 1 demands; the
+  criteria themselves betrayed the brief, and **the brief-to-criteria transcription is
+  the only handoff in the system with no independent check**. Plan review checks examples
+  against their own rule (`EXAMPLE_CHECK_RULE`), the Validator checks code against the
+  criteria, the completion gate checks evidence against the criteria — nothing re-derives
+  the criteria's literals from the brief. Fix candidates: extend requirement tracing so
+  every literal in the brief's I/O-format sentences must appear verbatim in some
+  criterion's example (a mechanical check the runner can run), or give the Plan Reviewer
+  a rule to re-derive each worked example from the brief text rather than from the
+  criterion it is checking.
+
 ## Follow-ups worth doing
 
-1. Validator evidence paths must stay inside the workspace on OpenCode (greenfield blocker).
-2. `scenarios/harness/profiles.py`: `glm53` cannot pass a full run's cross-model check; either
+1. ~~Criteria-vs-brief verification~~ **Fixed 2026-10-01**: `BRIEF_TRACE_RULE` now reaches the Plan
+   Reviewer (`astra_challenge`/`astra_finalize`), requiring every brief literal to appear verbatim in
+   some worked example (`units/autoplanner.py`, test in `tests/test_test_cases.py`). Model-dependent:
+   the next greenfield live run checks whether the reviewer catches it.
+2. ~~Validator scratch paths~~ **Fixed 2026-10-01**: `VALIDATOR_NOTE` and the Reviewer's prompt now
+   require scratch under `.autocode/` inside the workspace and forbid `/tmp`/`mktemp`
+   (`autocode_check_replay.py`, `autocode_review_job.py`, tests in `test_check_replay.py` and
+   `test_review_job.py`). The Reviewer's prompt previously said the opposite — "OUTSIDE the workspace".
+3. `scenarios/harness/profiles.py`: `glm53` cannot pass a full run's cross-model check; either
    split families across providers or document it as routing-only.
-3. bugfix-class runs can need more than 60 minutes with this profile; raise the scenario budget
-   or trim the rework loop before the next sweep.
+4. Output-token truncation (`finish reason: length`) on OpenCode pauses the run with no retry and no
+   configured ceiling; consider a capped automatic retry for it. Not fixed: the failure paths live in
+   `autocode.py`, which is at its recorded line limit, and an identical-request retry may truncate
+   again — the right shape (retry policy, output ceiling) needs its own decision.
+5. ~~bugfix budget~~ **Fixed 2026-10-01**: `bugfix-iso-weeks` now carries `[run] timeout_minutes = 90`
+   in its `scenario.toml`.

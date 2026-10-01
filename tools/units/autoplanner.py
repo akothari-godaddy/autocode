@@ -124,6 +124,19 @@ and the request: count the items in a range, do the arithmetic, apply the stated
 to the example's inputs. An example whose stated result does not follow is a blocking concern naming the
 correct result: no implementation can satisfy both the rule and the example.
 """
+# A live greenfield run (2026-10-01, docs/bugs/2026-10-01-reliability-live-cases.md) transcribed the brief's
+# literal "ID TEXT [open|done]" into examples without the brackets; the Builder, the tests, the Validator and
+# the completion gate then all honestly served the corrupted criteria and the run completed falsely. Every
+# other handoff has an independent check; the brief-to-criteria transcription had none.
+BRIEF_TRACE_RULE = """
+CHECK EVERY EXAMPLE AGAINST THE BRIEF: re-read the user's brief and re-derive each worked example's literal
+result from the brief's own words, not from the criterion next to it. Every literal the brief states — an
+exact output format, a field name, an exit code, a file name, an error name — must appear verbatim in at
+least one example. An example whose literal drops, normalizes or rewrites what the brief states is a
+blocking concern quoting the brief's sentence and the example's deviation: the plan review approves
+criteria against the brief, and whatever literal the criteria carry will be built, tested, validated and
+completed exactly as written. An example consistent with its own rule but not with the brief is still wrong.
+"""
 # A live cent-drift plan (2026-09-30) required a 175,712-cart enumeration to "finish in under about 10 seconds". The
 # Builder asserted elapsed time, the test took 10.39 s on a loaded machine, and the run stopped after two retries
 # with correct billing code: no code change could make the criterion hold.
@@ -928,6 +941,7 @@ def context(state, stage, state_path):
     if stage != "requirements_gather":
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
         design_rule += EXAMPLE_CHECK_RULE if stage in ("astra_challenge", "astra_finalize") else ""
+        design_rule += BRIEF_TRACE_RULE if stage in ("astra_challenge", "astra_finalize") else ""
         design_rule += NO_TIMING_RULE
     if rows:
         design_rule += REQUIREMENT_TRACE_RULE

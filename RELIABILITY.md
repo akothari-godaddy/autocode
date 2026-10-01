@@ -49,6 +49,25 @@ reviews are satisfied, and the dashboard reflects the saved result. Missing evid
 stays unverified. Claims of dependable project completion require these live trials;
 passing fixture tests alone does not establish model effectiveness.
 
+Re-run of the two failed cases (2026-10-01, master fba6e738, same profile, 90/130-minute
+budgets; same note for details):
+
+- Bug fix (bugfix-iso-weeks): **passed** — TASK_COMPLETE, oracle 5/5, one pass through the
+  whole pipeline (investigate → plan → build → regression proof → validate → complete), no
+  repairs, no rework, no interventions. The first attempt had only lacked time.
+- Small new application (greenfield-todo-cli): **failed as a false completion** — the run
+  reported TASK_COMPLETE, oracle 7/10. A second attempt had stopped earlier at requirements
+  (OpenCode output-token truncation, nondeterministic). Root cause of the false completion:
+  the Requirements stage's worked examples transcribed the brief's literal `ID TEXT
+  [open|done]` output format without the brackets; the Builder, tests, Validator and
+  completion gate then all worked from the corrupted criteria, each honestly. The
+  brief-to-criteria transcription is the one handoff with no independent check.
+
+Standing tally: feature and bug-fix cases pass end to end; the greenfield case has passed
+neither of its distinct blockers (validator sandbox paths, criteria transcription). One
+false completion has occurred, and it came through the requirements boundary, not the
+build or validation boundaries.
+
 First run of the three cases (2026-10-01, master 68e89aa4, profile glm53-openai:
 GLM-5.3 producers on the Z.AI plan, GPT-6 verifiers on OpenCode's ChatGPT login;
 details in docs/bugs/2026-10-01-reliability-live-cases.md):
@@ -63,6 +82,3 @@ details in docs/bugs/2026-10-01-reliability-live-cases.md):
 - Bug fix (bugfix-iso-weeks): **not passed** — the fix was correct (oracle 5/5) but the
   scenario's 60-minute budget expired while AutoResolver's rework loop was still
   running. Budget, not correctness, ended it.
-
-No case produced a false completion. Two of the three blockers are product fixes, not
-model failures; rerun both cases after they land.
