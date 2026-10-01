@@ -19,13 +19,13 @@ try:
     from . import autocode_evidence_snapshot as evidence_snapshot
     from .autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                 model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
-    from . import autocode_receipts as receipts
+    from . import autocode_receipts as receipts, autocode_usage as token_usage
 except ImportError:
     from autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     import autocode_evidence_snapshot as evidence_snapshot
     from autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
-    import autocode_receipts as receipts
+    import autocode_receipts as receipts, autocode_usage as token_usage
 
 
 def duplicate_runner_command(command):
@@ -115,7 +115,7 @@ def event_metrics(path):
     usage = {k: sum(u[k] for u in usages) if usages and all(k in u for u in usages) else None for k in keys}
     return {"provider_tokens": usage,
             "provider_requests": None, "provider_retries": None,
-            "completed_turns": len(completed), "headroom_transformed": None}
+            "completed_turns": len(completed), "headroom_transformed": None, "provider_cost_usd": token_usage.reported_cost(rows)}
 
 
 def enforce_reported_token_limit(state):
