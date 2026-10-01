@@ -467,7 +467,13 @@ def automatically_recover_external_directory_denial(state, run_dir, workspace, e
                 "stage": record["stage"], "source_revision": after["revision"],
                 "changed_files": record["changed_files"], "events": record["events"],
                 "source_snapshot": record["after_ref"], "next_stage": next_stage,
-                "instruction": "The prior request was stopped by OpenCode's external_directory permission. Use only workspace-contained evidence paths; do not use /tmp, default mktemp paths, nohup, or detached processes. Inspect retained work and start a fresh request."}
+                "instruction": f"The prior request was stopped by OpenCode's external_directory permission. "
+                    f"The exact workspace root is {workspace}. Use source-relative shell paths there; "
+                    "derive absolute file-tool paths from that exact root, never from a guessed run name. "
+                    "A mistyped project path is still outside the allowed workspace: inspect the requested "
+                    "path and correct it rather than repeating it or requesting broader permissions. "
+                    "Use only workspace-contained evidence paths; do not use /tmp, default mktemp paths, "
+                    "nohup, or detached processes. Inspect retained work and start a fresh request."}
     records.count_automatic_recovery(state)
     state.setdefault("automatic_permission_recoveries", []).append(recovery)
     state.setdefault("user_events", []).append({"kind": "automatic_permission_recovery", "actor": "runner",

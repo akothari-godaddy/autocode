@@ -746,10 +746,10 @@ def apply_review_result(runtime, state, stage, value, record, workspace, run_dir
     validation = {**value, "evidence_hashes": pins, "criteria_revision": state["criteria_revision"],
                   "source_revision": record["source_revision"], "output": record["output"],
                   "reviewer_role": record.get("role", stage)}
-    if value["verdict"] == "PASS" and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):
-        raise ValueError("Validator PASS lacks successful executed checks: list each check you ran, with its exit code")
     human_pending = modern and any(goals.human_only_pending_validation(state, value, c["id"])
                                   for c in state["goal_contract"]["body"]["acceptance_criteria"] if c["human_review"])
+    if (value["verdict"] == "PASS" or human_pending) and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):
+        raise ValueError("Technically passing validation lacks successful executed checks: list each check you ran, with its exit code")
     validation["check_replay"] = (check_replay.replay(value["checks"], workspace, run_dir, record, verify.scratch_run, approved_state=state)
                                   if value["verdict"] == "PASS" or human_pending else None)
     if state.get("validation"):
