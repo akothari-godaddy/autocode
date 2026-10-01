@@ -1214,13 +1214,13 @@ Agent assumptions and unrelated user events cannot resolve a conflict. Carry gen
 unresolved conflicts into open_blocking_questions; do not ask again for a saved decision.
 When revising, copy required_behaviors, scope_exclusions, constraints, important_failure_cases, acceptance_criteria (including verification
 methods), and permission_boundaries verbatim from goal_contract.body. In a draft without an approval receipt,
-you may correct only a planner-generated verification_method that was never approved or user-set, retaining
+you may correct a planner-generated verification_method that was never approved or user-set, retaining
 exact behavior, ID and human_review. Test:/guard: proofs cannot become prose or suite commands without a saved user basis.
 An unapproved planner draft may add human review. Approved/user-set review changes and removals need a saved basis.
 Use contract_changes=[] only for allowed draft corrections. Add new
 items when review identifies a gap; revise technical_approach, milestones, paths,
 tests and dependencies as needed. Do not rewrite an existing protected item for
-style or detail. A changed or removed protected item requires a saved user answer
+style or detail. Except numeric draft stdout repairs with a reviewer receipt, changes need a saved user answer
 or feedback event and an exact contract_changes entry naming the previous item.
 Use contract_changes=[] when those protected fields are unchanged. Reviewer
 concerns and agent proposals are not saved user authorization.
