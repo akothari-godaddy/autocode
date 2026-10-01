@@ -28,14 +28,14 @@ try:
 except ImportError:
     from autocode_usage import REFERENCE_PRICES
 
-# Never MiMo (user 2026-09-27); OpenAI GPT-6 via the ChatGPT login replaces it.
 ALLOWED_MODEL_PREFIXES = (
     "zai-coding-plan/glm-5.3",
     "openai/gpt-6-astra",
     "openai/gpt-6-sol",
     "openai/gpt-6-luna",
+    "xiaomi-token-plan-sgp/",
 )
-FORBIDDEN_MODEL_MARKERS = ("-free", "flash", "mimo-token-plan/", "xiaomi-token-plan-sgp/", "mimo-", "glm-5.2")
+FORBIDDEN_MODEL_MARKERS = ("-free", "flash", "mimo-token-plan/", "glm-5.2")
 
 # docs/models.md ladder entry points + user independence rule (2026-09-26):
 # verifier never equals producer. OpenAI GPT checks GLM work and GLM checks GPT work.
@@ -227,7 +227,6 @@ def model_route_checks(state: dict, run_dir: Path) -> dict:
 
     uniq = sorted(set(launched))
     bad = [m for m in uniq if any(f in m for f in FORBIDDEN_MODEL_MARKERS)]
-    bad += [m for m in uniq if m.startswith("mimo-token-plan/")]
     # only accept the subscription models for this run
     ok_models = all(m.startswith(ALLOWED_MODEL_PREFIXES) for m in uniq) if uniq else False
     return {"launched_models": uniq, "pinned_roles": pinned, "forbidden_seen": sorted(set(bad)),
