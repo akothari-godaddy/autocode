@@ -30,13 +30,6 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description="Validate contact CSV")
     parser.add_argument("path")
     args = parser.parse_args(argv)
-    limit = sys.maxsize
-    while True:
-        try:
-            csv.field_size_limit(limit)
-            break
-        except OverflowError:
-            limit //= 10
     try:
         with open(args.path, encoding="utf-8", newline="") as source:
             reader = csv.reader(strict_quoted_lines(source), strict=True)

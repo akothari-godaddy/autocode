@@ -12,7 +12,7 @@ try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
     from .. import autocode_stage_context as stage_context, autocode_acceptance_policy as acceptance_policy
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
-    from .. import autocode_follow_up as follow_up, autocode_adaptive_planning as adaptive
+    from .. import autocode_follow_up as follow_up, autocode_adaptive_planning as adaptive, autocode_draft_examples as examples
 except ImportError:
     import autocode_acceptance_policy as acceptance_policy
     import autocode_test_cases as test_cases
@@ -24,6 +24,7 @@ except ImportError:
     import autocode_follow_up as follow_up
     import autocode_workflows as workflows
     import autocode_adaptive_planning as adaptive
+    import autocode_draft_examples as examples
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
 # A build that implements an approved design (autocode_design_check_job) skips requirements
@@ -171,9 +172,9 @@ SOURCE CITATIONS: code_refs contains existing repository source paths, optionall
 state file, .autocode/ artifact, cache, or explanatory sentence. state_file is context to read, not source
 to cite. Read the workspace_inventory candidates; a citation repair changes citations, not requirements.
 SETTLED REQUIREMENTS: preserve literal inputs and outputs from the task, approved design and saved answers.
-Create examples that match those literals. During a revision, protected criterion changes require a saved
-user answer or feedback entry and contract_changes; do not claim an original-request exception to that guard.
-Verification changes follow the same narrow draft-proof policy. Gather remaining decisions before drafting;
+Create examples that match those literals. The DRAFT EXAMPLE CORRECTIONS rule is the sole exception for
+numeric stdout in model-written drafts; other protected criterion changes need a saved user basis and delta.
+Verification changes follow the narrow draft-proof policy. Gather remaining decisions before drafting;
 do not reopen answered questions or invent extra clarification cycles for report wording.
 Keep existing test names and assertions. A planned case needs a separate new test if matching its id
 would otherwise require renaming an existing test; a guard must keep the original coverage as well.
@@ -260,6 +261,7 @@ CONFLICT_RESOLUTION = obj({"requirement_ids": SS,
 CHANGE = obj({"item": S, "change": {"type": "string", "enum": ["removed", "reworded", "permission_changed"]},
               "basis": {"type": "string", "enum": ["user_answer", "user_feedback", "agent_proposed"]},
               "answer_id": S, "replacement": S})
+CHANGE["properties"]["example_correction"] = examples.RECEIPT_SCHEMA
 TRACE = obj({"requirement_id": S, "disposition": {"type": "string", "enum": ["covered", "excluded", "superseded"]},
              "evidence": S})
 # New reports use the structured form; this is also the generation schema, so
@@ -915,7 +917,7 @@ def context(state, stage, state_path):
         import autocode_figma as figma
     figma_instruction = figma.instructions(state["settings"])
     planning_policy = "" if stage == "requirements_gather" else (
-        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + s.MILESTONE_POLICY + EVIDENCE_FACTS
+        goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + examples.RULE + s.MILESTONE_POLICY + EVIDENCE_FACTS
         + ("" if stage in ("astra_challenge", "plan_review") else CONTRACT_FIELDS_RULE))
     if stage != "requirements_gather":
         packet["capture_command"] = capture_command()
