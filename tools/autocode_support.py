@@ -317,12 +317,21 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
             matches = [e["item"] for e in rows
                        if e.get("type") == "item.completed" and e.get("item", {}).get("id") == event_id
                        and e["item"].get("type") == "command_execution"]
-            if (len(matches) == 1 and isinstance(matches[0].get('command'), str)
-                    and same_command(matches[0]['command'], check['command'])
-                    and type(matches[0].get('exit_code')) is int
-                    and (missing_exit or matches[0]['exit_code'] == check['exit_code'])):
-                check['exit_code'] = matches[0]['exit_code']
-                continue
+            if len(matches) == 1 and isinstance(matches[0].get('command'), str):
+                executed = matches[0]['command']
+                same = same_command(executed, check['command'])
+                prefix = f"cd {shlex.quote(str(Path(workspace).resolve()))} && "
+                if not same and executed.startswith(prefix):
+                    body = executed[len(prefix):]
+                    if body.endswith(' 2>&1'):
+                        body = body[:-5]
+                    same = body == check['command']
+                    if same:
+                        check['command'] = executed
+                if (same and type(matches[0].get('exit_code')) is int
+                        and (missing_exit or matches[0]['exit_code'] == check['exit_code'])):
+                    check['exit_code'] = matches[0]['exit_code']
+                    continue
             # Models sometimes cite conversation call ids that never occur in events;
             # accept a unique executed command+exit match and record the real event id.
             if not matches:
