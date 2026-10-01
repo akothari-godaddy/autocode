@@ -114,6 +114,12 @@ class TaskRun:
                      "--no-chat", advancing=True)
         return self.status()
 
+    def retry_failed_stage(self) -> dict:
+        """Authorize one inspected retry of a repeated failed stage."""
+        self._invoke("retry failed stage", "--resume-paused", "--retry-failed-stage",
+                     "--no-chat", advancing=True)
+        return self.status()
+
     def bind_dependency(self, specification: Path) -> dict:
         return self._act("bind dependency", "--bind-dependency", str(specification))
 

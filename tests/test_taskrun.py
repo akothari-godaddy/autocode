@@ -188,6 +188,14 @@ class TaskRunTests(unittest.TestCase):
 
 
 class TaskRunClientTests(unittest.TestCase):
+    def test_retry_failed_stage_uses_explicit_inspected_retry(self):
+        run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
+        with patch.object(run, '_invoke') as invoke, patch.object(run, 'status', return_value={}) as status:
+            run.retry_failed_stage()
+        invoke.assert_called_once_with('retry failed stage', '--resume-paused', '--retry-failed-stage',
+                                       '--no-chat', advancing=True)
+        status.assert_called_once()
+
     def test_retry_report_uses_exact_attempt_and_explicit_resume(self):
         run = taskrun.TaskRun(Path('/work/repo'), Path('/work/repo/.autocode/runs/one'))
         with patch.object(run, '_invoke') as invoke, patch.object(run, 'status', return_value={}) as status:
