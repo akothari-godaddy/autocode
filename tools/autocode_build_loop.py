@@ -17,7 +17,7 @@ try:
     from . import autocode_interventions as interventions
     from . import autocode_milestones as milestones
     from . import autocode_planning as planning
-    from . import autocode_regression as regression
+    from . import autocode_regression as regression, autocode_provider_recovery as provider_recovery
     from . import autocode_resolver_runtime as resolver_runtime
     from . import autocode_support as support
     from . import autocode_workflow as workflow
@@ -30,7 +30,7 @@ except ImportError:
     import autocode_interventions as interventions
     import autocode_milestones as milestones
     import autocode_planning as planning
-    import autocode_regression as regression
+    import autocode_regression as regression, autocode_provider_recovery as provider_recovery
     import autocode_resolver_runtime as resolver_runtime
     import autocode_support as support
     import autocode_workflow as workflow
@@ -147,6 +147,8 @@ def run(runner, args, state, state_path, run_dir, workspace):
         except runner.ReportRepairQueued:
             return runner.orchestrator.SKIP
         except support.Paused as error:
+            if provider_recovery.recover_startup(runner, current, run_dir, workspace, error):
+                return runner.orchestrator.SKIP
             capacity_recovered = runner.automatically_recover_capacity_stage(current, run_dir, workspace, error)
             if capacity_recovered:
                 recovery = current["recovery_context"]
