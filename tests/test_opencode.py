@@ -433,12 +433,13 @@ class OpenCodeFlow(unittest.TestCase):
         self.assertIn("ChatGPT login · subscription", result.stdout)
         self.assertRegex(result.stdout, r"openai/gpt-6-sol +strong judge +default for Plan Reviewer, Validator, "
                                         r"Completion Owner")
-        self.assertIn("1 free, flash or MiMo route is not offered.", result.stdout)
+        self.assertNotIn("MiMo route is not offered.", result.stdout)
+        self.assertIn("xiaomi-token-plan-sgp/mimo-v2.6-pro", result.stdout)
         self.assertIn("Every default route can be used:", result.stdout)
         result = models("api")
         self.assertEqual(1, result.returncode, result.stderr)
         self.assertIn("OpenAI via api · not used: AutoCode bills OpenAI only through the ChatGPT login", result.stdout)
-        self.assertIn("Validator (--sol-model): openai/gpt-6-sol → choose one from the list", result.stdout)
+        self.assertIn("Validator (--sol-model): openai/gpt-6-sol → xiaomi-token-plan-sgp/mimo-v2.6-pro", result.stdout)
 
     def test_standalone_cli_full_interview_approval_review_and_completion(self):
         self.launch(["Greeting tool", "--chat"], 0, answers="CLI\nyes\nyes\n")
