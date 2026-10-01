@@ -103,3 +103,40 @@ def completion_ready(state, decision, current, *, require_human_reviews=True, re
     if not regression.complete(state, current["revision"]):
         return False  # a bug fix needs the runner's passing regression proof for this exact source
     return all(Path(p).is_file() and file_hash(p) == h for p, h in pins.items())
+
+
+def artifact_review_request(state, decision, current):
+    """Offer human acceptance when a conservative owner asks to validate only that gap.
+
+    The probe tests the existing completion gate; it never changes the saved report,
+    validation or human events. A human criterion's automated evidence is sufficient
+    to *present* review, but only a user's bound receipt can satisfy acceptance.
+    """
+    try:
+        from . import autocode_goals as goals
+    except ImportError:
+        import autocode_goals as goals
+    if decision.get("status") == "CONTINUE":
+        if (decision.get("next_task") or {}).get("kind") != "validate":
+            return None  # never suppress an implementation or correction task
+    elif decision.get("status") not in ("COMPLETE", "TASK_COMPLETE"):
+        return None
+    missing = goals.missing_human_reviews(state)
+    if not missing:
+        return None
+    validation = state.get("validation") or {}
+    replay = validation.get("check_replay") or {}
+    if replay.get("verdict") != "PASS" or replay.get("source_revision") != current["revision"]:
+        return None
+    human = {row["id"] for row in state["goal_contract"]["body"]["acceptance_criteria"] if row["human_review"]}
+    # The owner may correctly leave human acceptance unverified. Keep that report
+    # unchanged, while checking every technical guard through the normal gate.
+    probe = {**decision, "status": "TASK_COMPLETE", "acceptance_criteria": [
+        {**row, "status": "verified"} if row["id"] in human else row
+        for row in decision.get("acceptance_criteria", [])]}
+    if not completion_ready(state, probe, current, require_human_reviews=False):
+        return None
+    return {"kind": "human_review", "criteria": missing,
+            "decision_needed": "Review the current artifact and explicitly approve the listed criteria",
+            "impact": "Completion requires the declared human acceptance of this validated artifact",
+            "options": [], "discovered": "Independent evidence passed; human review remains", "proposed_delta": ""}

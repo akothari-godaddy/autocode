@@ -28,8 +28,10 @@ from pathlib import Path
 
 try:
     from . import autocode_verification_plan as verification_plan, autocode_test_quality as test_quality
+    from . import autocode_acceptance_policy as acceptance_policy
 except ImportError:
     import autocode_verification_plan as verification_plan, autocode_test_quality as test_quality
+    import autocode_acceptance_policy as acceptance_policy
 
 PASS, FAIL = "PASS", "FAIL"
 # Told to the Validator with every request. A live Validator showed "fails without __init__.py" as a check
@@ -48,12 +50,9 @@ Keep every scratch copy and test artefact inside the workspace under .autocode/ 
 the runner's changed-file measurement ignores .autocode/. Never use /tmp, mktemp or any path outside the
 workspace: the provider sandbox denies external directories and the whole attempt is lost (a live run paused
 after three such denials, 2026-10-01).
-For an unbounded integer contract, test 2**63-1, 2**63, and 10**5000 (plus large negative values when valid),
-including persistence, arithmetic and invalid/stale identifiers. Check that SQLite neither overflows bindings
-nor promotes exact arithmetic to REAL. Decimal conversion limits must not reject otherwise valid integers.
 Probe mixed-type numeric interactions. For staged/transactional operations inject failures after work begins:
 assert the public error contract, unchanged persistent state and complete cleanup across failure modes.
-"""
+""" + acceptance_policy.DOMAIN + acceptance_policy.COVERAGE
 # A Validator closed a proof-linked finding with a check that read the proof from .autocode/, twice
 # (fix run B, 2026-09-29); each replay failed and the run paused. The rejection says why.
 RUN_FILES_HINT = (" The clean copy has no .autocode/, so a check that reads run files cannot pass there: drop it, "
