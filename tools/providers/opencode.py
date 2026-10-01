@@ -339,7 +339,7 @@ def normalized_events(rows):
     # A stream that ends on a "tool-calls" finish stopped mid-turn: the model asked
     # for tools and no later step followed (the process exited, for example after
     # every call was auto-rejected). Like "length", it is a failed turn whose
-    # reported usage is kept, so the reported-token cap stays enforceable.
+    # Reported usage is retained for accounting, including cached input.
     if (steps and phases[-1].get("type") == "step_finish"
             and steps[-1].get("reason") in ("stop", "length", "tool-calls")):
         def total(field, subfield=None):

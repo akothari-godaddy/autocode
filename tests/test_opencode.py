@@ -127,7 +127,7 @@ class OpenCodeTests(unittest.TestCase):
         # A stream ending on a tool-calls finish (the process exited between the
         # model's tool calls and their results, e.g. every call auto-rejected as
         # an external directory) consumed real tokens without completing a turn.
-        # Usage must survive or the runner cannot enforce a reported-token cap.
+        # Usage must survive for accurate accounting.
         denied = event("tool_use", tool="read", state={"status": "error",
                      "input": {"filePath": "/outside/workspace/typo.txt"}})
         cut = event("step_finish", reason="tool-calls", tokens={"input": 40, "output": 6, "reasoning": 4,

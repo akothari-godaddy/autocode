@@ -66,8 +66,7 @@ class AssignmentScenarios(unittest.TestCase):
         self.state["settings"].update(
             orchestration=copy.deepcopy(d.DEFAULTS), milestone_checkpoints=copy.deepcopy(m.DEFAULTS),
             engine="codex", report_repair={"max_attempts": 2},
-            limits={"iteration_ceiling": 5, "max_seconds": None, "max_reported_tokens": None,
-                    "no_progress_batches": 3, "stage_timeout_seconds": 3, "idle_timeout_seconds": 2,
+            limits={"iteration_ceiling": 5, "max_seconds": None, "no_progress_batches": 3, "stage_timeout_seconds": 3, "idle_timeout_seconds": 2,
                     "tool_timeout_seconds": 2})
         first = milestones[0]
         decision = {"status": "CONTINUE", "next_objective": first["objective"],

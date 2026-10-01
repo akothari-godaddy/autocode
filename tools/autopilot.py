@@ -1107,7 +1107,6 @@ def run(runtime, state, workspace, run_dir, args):
             raise support.Paused("PAUSED_ITERATION_LIMIT", "Saved iteration ceiling reached")
         if limits["max_seconds"] and current.get("active_seconds",0) >= limits["max_seconds"]:
             raise support.Paused("PAUSED_TIME_LIMIT", "Saved active-time limit reached at stage boundary")
-        support.enforce_reported_token_limit(current)
         if (not repairing_before_upgrade and (not milestones.enabled(current) or current.get('next_stage') in ('terra', 'orchestrator')) and limits["no_progress_batches"]
                 and current.get("no_progress_batches",0) >= limits["no_progress_batches"]):
             raise support.Paused("PAUSED_NO_PROGRESS", "Repeated unchanged implementation batches require review")

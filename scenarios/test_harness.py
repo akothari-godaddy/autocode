@@ -5,6 +5,8 @@ proves the full run path with the scripted model: a correct solution is judged
 PASS and a plausible wrong one is judged FALSE_COMPLETE.
 """
 import argparse
+import contextlib
+import io
 import ast
 import json
 import subprocess
@@ -840,6 +842,17 @@ class CompareRunTests(unittest.TestCase):
         self.assertEqual(verdict.FALSE_COMPLETE, row["baseline"]["verdict"], row["baseline"]["summary"])
         self.assertEqual(1, report["summary"]["baseline"]["false_completions"])
         self.assertEqual("autocode only", compare.outcome(row))
+
+
+class TokenBudgetOptionTests(unittest.TestCase):
+    def test_retired_token_cap_option_is_rejected_by_run_and_compare(self):
+        for command in ("run", "compare"):
+            with self.subTest(command=command), contextlib.redirect_stderr(io.StringIO()) as error:
+                with patch.object(run, "Driver") as launch, self.assertRaises(SystemExit) as caught:
+                    run.main([command, "bugfix-iso-weeks", "--fake", "--max-reported-tokens", "1"])
+                self.assertEqual(2, caught.exception.code)
+                self.assertIn("unrecognized arguments", error.getvalue())
+                launch.assert_not_called()
 
 
 if __name__ == "__main__":

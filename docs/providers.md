@@ -161,8 +161,7 @@ Changing the config file or the tool version pauses a saved run.
 - `output = "report_file"` (the default): the tool writes exactly one JSON object
   to `{report}`, as `codex exec -o` does. Every stage starts fresh. Command
   evidence is a `capture_command` receipt file, not an `event:` id. These tools
-  report no token usage, so `--max-reported-tokens` pauses with
-  `PAUSED_USAGE_UNKNOWN`.
+  report no token usage, so those counts remain unknown in the usage ledger.
 - `output = "opencode_events"`: the tool prints OpenCode-format JSON events, as
   `opencode run --format json` and `kilo run --format json` do. Autocode reads
   the final report, token usage and command exit codes from those events, and
