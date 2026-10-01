@@ -14,10 +14,18 @@ try:
     from .autocode_contract_revision import (PLANNER_ORIGINS, PROTECTED_LISTS as _PROTECTED_LISTS,
                                             revision_guard, saved_user_basis as _saved_user_basis)
     from . import autocode_util as s, autocode_workflows as workflows
+    from .autocode_contract_identity import token, sealed, approved
+    from .autocode_role_schema import USER_REQUEST, role_schema
+    from .autocode_human_review_policy import (review_token, missing_human_reviews, legacy_review_acceptance,
+        preserved_review_answers, review_binding_valid, human_only_pending_validation)
 except ImportError:
     from autocode_contract_revision import (PLANNER_ORIGINS, PROTECTED_LISTS as _PROTECTED_LISTS,
                                            revision_guard, saved_user_basis as _saved_user_basis)
     import autocode_util as s, autocode_workflows as workflows
+    from autocode_contract_identity import token, sealed, approved
+    from autocode_role_schema import USER_REQUEST, role_schema
+    from autocode_human_review_policy import (review_token, missing_human_reviews, legacy_review_acceptance,
+        preserved_review_answers, review_binding_valid, human_only_pending_validation)
 
 # The state keys under which a Resolver proposal waits for the user and the request shown to them.
 # autocode_resolver_human owns those records and re-exports these as PRIVATE and PUBLIC; they are
@@ -124,80 +132,6 @@ unrelated refactors, and keep review concerns to whether the plan fixes the root
 proves it. Before completion the runner itself runs the new or changed tests against the
 original code (they must fail) and the fixed code (they must pass), then the project suite.
 """
-USER_REQUEST = obj({"kind": {"type": "string", "enum": [
-    "none", "clarification", "contradiction", "infeasible", "permission", "goal_change", "blocker"]},
-    "discovered": STRING, "impact": STRING, "decision_needed": STRING,
-    "options": STRINGS, "proposed_delta": STRING})
-
-
-def role_schema(legacy, role):
-    schema = copy.deepcopy(legacy)
-    schema["properties"].update(contract_revision={"type": "integer"}, contract_hash=STRING, task_id=STRING,
-                                user_request=USER_REQUEST, deferred_backlog=STRINGS)
-    schema["required"] += ["contract_revision", "contract_hash", "task_id", "user_request", "deferred_backlog"]
-    if role == "astra":
-        schema["properties"]["status"]["enum"] = ["CONTINUE", "REWORK", "BLOCKED", "COMPLETE"]
-        schema["properties"]["next_task"] = obj({
-            "kind": {"type": "string", "enum": ["implement", "validate", "none"]},
-            "milestone_id": STRING, "requirements": STRINGS,
-            "acceptance_criteria": STRINGS, "validation_plan": STRINGS,
-        })
-        # Optional: the ledger IDs this task addresses (default: every open finding).
-        schema["properties"]["next_task"]["properties"]["findings"] = STRINGS
-        # Optional structured reviewer findings; prose in requirements is not tracked.
-        schema["properties"]["findings"] = {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["severity", "finding", "evidence"],
-            "properties": {"id": STRING,
-                           "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                           "finding": STRING, "evidence": STRING, "blocking": {"type": "boolean"}}}}
-        schema["properties"]["finding_dispositions"] = {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["id", "disposition", "evidence"],
-            "properties": {"id": STRING, "disposition": {"type": "string", "enum": ["resolved", "retracted"]},
-                           "evidence": STRING}}}
-        schema["properties"]["agreed_limitations"] = STRINGS
-        schema["required"] += ["next_task", "agreed_limitations"]
-    if role == "terra":
-        for key in ("addressed_requirements", "untested_behavior", "recommended_checks"):
-            schema["properties"][key] = STRINGS
-            schema["required"].append(key)
-    if role == "sol":
-        findings = schema["properties"]["findings"]["items"]
-        findings["properties"]["id"] = STRING
-        findings["properties"]["blocking"] = {"type": "boolean"}
-        findings["required"].append("blocking")
-        for key, field in {"reproduction_steps": STRINGS, "expected": STRING, "actual": STRING,
-                           "why_it_matters": STRING, "suggested_correction": STRING}.items():
-            findings["properties"][key] = field
-            findings["required"].append(key)
-        schema["properties"]["criterion_results"]["items"]["properties"]["status"]["enum"] = [
-            "PASS", "FAIL", "NOT_VERIFIED"]
-        schema["properties"]["end_to_end_result"] = obj({
-            "status": {"type": "string", "enum": ["PASS", "FAIL", "NOT_VERIFIED"]},
-            "summary": STRING, "evidence_refs": STRINGS,
-        })
-        schema["properties"]["finding_dispositions"] = {"type": "array", "items": {
-            "type": "object", "additionalProperties": False, "required": ["id", "disposition", "evidence"],
-            "properties": {"id": STRING, "disposition": {"type": "string", "enum": ["resolved", "retracted"]},
-                           "evidence": STRING}}}
-        schema["required"].append("end_to_end_result")
-    return schema
-
-
-def token(contract):
-    return f"r{contract['revision']}:{contract['hash']}"
-
-
-def sealed(contract):
-    return contract.get("hash") == s.digest({k: contract[k] for k in ("task_id", "revision", "body")})
-
-
-def approved(state):
-    contract = state.get("goal_contract", {})
-    approval = contract.get("approval_event") or {}
-    return bool(contract and sealed(contract) and contract.get("approval_status") == "approved"
-                and approval.get("token") == token(contract) and workflows.approval_actor_ok(contract.get("origin"), approval)
-                and approval in state.get("user_events", [])
-                and not contract["body"]["open_blocking_questions"])
 
 
 def validate_requirements_body(state, body):
@@ -957,79 +891,6 @@ def render_completion(state):
     return "\n".join(lines)
 
 
-def review_token(state):
-    val = state.get("validation", {})
-    if not approved(state) or not val.get("source_revision"):
-        return None
-    return token(state["goal_contract"]) + "@" + val["source_revision"] + ":" + s.digest(val)
-
-
-def missing_human_reviews(state):
-    current = review_token(state)
-    return [c["id"] for c in state["goal_contract"]["body"]["acceptance_criteria"]
-            if c["human_review"] and not review_binding_valid(state, c["id"], current)]
-
-
-def legacy_review_acceptance(state, criterion, answer_id):
-    """Return an authenticated older answer that explicitly accepted a review criterion."""
-    answer = state.get("answers", {}).get(answer_id)
-    if not isinstance(answer, dict) or answer not in state.get("user_events", []):
-        return None
-    question = answer.get("question") or {}
-    if not isinstance(question, dict):
-        return None
-    options = question.get("options") or []
-    if (answer.get("kind") != "permission_answer" or answer.get("actor") != "user_cli"
-            or answer.get("question_id") != answer_id or question.get("id") != answer_id
-            or answer.get("contract_token") != token(state["goal_contract"])
-            or not isinstance(answer.get("at"), str)
-            or not isinstance(options, list) or len(options) != 2
-            or not isinstance(options[0], str) or not options[0].startswith(f"Accept {criterion}:")
-            or not isinstance(options[1], str) or not options[1].startswith(f"Reject {criterion}:")
-            or not isinstance(answer.get("text"), str)
-            or not answer["text"].startswith(f"Accept {criterion}.")):
-        return None
-    return answer
-
-
-def preserved_review_answers(state, criterion, original):
-    """Find later authenticated instructions carrying the old acceptance forward."""
-    result = {}
-    for answer_id, answer in state.get("answers", {}).items():
-        if (not isinstance(answer, dict) or answer not in state.get("user_events", [])
-                or answer.get("kind") != "permission_answer" or answer.get("actor") != "user_cli"
-                or answer.get("contract_token") != token(state["goal_contract"])
-                or not isinstance(answer.get("at"), str) or answer["at"] <= original["at"]):
-            continue
-        response = answer.get("text")
-        if not isinstance(response, str):
-            continue
-        if f"existing {criterion} acceptance" in response and "do not request another human visual approval" in response.lower():
-            result[answer_id] = answer
-    return result
-
-
-def review_binding_valid(state, criterion, current):
-    if not current:
-        return False
-    binding = state.get("human_reviews", {}).get(criterion)
-    if (not isinstance(binding, dict) or binding.get("token") != current
-            or binding.get("criterion") != criterion or binding not in state.get("user_events", [])):
-        return False
-    if binding.get("kind") == "human_review":
-        return binding.get("actor") == "user_cli"
-    if binding.get("kind") != "review_reconciliation" or binding.get("actor") != "runner":
-        return False
-    original = legacy_review_acceptance(state, criterion, binding.get("answer_id"))
-    if not original or binding.get("answer_hash") != s.digest(original):
-        return False
-    preserved = preserved_review_answers(state, criterion, original)
-    receipts = binding.get("preservation_hashes") or {}
-    return bool(receipts) and all(
-        answer_id in preserved and s.digest(preserved[answer_id]) == digest
-        for answer_id, digest in receipts.items())
-
-
 def reconcile_legacy_review(state, criterion, answer_id, selected, current):
     """Bind an existing user acceptance to current evidence without a new approval."""
     request = state.get("user_request") or {}
@@ -1092,29 +953,6 @@ def requested_review_criteria(state, request):
         if match and match[1] in required:
             return [match[1]]
     return []
-
-
-def human_only_pending_validation(state, validation, criterion):
-    """A complete technical review whose only missing results are human acceptance.
-
-    Any number of human-review criteria may be pending together, provided
-    every technical criterion passes with evidence and the pending set is
-    exactly the human set (a single pending criterion remains the common case).
-    """
-    criteria = state["goal_contract"]["body"]["acceptance_criteria"]
-    human = {row["id"] for row in criteria if row["human_review"]}
-    rows = validation.get("criterion_results", [])
-    results = {row["id"]: row for row in rows}
-    pending_ids = {entry.split(":", 1)[0].split(" ", 1)[0]
-                   for entry in validation.get("unverified_criteria", [])}
-    if (criterion not in human or not human
-            or set(results) != {row["id"] for row in criteria} or len(rows) != len(criteria)
-            or validation.get("verdict") != "BLOCKED" or not pending_ids or pending_ids != human
-            or validation.get("findings") or validation.get("end_to_end_result", {}).get("status") != "PASS"):
-        return False
-    return all(row.get("evidence_refs") and
-               row.get("status") == ("NOT_VERIFIED" if cid in human else "PASS")
-               for cid, row in results.items())
 
 
 def approve_review(state, criterion, selected, current):

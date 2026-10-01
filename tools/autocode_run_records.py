@@ -37,6 +37,11 @@ except ImportError:
     import autocode_support as support
     import autocode_workflow as workflow
 
+
+def check_evidence_options(record):
+    return {'receipt_only': record.get('output_mode') == 'report_file',
+            'capture_context': record.get('capture_context')}
+
 # Planning restarts allowed per deferral reason since the user's last input; the next deferral pauses.
 MAX_DEFERRED_APPROVAL_RESTARTS = 2
 

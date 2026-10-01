@@ -49,7 +49,7 @@ try:
     from . import autocode_findings as findings_ledger
     from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from .autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
-        assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
+        assert_stage_stopped, attempt_id, check_evidence_options, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
         repair_limit, stage_completed, stage_supports_sessions, timeout_recovery_route, write_json)
     from .autocode_stage_recovery import (MAX_AUTOMATIC_CAPACITY_RECOVERIES, abandon_stage,
@@ -74,7 +74,7 @@ except ImportError:
     import autocode_findings as findings_ledger
     import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
-        assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
+        assert_stage_stopped, attempt_id, check_evidence_options, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
         repair_limit, stage_completed, stage_supports_sessions, timeout_recovery_route, write_json)
     from autocode_stage_recovery import (MAX_AUTOMATIC_CAPACITY_RECOVERIES, abandon_stage,
@@ -150,9 +150,7 @@ def recover_default_budget(state, run_dir, workspace, kind):
         return True
 
 
-def slug(task: str) -> str:
-    value = re.sub(r"[^a-z0-9]+", "-", task.lower()).strip("-")
-    return (value or "task")[:48]
+slug = util.slug
 
 
 def event_thread_id(jsonl: Path) -> str | None:
@@ -160,11 +158,6 @@ def event_thread_id(jsonl: Path) -> str | None:
         if event.get("type") == "thread.started" and event.get("thread_id"):
             return str(event["thread_id"])
     return None
-
-
-def check_evidence_options(record):
-    return {'receipt_only': record.get('output_mode') == 'report_file',
-            'capture_context': record.get('capture_context')}
 
 
 def load_stage_report(record, workspace=None, evidence_record=None, state=None):
