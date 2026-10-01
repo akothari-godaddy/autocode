@@ -347,7 +347,16 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
                               and (same_command(e['item']['command'], check['command'])
                                    or _workspace_wrapped_command(e['item']['command'], check['command'], workspace))
                               and (missing_exit or e['item'].get('exit_code') == check['exit_code'])]
-                if (len(alternates) == 1 and type(alternates[0].get('exit_code')) is int
+                identical_repeats = (len(alternates) > 1
+                    and isinstance(alternates[0].get('aggregated_output'), str)
+                    and bool(alternates[0]['aggregated_output'])
+                    and len({e.get('id') for e in alternates}) == len(alternates)
+                    and all(e.get('command') == alternates[0]['command']
+                            and e.get('exit_code') == alternates[0]['exit_code']
+                            and e.get('aggregated_output') == alternates[0]['aggregated_output']
+                            for e in alternates))
+                if ((len(alternates) == 1 or identical_repeats)
+                        and type(alternates[0].get('exit_code')) is int
                         and isinstance(alternates[0].get('id'), str) and alternates[0]['id']):
                     check["evidence_ref"] = "event:" + alternates[0]["id"]
                     check['exit_code'] = alternates[0]['exit_code']

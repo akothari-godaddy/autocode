@@ -79,6 +79,20 @@ class ValidationMetadataTests(unittest.TestCase):
             support.verify_checks([{'command': 'python test.py', 'evidence_ref': 'event:conversation-id', 'exit_code': 0}],
                                   self.workspace, self.log)
 
+    def test_repeated_identical_executions_resolve_stale_event_alias(self):
+        executed = f'cd {self.workspace} && python test.py 2>&1'
+        self.events(self.event(id='first', command=executed, aggregated_output='one test passed'),
+                    self.event(id='second', command=executed, aggregated_output='one test passed'))
+        check = {'command': executed, 'evidence_ref': 'event:prior-attempt', 'exit_code': 0}
+        support.verify_checks([check], self.workspace, self.log)
+        self.assertEqual('event:first', check['evidence_ref'])
+
+        self.events(self.event(id='first', command=executed, aggregated_output='one test passed'),
+                    self.event(id='second', command=executed, aggregated_output='different output'))
+        with self.assertRaises(ValueError):
+            support.verify_checks([{'command': executed, 'evidence_ref': 'event:prior-attempt', 'exit_code': 0}],
+                                  self.workspace, self.log)
+
     def test_ambiguity_conflicts_and_unknown_exits_are_not_repaired(self):
         for items, check in [
             ([self.event(), self.event(id='other', exit_code=1)], {'evidence_ref': 'event:missing'}),
