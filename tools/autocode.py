@@ -860,13 +860,15 @@ def timeout_recovery_guard(state):
 
 
 def retry_format_failed_report(state, run_dir, workspace, selected):
-    """Explicitly request fresh independent evidence after a bounded format failure."""
+    """Explicitly request fresh evidence after a bounded report rejection."""
     pending = state.get('pending_report_repair') or {}
     original = pending.get('original') or {}
     repair = next((row for row in reversed(state.get('stages', []))
                    if row.get('report_only') and row.get('rejected')), None)
     if (state.get('status') != 'PAUSED_REPEATED_FAILURE'
-            or pending.get('error') != 'OpenCode final message is not a JSON report; inspect the saved raw events'
+            or pending.get('error') not in (
+                'OpenCode final message is not a JSON report; inspect the saved raw events',
+                'Check is not supported by an exact executed Validator event')
             or original.get('stage') != 'sol'
             or not repair or selected != attempt_id(repair)
             or repair.get('original_stage') != original.get('stage')
