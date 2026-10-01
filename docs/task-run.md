@@ -73,7 +73,10 @@ planned from them: the review's blocking findings are the requirements, so no
 requirements questions are asked, and the plan still goes to the user for
 approval. A usage error
 also exits 2, with a message starting `usage:` on stderr; the client checks for
-it so a mistyped flag is not mistaken for a pause.
+it so a mistyped flag is not mistaken for a pause. A rejection also exits 2,
+starting `Input rejected:`, and startup can exit 2 before any run exists;
+`TaskRun.start` raises with the tail of the CLI's output so a startup failure
+is never mistaken for a pause.
 `TaskRun.respond_operational()` uses the separate AutoResolver response command;
 an operational request cannot be answered with `TaskRun.answer()`.
 `TaskRun.accept_transport_change()` uses the explicit transport-change command

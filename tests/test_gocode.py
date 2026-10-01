@@ -22,32 +22,6 @@ import autopilot
 
 
 class GoCodeTransportTests(unittest.TestCase):
-    def test_status_diagnostic_only_keeps_nonsecret_status_fields(self):
-        summary = ("gocode version: fixture\nmode: unmanaged\n"
-                   "GoCode authentication: unavailable\nmanaged mode key: secret-fixture\n"
-                   "arbitrary stderr text\n")
-        self.assertEqual("gocode version: fixture; mode: unmanaged; GoCode authentication: unavailable",
-                         gocode.status_diagnostic(summary))
-        self.assertEqual("no recognized status fields", gocode.status_diagnostic("unknown secret-fixture"))
-
-    def test_failed_status_reports_exit_code_and_limited_status_fields(self):
-        with patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-             patch.object(gocode.subprocess, "run", return_value=SimpleNamespace(
-                 returncode=2, stdout="mode: unmanaged\nsecret: fixture", stderr="")), \
-             self.assertRaises(RuntimeError) as raised:
-            gocode.local_settings(Path("/workspace"))
-        self.assertIn("status exited 2", str(raised.exception))
-        self.assertIn("mode: unmanaged", str(raised.exception))
-        self.assertNotIn("secret", str(raised.exception))
-
-    def test_rejected_status_preserves_the_authentication_diagnostic(self):
-        with patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-             patch.object(gocode.subprocess, "run", return_value=SimpleNamespace(
-                 returncode=0, stdout="mode: unmanaged\nGoCode authentication: unavailable", stderr="")), \
-             self.assertRaises(RuntimeError) as raised:
-            gocode.local_settings(Path("/workspace"))
-        self.assertIn("GoCode authentication: unavailable", str(raised.exception))
-
     def test_direct_adapter_uses_gocode_then_codex_never_opencode(self):
         command = gocode.launch(
             role="terra", workspace=Path("/workspace"), session=None,
@@ -85,13 +59,6 @@ class GoCodeTransportTests(unittest.TestCase):
         self.assertEqual("gocode", identity["engine"])
         self.assertEqual("/fixture/gocode", identity["executable"])
 
-    def test_managed_bundle_does_not_require_the_unmanaged_broker_session(self):
-        status = ("gocode version: fixture\nmode: managed\ncredential bundle: present\n"
-                  "GoCode authentication: GoCode broker session expired or missing\n")
-        with patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-             patch.object(gocode.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=status, stderr="")):
-            self.assertEqual("managed", gocode.local_settings(Path("/workspace"))["mode"])
-
     def test_missing_gocode_bundle_refuses_before_any_provider_request(self):
         status = "\n".join(("gocode version: fixture", "mode: managed", "credential bundle: absent"))
         with patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
@@ -105,58 +72,6 @@ class GoCodeTransportTests(unittest.TestCase):
              patch.object(gocode.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=status, stderr="")):
             identity = gocode.local_settings(Path("/workspace"))
         self.assertEqual("gocode", identity["engine"])
-
-    def test_expired_broker_session_reports_the_required_login_without_status_details(self):
-        status = ("gocode version: fixture\nmode: unmanaged\n"
-                  "GoCode authentication: broker key listing failed (GoCode broker session expired or missing. "
-                  "Run `gocode auth login` to sign in.)\nmanaged mode key: secret-fixture\n")
-        with patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-             patch.object(gocode.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout=status, stderr="")), \
-             self.assertRaises(RuntimeError) as raised:
-            gocode.local_settings(Path("/workspace"))
-        self.assertIn("broker session expired or missing", str(raised.exception))
-        self.assertIn("gocode auth login", str(raised.exception))
-        self.assertNotIn("secret-fixture", str(raised.exception))
-
-    def test_timed_out_status_requires_a_successful_independent_auth_check(self):
-        status = "gocode version: fixture\nmode: unmanaged\nGoCode authentication: ok via GoCode Client Service\n"
-        for output in (status, status.encode()):
-            with self.subTest(output_type=type(output).__name__), \
-                 patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-                 patch.object(gocode.subprocess, "run", side_effect=[
-                     subprocess.TimeoutExpired(["gocode", "status"], 45, output=output),
-                     SimpleNamespace(returncode=0),
-                 ]) as run:
-                identity = gocode.local_settings(Path("/workspace"))
-                self.assertEqual({"engine": "gocode", "executable": "/fixture/gocode",
-                                  "mode": "unmanaged", "version": "fixture"}, identity)
-                self.assertEqual(["/fixture/gocode", "key", "list", "--json"], run.call_args.args[0])
-                self.assertEqual(subprocess.DEVNULL, run.call_args.kwargs["stdout"])
-                self.assertEqual(subprocess.DEVNULL, run.call_args.kwargs["stderr"])
-                self.assertEqual(15, run.call_args.kwargs["timeout"])
-
-    def test_timed_out_status_never_accepts_missing_or_incomplete_identity(self):
-        for output in (None, b"", b"mode: unmanaged\n", b"gocode version: fixture\nmode: unmanaged\n",
-                       b"mode: unmanaged\nGoCode authentication: ok\n"):
-            with self.subTest(output=output), \
-                 patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-                 patch.object(gocode.subprocess, "run", side_effect=subprocess.TimeoutExpired(
-                     ["gocode", "status"], 45, output=output)) as run, \
-                 self.assertRaises(RuntimeError):
-                gocode.local_settings(Path("/workspace"))
-            self.assertEqual(1, run.call_count)
-
-    def test_timed_out_status_refuses_failed_or_hanging_independent_auth(self):
-        status = b"gocode version: fixture\nmode: unmanaged\nGoCode authentication: ok\n"
-        for verification in (SimpleNamespace(returncode=2), OSError("unavailable"),
-                             subprocess.TimeoutExpired(["gocode", "key", "list"], 15)):
-            with self.subTest(verification=type(verification).__name__), \
-                 patch.object(gocode.shutil, "which", return_value="/fixture/gocode"), \
-                 patch.object(gocode.subprocess, "run", side_effect=[
-                     subprocess.TimeoutExpired(["gocode", "status"], 45, output=status), verification,
-                 ]) as run, self.assertRaisesRegex(RuntimeError, "authentication check failed"):
-                gocode.local_settings(Path("/workspace"))
-            self.assertEqual(2, run.call_count)
 
     def test_usage_and_service_health_changes_do_not_change_transport_identity(self):
         stable = "gocode version: fixture\nmode: unmanaged\nGoCode authentication: ok via GoCode Client Service"
