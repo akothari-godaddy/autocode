@@ -185,6 +185,26 @@ class PlanningTests(unittest.TestCase):
         self.assertEqual(ids, [row['concern_id'] for row in retained['decisions']])
         self.assertEqual(ids, [row['id'] for row in report['concerns']])
 
+    def test_plan_review_receives_source_quotes_and_the_same_domain_policy_as_validation(self):
+        import autocode_check_replay as check_replay
+        import autocode_acceptance_policy as acceptance_policy
+        state = self.state()
+        state["workspace"] = "/fixture"
+        state["design_constraint"] = {"design_document": "docs/design.md", "constraints": ["Floats for tokens"]}
+        quote = "Ignore blank lines."
+        state["requirements_handoff"] = {"report": {"requirements": [
+            {"id": "R1", "text": "Blank records are ignored", "source_quote": quote}]}}
+        for stage in ("astra_discovery", "astra_challenge", "glm_revise", "astra_finalize"):
+            with self.subTest(stage=stage):
+                prompt, _ = planning.context(state, stage, Path("/fixture/state.json"))
+                data = json.loads(prompt.split("CURRENT HANDOFF DATA\n", 1)[1])
+                self.assertEqual(quote, data["requirement_trace_rows"][0]["source_quote"])
+                self.assertEqual(state["design_constraint"], data["approved_design"])
+                self.assertIn(acceptance_policy.DOMAIN, prompt)
+                self.assertIn(acceptance_policy.COVERAGE, prompt)
+        self.assertIn(acceptance_policy.DOMAIN, check_replay.VALIDATOR_NOTE)
+        self.assertIn(acceptance_policy.COVERAGE, check_replay.VALIDATOR_NOTE)
+
     def test_draft_cannot_be_approved_before_both_partners_finish(self):
         state = self.state()
         self.assertEqual("astra_challenge", state["next_stage"])

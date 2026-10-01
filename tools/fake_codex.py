@@ -81,7 +81,7 @@ elif stage == "requirements_gather":
         "task_kind": task_kind,
     }
 elif stage == "astra_discovery":
-    draft = body(questions=not data["saved_answers"], human=mode == "standard", task_kind=task_kind)
+    draft = body(questions=not data["saved_answers"], human=mode in ("standard", "human-pending"), task_kind=task_kind)
     if builder_files:
         draft["milestones"][0]["affected_paths"] = sorted(builder_files)
     if mode == "milestones":
@@ -166,6 +166,11 @@ elif stage.startswith("astra") and stage != "astra_checkpoint":
                                   acceptance_criteria=['C2'], validation_plan=['Execute both greeting and goodbye'])
     if mode == 'stalled' and ((data.get('milestone_checkpoint') or {}).get('current') or {}).get('needs_replan'):
         result['next_objective'] = 'Isolate empty input with a focused reproduction before repair'
+    if mode == "human-pending" and stage == "astra_review" and not data.get("human_reviews"):
+        result.update(status="CONTINUE", next_objective="Obtain human acceptance of the validated artifact")
+        result["acceptance_criteria"][0]["status"] = "unverified"
+        result["next_task"].update(kind="validate", milestone_id="M1", requirements=["Obtain human acceptance"],
+            acceptance_criteria=["C1"], validation_plan=["Ask the user to accept the current artifact"])
     if stage == 'astra_resolve':
         result['diagnosis'] = 'Empty names are accepted by the CLI; add input validation and retest both cases.'
 elif stage == "terra":
@@ -231,6 +236,9 @@ else:
     if mode == 'milestones':
         result['criterion_results'].append({'id': 'C2', 'status': 'PASS' if goodbye_passed else 'NOT_VERIFIED',
                                            'evidence_refs': ['event:check'] if goodbye_passed else []})
+    if mode == "human-pending" and passed:
+        result.update(verdict="BLOCKED", unverified_criteria=["C1 human acceptance pending"])
+        result["criterion_results"][0]["status"] = "NOT_VERIFIED"
     if stage == "astra_checkpoint":
         result = {"validation": result, "consult_sol": {"requested": False, "question": "", "reason": ""},
             "decision": {**common, "status": "COMPLETE" if passed else "REWORK",

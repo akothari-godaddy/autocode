@@ -748,8 +748,10 @@ def apply_review_result(runtime, state, stage, value, record, workspace, run_dir
                   "reviewer_role": record.get("role", stage)}
     if value["verdict"] == "PASS" and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):
         raise ValueError("Validator PASS lacks successful executed checks: list each check you ran, with its exit code")
+    human_pending = modern and any(goals.human_only_pending_validation(state, value, c["id"])
+                                  for c in state["goal_contract"]["body"]["acceptance_criteria"] if c["human_review"])
     validation["check_replay"] = (check_replay.replay(value["checks"], workspace, run_dir, record, verify.scratch_run, approved_state=state)
-                                  if value["verdict"] == "PASS" else None)  # the runner re-runs every check
+                                  if value["verdict"] == "PASS" or human_pending else None)
     if state.get("validation"):
         state.setdefault("validation_archive", []).append({
             "reason": "Superseded by another independent validation", "validation": state["validation"]})
@@ -968,24 +970,22 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             findings_ledger.record_decision(state, value, record)
         if modern and stage == "astra_review":  # only the Validator can close its own open blockers
             value = findings_ledger.recheck_by_validator(state, value, record.get("source_revision"))
+        current = support.snapshot(workspace)
+        request = (completion_gate.artifact_review_request(state, value, current)
+                   if modern and stage in ("astra_review", "astra_checkpoint") else None)
+        if request:
+            lifecycle.wait_for_user(state, request,
+                origin={'stage': stage, 'output': record['output'], 'source_revision': current['revision']},
+                next_stage='astra_review')
+            goals.record_decision(state, value)
+            save_record(state, record)
+            return
         if value["status"] in ("COMPLETE", "TASK_COMPLETE"):
-            current = support.snapshot(workspace)
             if modern and findings_ledger.blocking_entries(state):
                 raise support.Paused("PAUSED_COMPLETION_GATE", "Completion rejected: the findings ledger still lists "
                                      "open blocking findings; resolve or retract each one with evidence")
             if modern and goals.missing_human_reviews(state):
-                if not completion_gate.completion_ready(state, value, current, require_human_reviews=False):
-                    raise support.Paused("PAUSED_COMPLETION_GATE", "Artifact review requires current passing independent evidence first")
-                lifecycle.wait_for_user(state,
-                    {"kind": "human_review", "criteria": goals.missing_human_reviews(state),
-                     "decision_needed": "Review the current artifact and explicitly approve the listed criteria",
-                     "impact": "Completion requires the declared human acceptance of this validated artifact",
-                     "options": [], "discovered": "Independent evidence passed; human review remains", "proposed_delta": ""},
-                    origin={'stage': stage, 'output': record['output'], 'source_revision': current['revision']},
-                    next_stage='astra_review')
-                goals.record_decision(state, value)
-                save_record(state, record)
-                return
+                raise support.Paused("PAUSED_COMPLETION_GATE", "Artifact review requires current passing independent evidence first")
             if not completion_gate.completion_ready(state, value, current):
                 if not regression.complete(state, current["revision"]):
                     raise support.Paused("PAUSED_COMPLETION_GATE", regression.rejection(state))

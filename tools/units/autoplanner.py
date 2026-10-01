@@ -10,10 +10,11 @@ import uuid
 
 try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
-    from .. import autocode_stage_context as stage_context
+    from .. import autocode_stage_context as stage_context, autocode_acceptance_policy as acceptance_policy
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
     from .. import autocode_follow_up as follow_up, autocode_adaptive_planning as adaptive
 except ImportError:
+    import autocode_acceptance_policy as acceptance_policy
     import autocode_test_cases as test_cases
     import autocode_goals as goals
     import autocode_planning_artifacts as artifacts
@@ -105,13 +106,6 @@ rename protected criteria in an existing contract without the required user-back
 TEST COMMAND PREREQUISITES: include every missing package marker required by your validation command in
 affected_paths before approval. `python3 -m unittest discover -s tests -t .` needs tests/__init__.py;
 assign that file explicitly (or tests/) when it does not exist. Never leave the Builder to expand scope.
-NUMERIC BOUNDARIES: when the public contract accepts Python integers without a documented bound, include
-examples at 2**63-1, 2**63, and 10**5000 wherever those inputs are valid, and large negative values for signed
-domains. Prove persistence, exact arithmetic, stale/unknown identifiers, and transaction rollback at those
-boundaries. SQLite INTEGER bindings stop at 64 bits and SQL arithmetic can promote overflow to REAL; use
-lossless storage and application integer arithmetic for unbounded values. Decimal int/str conversion can
-hit Python's digit limit too. Preserve the public contract; do not invent a bound to fit the implementation.
-Probe mixed-type numeric interactions as well as isolated bounds; valid operands can overflow in combination.
 ERROR PATHS: inject failures after staged or transactional work begins; verify the public error contract,
 unchanged persistent state and complete cleanup across the relevant underlying failure modes.
 """
@@ -232,10 +226,11 @@ def traces_coverage(contract):
 
 def trace_rows(state, stage):
     """The requirements a stage's requirement_trace must cover, one row each; [] when there are none."""
-    if stage not in TRACE_STAGES:
+    if stage not in (*TRACE_STAGES, "astra_challenge"):
         return []
     handoff = (state.get("requirements_handoff") or {}).get("report") or {}
-    return [{"requirement_id": row["id"], "requirement": row.get("text", "")}
+    return [{"requirement_id": row["id"], "requirement": row.get("text", ""),
+             "source_quote": row.get("source_quote", "")}
             for row in handoff.get("requirements") or [] if isinstance(row, dict) and row.get("id")]
 
 
@@ -943,7 +938,10 @@ def context(state, stage, state_path):
         design_rule += EXAMPLE_CHECK_RULE if stage in ("astra_challenge", "astra_finalize") else ""
         design_rule += BRIEF_TRACE_RULE if stage in ("astra_challenge", "astra_finalize") else ""
         design_rule += NO_TIMING_RULE
-    if rows:
+    design_rule += acceptance_policy.COVERAGE
+    if stage != "requirements_gather" and not test_cases.design_only(state):
+        design_rule += acceptance_policy.DOMAIN
+    if rows and stage in TRACE_STAGES:
         design_rule += REQUIREMENT_TRACE_RULE
     design_rule += adaptive.prompt_rule(state, stage)
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
