@@ -23,6 +23,12 @@ class CommandsTests(unittest.TestCase):
             # Prose after a plain command (live bugfix-trivial, 2026-09-30): replayed as a command, it never passes.
             ("python3 -m unittest -v passes; Validator reads the diff", []),
             ("Run python3 -m unittest -v via capture and read the diff", []),
+            # A sentence after the command (live parallel-diamond, 2026-10-01): unittest read its words as modules.
+            ("Run python3 -m unittest integration.test_check from repo root: 2 tests OK.", []),
+            ("python3 -m unittest integration.test_check, expect 2 tests OK.", []),
+            ("python3 -m unittest tests.test_a tests.test_b", ["python3 -m unittest tests.test_a tests.test_b"]),
+            ("pytest tests/test_x.py::test_y -k name", ["pytest tests/test_x.py::test_y -k name"]),
+            ("go test ./...", ["go test ./..."]),
             # A sentence after -c (live architecture-two-services, 2026-09-30): NameError when replayed.
             ("Run python3 -c doing a topological sort/DFS over depends_on.", []),
             ("Run `python3 -c doing a topological sort` over the graph", []),

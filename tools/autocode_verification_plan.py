@@ -13,7 +13,12 @@ import shlex
 # "python3 -m unittest -v passes; Validator reads the diff" and "Run python3 -m unittest -v via capture and
 # read the diff"; the runner replayed each sentence as a shell command, it could never pass, and the run paused.
 PROSE = re.compile(r"[;,]|(?:^|\s)(?:and|or|then|via|passes|pass|reads?|should|must|the|with|using|while|which|"
-                   r"that|confirms?|verif(?:y|ies)|inspects?|shows?|prints?|outputs?|returns?)(?=\s|$)", re.IGNORECASE)
+                   r"that|from|in|on|at|for|of|each|after|before|confirms?|verif(?:y|ies)|inspects?|shows?|prints?|outputs?|returns?)(?=\s|$)", re.IGNORECASE)
+# A sentence rather than a command: a word ending in a colon ("from repo root: 2 tests OK") or a closing period after a
+# word ("... tests OK."). A live parallel-diamond plan wrote "Run python3 -m unittest integration.test_check from repo
+# root: 2 tests OK." and the runner replayed it whole; unittest read "from", "repo" and "OK." as modules (2026-10-01).
+# A lone "." argument ("-t .") and a path ending in dots are not matched.
+SENTENCE = re.compile(r"\w:(?:\s|$)|[A-Za-z0-9_)]\.$")
 QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 # `python3 -c doing a topological sort` is prose: the code after -c is one quoted argument, and unquoted code
 # followed by more words is a sentence. A live architecture run approved it as AC3's method, the runner replayed
@@ -56,7 +61,8 @@ def commands(method):
         return result
     if text.lower().startswith("run "):
         text = text[4:].strip()
-    return [text] if executable(text) and not PROSE.search(QUOTED.sub("", text)) else []
+    bare = QUOTED.sub("", text)
+    return [text] if executable(text) and not PROSE.search(bare) and not SENTENCE.search(bare) else []
 
 
 def approved_commands(state):
