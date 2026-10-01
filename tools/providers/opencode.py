@@ -456,3 +456,36 @@ def final_report(path, *, recover_wrapped=False, response_path=None):
     if not isinstance(report, dict):
         raise RuntimeError("OpenCode final message is not a JSON report; inspect the saved raw events")
     return report
+
+
+def incomplete_response(path):
+    """Return text from the terminal length-limited message, never a report.
+
+    Callers must label this as incomplete and keep its events as the evidence
+    source. It is useful only to help a bounded report repair preserve findings
+    already emitted before the provider reached its output limit.
+    """
+    rows = raw_events(path)
+    terminal = [row for row in rows if row.get('type') == 'step_finish'
+                and row.get('part', {}).get('reason') == 'length']
+    if not terminal:
+        return None
+    finish = terminal[-1]
+    part = finish.get('part') or {}
+    message_id = part.get('messageID')
+    session_id = part.get('sessionID') or finish.get('sessionID')
+    if not message_id:
+        return None
+    texts = {}
+    for row in rows:
+        body = row.get('part') or {}
+        if (row.get('type') == 'text' and body.get('messageID') == message_id
+                and (not session_id or (body.get('sessionID') or row.get('sessionID')) == session_id)
+                and isinstance(body.get('text'), str)):
+            part_id = body.get('id')
+            key = str(part_id) if part_id is not None else str(len(texts))
+            if key in texts and texts[key] != body['text']:
+                return None
+            texts[key] = body['text']
+    text = '\n'.join(texts.values()).strip()
+    return text if text and len(text.encode('utf-8')) <= 128 * 1024 else None

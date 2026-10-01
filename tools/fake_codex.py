@@ -38,7 +38,10 @@ def record_launch(stage):
 if data.get('report_repair'):
     record_launch(data['original']['stage'] + '_report_repair')
     # This branch only reformats a saved report; never executes the original task.
-    result = json.loads(Path(data['original']['output']).read_text())
+    if data['original'].get('truncated_output'):
+        result = json.loads(data['rejected_report']['content']['partial_text'] + '}')
+    else:
+        result = json.loads(Path(data['original']['output']).read_text())
     if 'summary' not in result and data['original'].get('stage', '').startswith(('terra', 'astra_discovery')):
         result['summary'] = 'Repaired fixture report'
     if os.environ.get("AUTOCODE_FIXTURE_MODE") == "human-pending":

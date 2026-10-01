@@ -149,6 +149,8 @@ def run(runner, args, state, state_path, run_dir, workspace):
         except support.Paused as error:
             if provider_recovery.recover_startup(runner, current, run_dir, workspace, error):
                 return runner.orchestrator.SKIP
+            if runner.automatically_recover_truncated_review(current, run_dir, workspace, error):
+                return runner.orchestrator.SKIP
             capacity_recovered = runner.automatically_recover_capacity_stage(current, run_dir, workspace, error)
             if capacity_recovered:
                 recovery = current["recovery_context"]
