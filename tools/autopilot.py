@@ -12,7 +12,7 @@ try:
     from . import autocode_workflow as workflow, autocode_milestones as milestones, autocode_escalation as escalation
     from . import autocode_findings as findings_ledger, autocode_builder_policy as builder_policy
     from . import autocode_resolver_human as human, autocode_failures as failures, autocode_assignment as assignment
-    from . import autocode_retained_work as retained_work
+    from . import autocode_retained_work as retained_work, autocode_provider_recovery as provider_recovery
     from .units import autoplanner as planning_unit
     from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
 except ImportError:
@@ -27,7 +27,7 @@ except ImportError:
     import autocode_builder_policy as builder_policy
     import autocode_resolver_human as human
     import autocode_failures as failures, autocode_assignment as assignment
-    import autocode_retained_work as retained_work
+    import autocode_retained_work as retained_work, autocode_provider_recovery as provider_recovery
     from units import autoplanner as planning_unit
 
 SKIP = object()
@@ -159,8 +159,7 @@ def dispatch_unit(runtime, state, stage, workspace, run_dir):
     except runtime.ReportRepairQueued:
         return SKIP
     except runtime.support.Paused as error:
-        if (runtime.automatically_recover_timed_out_stage(state, run_dir, workspace, error)
-                or runtime.automatically_recover_external_directory_denial(state, run_dir, workspace, error)):
+        if provider_recovery.recover_dispatch(runtime, state, run_dir, workspace, error):
             print(f"{stage}: non-terminal attempt archived; continuing from recovery checkpoint", flush=True)
             return SKIP
         raise
