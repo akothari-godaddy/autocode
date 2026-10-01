@@ -67,11 +67,27 @@ def commands(method):
     return [text] if executable(text) and not PROSE.search(bare) and not SENTENCE.search(bare) else []
 
 
-def approved_commands(state):
+def approved_commands(state, *, progressive_context=None):
+    """Select ordinary checks or the authoritative, normalized cumulative checklist.
+
+    The caller supplies progressive_state.context(state); proposals and tentative
+    future checks are never read here. Invalid required checks fail closed.
+    """
     body = (state.get("goal_contract") or {}).get("body") or {}
     task = state.get("current_task") or {}
     ids = set(task.get("acceptance_criteria") or [])
     methods = list(task.get("validation_plan") or [])
+    if progressive_context:
+        required = progressive_context.get("required_checks")
+        if not isinstance(required, list) or not required:
+            raise ValueError("Progressive verification requires a nonempty cumulative required_checks set")
+        for check in required:
+            extracted = commands(check.get("method", "")) if isinstance(check, dict) else []
+            if not extracted:
+                raise ValueError(f"Progressive required check has no executable command: {check!r}")
+            methods.append(check["method"])
+        methods += [check["method"] for check in product_checks(body, required)]
+        return list(dict.fromkeys(command for method in methods for command in commands(method)))
     methods += [row.get("verification_method", "") for row in body.get("acceptance_criteria") or []
                 if not row.get("human_review") and (not ids or row.get("id") in ids)]
     return list(dict.fromkeys(command for method in methods for command in commands(method)))

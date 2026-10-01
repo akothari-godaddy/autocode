@@ -1,7 +1,9 @@
 """Cycle-free evidence and authenticated acceptance rules for human review.
 
-The contract module reexports these public predicates. This module does not
-write state or turn technical proof into human acceptance.
+The contract module reexports these public predicates. Progressive proof and
+completion readers use the same rules without importing the goal lifecycle or
+the controller. This module does not write state or turn technical proof into
+human acceptance.
 """
 from __future__ import annotations
 

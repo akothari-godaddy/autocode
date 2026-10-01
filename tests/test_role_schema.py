@@ -1,4 +1,4 @@
-"""Cycle-free role schema extraction preserves ordinary reports."""
+"""Cycle-free role schema extraction preserves ordinary roles and opt-in checkpoints."""
 import copy
 import json
 from pathlib import Path
@@ -35,6 +35,12 @@ class RoleSchemaTests(unittest.TestCase):
         util.validate_schema(value, schema)
         with self.assertRaises(ValueError):
             util.validate_schema({**value, "progressive_checkpoint": True}, schema)
+        progressive_schema = goals.role_schema(self.legacy(), "astra", progressive=True)
+        util.validate_schema(value, progressive_schema)
+        util.validate_schema({**value, "progressive_checkpoint": True}, progressive_schema)
+        with self.assertRaises(ValueError):
+            util.validate_schema({**value, "progressive_checkpoint": "true"}, progressive_schema)
+        self.assertIn("progressive_checkpoint", util.model_output_schema(progressive_schema)["required"])
 
     def test_builder_and_validator_schema_extensions_do_not_mutate_legacy(self):
         root = Path(__file__).resolve().parents[1] / "tools" / "autocode-schemas" / "v2"

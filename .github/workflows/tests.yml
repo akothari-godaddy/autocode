@@ -63,6 +63,13 @@ jobs:
         env:
           PYTHONDONTWRITEBYTECODE: "1"
 
+      - name: Run progressive planning CLI regressions
+        # The catalog-local suite exercises restart, user decisions, recovery
+        # and negative authority paths that the catalog's final oracle cannot.
+        run: python3 -u scenarios/catalog/progressive-learning-journey/test_cli.py
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+
       - uses: actions/setup-node@v4
         with:
           node-version: "22"

@@ -16,6 +16,7 @@ try:
     from . import autocode_util as s, autocode_workflows as workflows
     from .autocode_contract_identity import token, sealed, approved
     from .autocode_role_schema import USER_REQUEST, role_schema
+    from . import autocode_progressive_state as progressive_state
     from .autocode_human_review_policy import (review_token, missing_human_reviews, legacy_review_acceptance,
         preserved_review_answers, review_binding_valid, human_only_pending_validation)
 except ImportError:
@@ -24,6 +25,7 @@ except ImportError:
     import autocode_util as s, autocode_workflows as workflows
     from autocode_contract_identity import token, sealed, approved
     from autocode_role_schema import USER_REQUEST, role_schema
+    import autocode_progressive_state as progressive_state
     from autocode_human_review_policy import (review_token, missing_human_reviews, legacy_review_acceptance,
         preserved_review_answers, review_binding_valid, human_only_pending_validation)
 
@@ -655,6 +657,8 @@ def answer(state, question_id, text, *, delegated=False):
         raise ValueError("This question has no proposed default to delegate")
     if delegated and any(ob["id"] == question_id for ob in open_obligations(state)):
         raise ValueError(f"{question_id} asks about a rejected assumption and cannot be delegated; answer it yourself")
+    if not delegated:
+        progressive_state.archive_product_change(state)
     contract = state.get("goal_contract")
     event = {"kind": "delegated" if delegated else "answer", "actor": "user_cli", "at": s.now(),
              "question_id": question_id, "question": q, "text": q["proposed_default"] if delegated else text,

@@ -61,11 +61,22 @@ TIMEOUT_SECONDS = 900
 TAIL_CHARS = 600
 
 
-def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS, approved_state=None) -> dict:
-    """Re-run each distinct check command; return the result or raise ValueError on the first that fails."""
+def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS, approved_state=None,
+           required_commands=None, progressive_context=None, allow_reported_failures=False) -> dict:
+    """Replay current checks, rejecting unsubstantiated claims and execution errors.
+
+    The default requires every command to pass. An honest progressive FAIL may
+    retain exactly matching nonzero outcomes, never a mismatched claimed PASS.
+    """
     out = Path(run_dir) / "check-replay" / Path(record.get("output") or "validation").stem
     checks = list(checks)
-    prescribed = verification_plan.approved_commands(approved_state or {})
+    prescribed = verification_plan.approved_commands(approved_state or {}, progressive_context=progressive_context)
+    if required_commands is not None:
+        for command in required_commands:
+            if not isinstance(command, str) or verification_plan.commands(command) != [command]:
+                raise ValueError(f"Required replay command is not an explicit executable command: {command!r}")
+            prescribed.append(command)
+        prescribed = list(dict.fromkeys(prescribed))
     reported = {check["command"] for check in checks}
     checks += [{"command": command, "exit_code": 0, "evidence_ref": "approved-plan"}
                for command in prescribed if command not in reported]
@@ -87,8 +98,13 @@ def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_S
               "timeout_seconds": timeout, "replayed_at": dt.datetime.now(dt.timezone.utc).isoformat()}
     out.mkdir(parents=True, exist_ok=True)
     (out / "replay.json").write_text(json.dumps(result, indent=2) + "\n")
-    if failed:
-        row = failed[0]
+    rejected = ([row for row in rows if row["error"] or row["timed_out"]
+                 or type(row["exit_code"]) is not int
+                 or type(row["reported_exit_code"]) is not int
+                 or row["exit_code"] != row["reported_exit_code"]]
+                if allow_reported_failures else failed)
+    if rejected:
+        row = rejected[0]
         if row["error"]:
             what = f"could not run ({row['error']})"
         elif row["timed_out"]:

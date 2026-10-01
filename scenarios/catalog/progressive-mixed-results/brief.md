@@ -1,0 +1,1 @@
+Implement durable lesson answers that survive reopening progress. Recommend the next unfinished lesson from saved answers and stop recommending when both lessons are complete. Preserve correct answers while adding recommendations, and verify the complete learning journey.

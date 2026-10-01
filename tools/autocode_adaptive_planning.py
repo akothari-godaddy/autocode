@@ -36,6 +36,11 @@ from __future__ import annotations
 
 import copy
 
+try:
+    from .autocode_progressive_plan import DISCLOSURE_DELEGATION
+except ImportError:
+    from autocode_progressive_plan import DISCLOSURE_DELEGATION
+
 SETTING = "adaptive_planning"
 CLARITY = ("clear", "vague")
 # The default review allowance is two calls (challenge and finalize). A large plan
@@ -75,6 +80,13 @@ with your non-blocking concerns as notes, and there is no revise or final round.
 only to get another round. If planning.reports already holds a glm_revise report, this is a re-review of the
 revised plan: judge whether the Planner's responses settled your earlier concerns, and raise only what remains
 or what the revision introduced.
+"""
+
+PROGRESSIVE_REVIEW_RULE = """
+Progressive delegation is an exception to early approval: even with no blocking concern, the
+concrete first slice and initial_task must finish the configured independent final review before
+the user is asked to approve. Use the bounded challenge and final review, not extra adaptive
+challenge rounds or an approval request that cannot yet activate the reviewed slice.
 """
 
 
@@ -122,12 +134,13 @@ def report_schema(state: dict, stage: str, base: dict, planning_body: dict) -> d
 def prompt_rule(state: dict, stage: str) -> str:
     if not enabled(state):
         return ""
+    progressive = requires_final_review((state.get("goal_contract") or {}).get("body") or {})
     if stage == "astra_discovery":
         return PLANNER_RULE + ("" if state.get("requirements_handoff") else NO_REQUIREMENTS_RULE)
     if stage == "glm_revise":
-        return PLANNER_RULE
+        return PLANNER_RULE + (PROGRESSIVE_REVIEW_RULE if progressive else "")
     if stage == "astra_challenge":
-        return REVIEW_RULE
+        return REVIEW_RULE + (PROGRESSIVE_REVIEW_RULE if progressive else "")
     return ""
 
 
@@ -151,10 +164,15 @@ def blocking(concerns: list) -> list:
     return [concern for concern in concerns if concern.get("blocking")]
 
 
+def requires_final_review(body: dict) -> bool:
+    """A progressive declaration cannot take the adaptive early-approval path."""
+    return any(isinstance(line, str) and line.startswith(DISCLOSURE_DELEGATION) for line in body.get("constraints", []))
+
+
 def approvable(body: dict) -> bool:
     """Whether a draft is complete enough to go to the user without a final review."""
     task = body.get("initial_task") or {}
-    return not body.get("open_blocking_questions") and task.get("kind") in ("implement", "validate")
+    return not requires_final_review(body) and not body.get("open_blocking_questions") and task.get("kind") in ("implement", "validate")
 
 
 def review_limit(size: str, current: int) -> int:

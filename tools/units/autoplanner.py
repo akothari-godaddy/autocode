@@ -13,6 +13,8 @@ try:
     from .. import autocode_stage_context as stage_context, autocode_acceptance_policy as acceptance_policy
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
     from .. import autocode_follow_up as follow_up, autocode_adaptive_planning as adaptive, autocode_draft_examples as examples
+    from .. import autocode_progressive_state as progressive
+    from .. import autocode_repair_provenance as repair_provenance
 except ImportError:
     import autocode_acceptance_policy as acceptance_policy
     import autocode_test_cases as test_cases
@@ -25,6 +27,8 @@ except ImportError:
     import autocode_workflows as workflows
     import autocode_adaptive_planning as adaptive
     import autocode_draft_examples as examples
+    import autocode_progressive_state as progressive
+    import autocode_repair_provenance as repair_provenance
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
 # A build that implements an approved design (autocode_design_check_job) skips requirements
@@ -368,6 +372,21 @@ for _stage in ("astra_discovery", "glm_revise"):
     SCHEMAS[_stage]["properties"]["remediation_records"] = {"type": "array", "items": REMEDIATION}
 for _stage in ("astra_challenge", "astra_finalize"):
     SCHEMAS[_stage]["properties"]["obligation_decisions"] = {"type": "array", "items": OBLIGATION_DECISION}
+# Optional progressive proposal for goals that only succeed as several useful
+# end-to-end slices. The runner validates it, generates the plan-card disclosure
+# from it and seals it at ordinary approval; a report without one keeps the
+# ordinary path. Old saved reports remain valid.
+PROGRESSIVE_CHECK = obj({"id": S, "method": S,
+                         "relation": {"type": "string", "enum": ["contributes_to", "fully_verify"]},
+                         "criterion_ids": SS})
+PROGRESSIVE_SLICE = obj({"id": S, "intended_result": S, "criterion_ids": SS, "paths": SS, "depends_on": SS,
+                         "checks": {"type": "array", "items": PROGRESSIVE_CHECK},
+                         "tentative": {"type": "boolean"}})
+PROGRESSIVE_PROPOSAL = obj({"version": {"type": "integer"}, "needed_because": S, "shared_decisions": SS,
+                            "outstanding_criteria": SS, "done_slices": SS,
+                            "slices": {"type": "array", "items": PROGRESSIVE_SLICE}})
+for _stage in ("astra_discovery", "glm_revise", "astra_finalize", "plan", "plan_revise", "plan_finalize"):
+    SCHEMAS[_stage]["properties"]["progressive_proposal"] = PROGRESSIVE_PROPOSAL
 
 
 # The job type travels requirements -> contract -> approval. Every planning stage still runs;
@@ -493,28 +512,80 @@ def set_review_call_limit(state, limit):
         issued_pause = state['resolver']['human_escalations'][published['request_id']]['identity']['proposal']['origin'].get('pause_status')
     unlimited_checkpoint = (type(limit) is int and limit == 0
                             and state.get('status') in ('PAUSED_STAGE_ABANDONED', 'PAUSED_REQUESTED'))
+    v2 = state.get("settings", {}).get("planning_flow") == "v2"
+    review_stages = ("plan_review", "plan_finalize") if v2 else ("astra_challenge", "astra_finalize")
+    detail = (progressive.authorized_detail_reservation(state)
+              if state.get("next_stage") in ("glm_revise", "plan_revise") else None)
     if (not enabled(state) or not state.get("planning")
-            or (not unlimited_checkpoint and (
+            or (progressive.enabled(state) and not detail
+                and state.get("next_stage") in ("glm_revise", "plan_revise"))
+            or (not detail and not unlimited_checkpoint and (
                 (limit == 0 and state.get("status") != "PAUSED_PLANNING_BUDGET")
                 or (limit != 0 and (state.get("status") != "PAUSED_PLANNING_BUDGET"
                                     and issued_pause != "PAUSED_PLANNING_BUDGET"))
-                or state.get("next_stage") not in ("astra_challenge", "astra_finalize")))
+                or state.get("next_stage") not in review_stages))
             or any(state.get(key) for key in ("active_stage", "pending_report_repair", "uncertain_artifacts"))):
         raise ValueError("Planning allowance requires a reconciled PAUSED_PLANNING_BUDGET checkpoint")
-    previous = review_call_limit(state)
-    if type(limit) is not int or (limit != 0 and (limit < 2 or limit < previous or limit < state["planning"]["astra_calls"])):
+    if v2 and not detail and state.get("next_stage") in review_stages:
+        if ((state.get("status") != "PAUSED_PLANNING_BUDGET" and issued_pause != "PAUSED_PLANNING_BUDGET")
+                or goals.approved(state) or progressive.revision_pending(state)
+                or state.get("intervention_ack_pending") or state.get(human.PRIVATE)
+                or ((state.get("pending_questions") or state.get("user_request") or state.get(human.PUBLIC))
+                    and issued_pause != "PAUSED_PLANNING_BUDGET")):
+            raise ValueError("Planning allowance requires a reconciled current v2 review frontier")
+        try:
+            contract = state["goal_contract"]
+            predecessor = artifacts.verify_predecessor(state, state["next_stage"], state["run_dir"])
+            saved = s.read(Path(predecessor["artifact"]["absolute_path"]))
+            if not goals.sealed(contract) or saved["report"]["contract"] != contract["body"]:
+                raise ValueError("v2 review predecessor differs from the current sealed draft")
+            if saved.get("origin") != "user_cli_edit":
+                prior = state["planning"]["reports"][predecessor["stage"]]
+                witness = next((row for row in reversed(state.get("stages", []))
+                    if row.get("output") == prior["output"]
+                    and (row.get("stage") == predecessor["stage"] or (row.get("report_only")
+                        and row.get("original_stage") == predecessor["stage"]
+                        and row.get("stage") == predecessor["stage"] + "_report_repair"))
+                    and row.get("exit_code") == 0 and not row.get("rejected") and not row.get("abandoned")), None)
+                if witness and witness.get("report_only"):
+                    repair_provenance.session(state, witness, predecessor["stage"])
+                if (prior["artifact"] != state["planning_artifacts"][predecessor["stage"]]
+                        or prior["report"] != saved["report"] or not witness
+                        or witness.get("source_revision") != s.snapshot(Path(state["workspace"]))["revision"]):
+                    raise ValueError("v2 review predecessor lacks current accepted Planner evidence")
+            elif state["next_stage"] != "plan_review" or contract.get("origin") != "user_cli_edit":
+                raise ValueError("v2 user-edited plan is not the current first-review frontier")
+            elif next((row for row in reversed(state.get("planning_artifact_history", []))
+                    if row.get("stage") == predecessor["stage"]), None) != {
+                        "stage": predecessor["stage"], **state["planning_artifacts"][predecessor["stage"]]}:
+                raise ValueError("v2 user-edited plan artifact/delta pair differs from the accepted handoff")
+        except (ValueError, KeyError, TypeError, AttributeError, OSError) as error:
+            raise ValueError("Planning allowance requires a reconciled current v2 review frontier: " + str(error)) from error
+    previous = detail["review_limit"] if detail else review_call_limit(state)
+    calls_used = detail["reviews_used"] if detail else state["planning"]["astra_calls"]
+    if (type(limit) is not int or (limit != 0 and
+            (limit < 2 or (not detail and (limit < previous or limit < calls_used))))):
         raise ValueError("Planning review call limit must be 0 (unlimited) or an integer no smaller than the current limit and usage")
-    if limit == previous and state['planning'].get('review_call_limit_origin') == 'user_explicit':
+    events = state.get("user_events") or []
+    prior_budget = progressive.view(state).get("budget")
+    progressive.set_explicit_limits(state, review_calls=limit)
+    if (limit == previous and state['planning'].get('review_call_limit_origin') == 'user_explicit'
+            and prior_budget == progressive.view(state).get("budget")
+            and (not detail or (events and events[-1].get("pool_id") == detail["pool_id"]
+                                and events[-1].get("limit") == limit))):
         return
     state["planning"]["review_call_limit"] = limit
     state['planning']['review_call_limit_origin'] = 'user_explicit'
     if limit == 0:
         state['settings']['planning_review_call_limit'] = 0
     human.supersede_operational(state, 'Operator explicitly selected the planning review allowance')
-    state.setdefault("user_events", []).append({
+    event = {
         "kind": "planning_budget_change", "actor": "user_cli", "at": s.now(),
-        "previous_limit": previous, "limit": limit, "calls_used": state["planning"]["astra_calls"],
-        "stage": state["next_stage"], "contract_token": goals.token(state["goal_contract"])})
+        "previous_limit": previous, "limit": limit, "calls_used": calls_used,
+        "stage": state["next_stage"], "contract_token": goals.token(state["goal_contract"])}
+    if detail:
+        event["pool_id"] = detail["pool_id"]
+    state.setdefault("user_events", []).append(event)
 
 
 def refund_unreported(state, planning):
@@ -537,6 +608,8 @@ def refund_unreported(state, planning):
 
 def charge(state, stage, record=None, workspace=None):
     if stage not in ("astra_challenge", "astra_finalize", "plan_review", "plan_finalize"):
+        return
+    if progressive.charge_review(state, stage, record):
         return
     planning = state["planning"]
     refund_unreported(state, planning)
@@ -769,6 +842,47 @@ asked as a decision question under its id, and initial_task.kind must be "none".
 """
 
 
+PROGRESSIVE_POLICY = """
+When revising a previously approved progressive product goal, retain prior check obligations by
+default. A removal requires an exact visible scope_exclusions string:
+'Progressive check retirement: ' + canonical JSON {check_id,check_hash,removes}, with sorted keys
+and separators (',',':'). check_hash is the old check definition identity; removes must name an
+exact old required behavior or criterion text removed from the revised product. Never retire an
+unrelated check, infer removal from changed IDs, or claim a model approval. Ordinary independent
+review and explicit user approval of the new goal token are required before retirement takes effect.
+The runner mirrors the exact scope_exclusions retirement declaration into visible constraints
+before independent review and user approval; retain that exact line, never a conflicting mirror.
+PROGRESSIVE PLANNING (optional). When the goal only succeeds as several genuinely useful end-to-end
+slices, propose a progressive plan instead of one long build: progressive_proposal
+{version: 1, needed_because, shared_decisions, outstanding_criteria, done_slices, slices}. The report
+schema always includes progressive_proposal; when the goal does not need progressive planning return
+its empty form (version 0, empty strings and lists, no slices), which means no proposal. Propose
+it only when those slices and their boundaries can be stated from the requirements and repository
+evidence; never for a small or tightly coupled task, and never to paper over an ambiguous outcome
+(clarify that instead). The product outcome stays fixed: slices deliver it progressively.
+Every acceptance criterion ID must be planned on at least one slice or listed in outstanding_criteria;
+a revision may split, reorder or replace future slices but may never drop a criterion from that map.
+slices[0] is the first slice: the main user journey across the essential layers, with an observable
+useful result, bounded writable paths (paths), the product criteria it touches (criterion_ids) and
+nonempty checks. Later slices are marked tentative: true: not dispatchable until a reviewed slice
+revision promotes them. Investigation or setup work may be tasks inside a slice, but is never
+reported as delivery.
+A check is {id, method, relation, criterion_ids}: relation is contributes_to (the slice demonstrates
+part of the criterion; the criterion stays open) or fully_verify (this proof can establish the
+criterion). method must contain an explicit supported command the runner can replay at the
+checkpoint, for example `python -m pytest tests/test_journey.py -q`; prose that merely describes
+verification is refused, and the command must use repository source or fixtures, never run/session
+state. The commands need not pass before the slice is built.
+The runner generates the plan-card disclosure from your proposal into constraints and
+technical_approach (the delegation, its limits and the slice sequence). Never write lines starting
+"Progressive delegation:", "Progressive slice:" or "Product criteria explicitly outstanding:";
+mismatched hand-written disclosure is refused. Initial approval delegates continuation within the
+agreed outcome, constraints and permissions; product changes, new permissions and unresolved product
+decisions still return to the user, and every slice still gets independent plan review and
+verification.
+"""
+
+
 def split_code_ref(root, ref):
     """(path, line citation) of a cited source entry. A line citation follows a colon ("path:12",
     "path:12-20 why"). Prose after an existing path ("path — why", "path: why") is the model's explanation,
@@ -919,6 +1033,8 @@ def context(state, stage, state_path):
     planning_policy = "" if stage == "requirements_gather" else (
         goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + examples.RULE + s.MILESTONE_POLICY + EVIDENCE_FACTS
         + ("" if stage in ("astra_challenge", "plan_review") else CONTRACT_FIELDS_RULE))
+    progressive_policy = PROGRESSIVE_POLICY if stage in ("astra_discovery", "glm_revise", "astra_challenge",
+                                                         "astra_finalize") else ""
     if stage != "requirements_gather":
         packet["capture_command"] = capture_command()
     clarification_policy = ("" if stage == "astra_challenge" else QUESTION_POLICY) + (
@@ -946,7 +1062,7 @@ def context(state, stage, state_path):
     if rows and stage in TRACE_STAGES:
         design_rule += REQUIREMENT_TRACE_RULE
     design_rule += adaptive.prompt_rule(state, stage)
-    prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
+    prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + progressive_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
     return prompt, {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
@@ -955,6 +1071,27 @@ def context(state, stage, state_path):
 
 def prepare(state, stage, state_path, schema_dir):
     from .common import ModelRequest
+    if progressive.revision_pending(state):
+        transition = progressive.view(state)["transition"]
+        schema = (obj({"summary": S, "progressive_proposal": PROGRESSIVE_PROPOSAL,
+                       "initial_task": goals.PLANNING_BODY_SCHEMA["properties"]["initial_task"]})
+                  if transition["phase"] == "detail" else obj({"summary": S, "accepted": {"type": "boolean"},
+                      "product_changes": {"type": "boolean"}, "permission_changes": {"type": "boolean"},
+                      "unresolved_product_decisions": {"type": "boolean"}}))
+        packet = {"goal_contract": state["goal_contract"], "progressive": progressive.context(state),
+                  "progressive_revision": copy.deepcopy(transition), "previous_plan": progressive.view(state)["plan"],
+                  "stage": stage, "task": state["task"], "workspace": state["workspace"],
+                  "current_task": state.get("current_task"), "saved_answers": state.get("answers", {})}
+        prompt = ("Detail/review the next useful slice within the unchanged approved product contract. "
+                  "Do not implement or replace the contract. Retain done_slices and cumulative obligations. "
+                  "The Planner returns a concrete first slice plus its initial_task; the independent Reviewer "
+                  "must inspect the exact persisted candidate and accept only in-bounds technical changes. "
+                  "Product/permission changes or unresolved product decisions cannot be automatically activated.\nCURRENT HANDOFF DATA\n"
+                  + json.dumps(packet, indent=2))
+        role = role_for(state, stage)
+        return ModelRequest(role, route_for(state, stage, role), prompt,
+            {"estimated_prompt_tokens": (len(prompt.encode()) + 3) // 4,
+             "soft_budget_tokens": state["settings"].get("context_soft_tokens", 10000)}, schema, False)
     if stage == RECOGNIZE:
         state["phase"] = "DISCOVERING"
         role = role_for(state, stage)
@@ -1013,7 +1150,8 @@ def after_challenge(state, value, record):
 
 def after_revise(state):
     """After a revision: the final review, or in an adaptive run another first-style review while budget allows."""
-    if not adaptive.enabled(state):
+    if (not adaptive.enabled(state)
+            or adaptive.requires_final_review((state.get("goal_contract") or {}).get("body") or {})):
         return "astra_finalize"
     planning = state["planning"]
     return adaptive.after_revise(review_call_limit(state), planning["astra_calls"],

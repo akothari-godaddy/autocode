@@ -16,13 +16,15 @@ USER_REQUEST = obj({"kind": {"type": "string", "enum": [
     "options": STRINGS, "proposed_delta": STRING})
 
 
-def role_schema(legacy, role):
+def role_schema(legacy, role, *, progressive=False):
     schema = copy.deepcopy(legacy)
     schema["properties"].update(contract_revision={"type": "integer"}, contract_hash=STRING, task_id=STRING,
                                 user_request=USER_REQUEST, deferred_backlog=STRINGS)
     schema["required"] += ["contract_revision", "contract_hash", "task_id", "user_request", "deferred_backlog"]
     if role == "astra":
         schema["properties"]["status"]["enum"] = ["CONTINUE", "REWORK", "BLOCKED", "COMPLETE"]
+        if progressive:
+            schema["properties"]["progressive_checkpoint"] = {"type": "boolean"}
         schema["properties"]["next_task"] = obj({
             "kind": {"type": "string", "enum": ["implement", "validate", "none"]},
             "milestone_id": STRING, "requirements": STRINGS,

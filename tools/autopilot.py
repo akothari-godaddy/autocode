@@ -14,10 +14,11 @@ try:
     from . import autocode_resolver_human as human, autocode_failures as failures, autocode_assignment as assignment
     from . import autocode_retained_work as retained_work
     from . import autocode_planning_clarification as clarification
+    from . import autocode_progressive_state as progressive_state
     from .units import autoplanner as planning_unit
-    from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
+    from . import autocode_regression as regression, autocode_verify as verify, autocode_validation_replay as validation_replay, autocode_human_review_request as human_review_request
 except ImportError:
-    import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
+    import autocode_regression as regression, autocode_verify as verify, autocode_validation_replay as validation_replay, autocode_human_review_request as human_review_request
     import autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs
     import autocode_stuck_job as stuck, autocode_goals as goals, autocode_goal_lifecycle as lifecycle
     import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
@@ -30,6 +31,7 @@ except ImportError:
     import autocode_failures as failures, autocode_assignment as assignment
     import autocode_retained_work as retained_work
     import autocode_planning_clarification as clarification
+    import autocode_progressive_state as progressive_state
     from units import autoplanner as planning_unit
 
 SKIP = object()
@@ -129,6 +131,7 @@ def publish_handoffs(state, run_dir):
 
 def dispatch_unit(runtime, state, stage, workspace, run_dir):
     """Call one unit using the runner's durable provider/recovery services."""
+    progressive_state.guard_dispatch(state, stage)
     if stage == 'terra':
         builder_policy.guard(state)
     runtime.milestones.dispatch_guard(state, stage)
@@ -205,16 +208,33 @@ def _bind_plan(state, value, origin, record):
     goals.check_requirement_trace(state, value, value["contract"], coverage=planning_unit.traces_coverage(value["contract"]))
     if origin in ("glm_draft", "glm_revise"):
         _check_code_refs(state, value.get("code_refs") or [])
+    progressive_state.accept_proposal(state, value, origin=origin)
     lifecycle.install_draft(state, value["contract"], origin=origin, changes=value.get("contract_changes") or [], record=record)
 
 
 def apply_planning(state, stage, value, record, *, run_dir=None):
+    if progressive_state.revision_pending(state):
+        result = progressive_state.apply_revision(state, stage, value, record,
+            product_findings=findings_ledger.blocking_entries(state))
+        if isinstance(result, dict) and "material_request" in result:
+            request = result["material_request"]
+            human.queue(state, request["kind"], {"stage": stage}, request=request,
+                        evidence=result["evidence"], next_stage=result["next_stage"])
+        elif isinstance(result, dict):
+            first = result["initial_task"]
+            decision = {"status": "CONTINUE", "next_task": {key: entry for key, entry in first.items()
+                        if key not in ("objective", "affected_paths")}, "next_objective": first["objective"],
+                        "affected_paths": first["affected_paths"], "evidence": []}
+            kind = lifecycle.assign_task(state, decision, support.snapshot(Path(state["workspace"])))
+            state.update(next_stage="sol" if kind == "validate" else "terra", phase="EXECUTING")
+        return
     # Older saved reports predate explicit, user-backed conflict resolutions.
     # An absent list supplies no authority to resolve any conflict.
     if "conflict_resolutions" in planning_unit.SCHEMAS[stage]["properties"]:
         value = {"conflict_resolutions": [], **value}
     if stage in planning_unit.V2_STAGES:
         support.validate_schema(value, planning_unit.SCHEMAS[stage])
+        progressive_state.accept_proposal(state, value, origin=stage)
         prepared = planning_artifacts.prepare(state, stage, value, origin=stage,
                                               run_dir=run_dir, record=False)
         if stage == "requirements":
@@ -470,6 +490,7 @@ def apply_build_result(runtime, state, value, record, workspace, run_dir):
 
 def apply_review_result(runtime, state, stage, value, record, workspace, run_dir):
     modern = state.get("version", 2) >= 3
+    progressive_state.require_reported_checks(state, value["checks"])
     support.verify_checks(value["checks"], workspace, record["events"],
                           **runtime.check_evidence_options(record))
     refs = [c["evidence_ref"] for c in value["checks"]]
@@ -515,8 +536,10 @@ def apply_review_result(runtime, state, stage, value, record, workspace, run_dir
                                   for c in state["goal_contract"]["body"]["acceptance_criteria"] if c["human_review"])
     if (value["verdict"] == "PASS" or human_pending) and (not value["checks"] or any(c["exit_code"] for c in value["checks"])):
         raise ValueError("Technically passing validation lacks successful executed checks: list each check you ran, with its exit code")
-    validation["check_replay"] = (check_replay.replay(value["checks"], workspace, run_dir, record, verify.scratch_run, approved_state=state)
-                                  if value["verdict"] == "PASS" or human_pending else None)
+    validation["check_replay"] = validation_replay.replay(state, value, workspace, run_dir, record, verify.scratch_run)
+    if progressive_state.enabled(state):
+        progressive_state.check_result_binding(state, record, support.snapshot(workspace))
+        progressive_state.assert_product_claims(state, support.snapshot(workspace), validation)
     if state.get("validation"):
         state.setdefault("validation_archive", []).append({
             "reason": "Superseded by another independent validation", "validation": state["validation"]})
@@ -658,6 +681,8 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
         save_record(state, record)
         return
     if modern:
+        if progressive_state.enabled(state):
+            progressive_state.check_result_binding(state, record, support.snapshot(workspace))
         goals.execution_guard(state, value)
         for entry in value.get("deferred_backlog", []):
             if entry not in state.setdefault("deferred_backlog", []):
@@ -735,7 +760,26 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
             findings_ledger.record_decision(state, value, record)
         if modern and stage == "astra_review":  # only the Validator can close its own open blockers
             value = findings_ledger.recheck_by_validator(state, value, record.get("source_revision"))
+        if stage == "astra_review" and value.get("progressive_checkpoint") is True:
+            if value["status"] != "CONTINUE" or not progressive_state.enabled(state):
+                raise ValueError("progressive checkpoint requires explicit CONTINUE within an approved progressive run")
+            if value["next_task"]["kind"] != "none":
+                raise ValueError("slice checkpoint cannot manufacture a next assignment before independent slice review")
+            proven = {row["id"] for row in (state.get("validation") or {}).get("criterion_results", []) if row["status"] == "PASS"}
+            if any(row["status"] == "verified" and row["id"] not in proven for row in value["acceptance_criteria"]):
+                raise ValueError("slice checkpoint cannot claim verified original criteria without the Validator's current product proof")
+            current = support.snapshot(workspace)
+            pending = progressive_state.checkpoint(state, current, record,
+                                                  product_findings=findings_ledger.blocking_entries(state))
+            if pending and pending.get("human_review_pending"):
+                human_review_request.queue(state, pending["human_review_pending"], current, record, stage, lifecycle.wait_for_user)
+            goals.record_decision(state, value)
+            save_record(state, record)
+            return
         current = support.snapshot(workspace)
+        if value["status"] in ("COMPLETE", "TASK_COMPLETE"):
+            progressive_state.prepare_completion(state, current, record,
+                                                  product_findings=findings_ledger.blocking_entries(state))
         request = (completion_gate.artifact_review_request(state, value, current)
                    if modern and stage in ("astra_review", "astra_checkpoint") else None)
         if request:
@@ -810,7 +854,8 @@ def _apply_result(runtime, state, stage, value, record, workspace, run_dir):
                                    trigger="validation_rework",
                                    detail=f"{validation_verdict}: {value['next_objective']}",
                                    struggle_id=f"iteration:{record.get('iteration', state.get('iteration', 0))}")
-            state.update(next_action=value["next_objective"], next_stage=workflow.review_stage(state) if kind == "validate" else dispatch.build_stage(state))
+            state.update(next_action=value["next_objective"], next_stage=workflow.review_stage(state) if kind == "validate" else
+                         "terra" if progressive_state.enabled(state) else dispatch.build_stage(state))
             if stage == "astra_resolve":
                 finish_resolution(state, value, record)
         if modern:

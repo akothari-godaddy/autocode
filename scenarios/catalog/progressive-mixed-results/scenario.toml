@@ -1,0 +1,8 @@
+title = "Mixed progressive criterion results enter ordinary repair"
+category = "feature"
+[fake]
+check = "python3 -m unittest test_journey"
+fault = "progressive_multi_regression"
+[run]
+max_steps = 60
+requires_stages = ["astra_resolve", "terra", "sol"]

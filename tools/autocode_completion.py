@@ -9,8 +9,10 @@ from pathlib import Path
 
 try:
     from .autocode_util import Paused, criteria_definition, file_hash
+    from .autocode_progressive_completion import ready as progressive_ready
 except ImportError:
     from autocode_util import Paused, criteria_definition, file_hash
+    from autocode_progressive_completion import ready as progressive_ready
 
 REFUSED = "Completion rejected: missing, stale, failed or unverified independent evidence"
 
@@ -32,6 +34,8 @@ def rejection(state) -> str:
 
 
 def completion_ready(state, decision, current, *, require_human_reviews=True, require_independent=True):
+    if not progressive_ready(state, current, require_human_reviews=require_human_reviews):
+        return False
     human_only_gap = False
     if (require_independent and state.get('settings', {}).get('milestone_checkpoints', {}).get('enabled')
             and state.get('validation', {}).get('reviewer_role') != 'sol'):
@@ -78,7 +82,11 @@ def completion_ready(state, decision, current, *, require_human_reviews=True, re
     criteria = state.get("acceptance_criteria", [])
     if not criteria or criteria_definition(decision.get("acceptance_criteria", [])) != criteria_definition(criteria):
         return False
-    if any(c["status"] != "verified" or not c["evidence"].strip() for c in decision["acceptance_criteria"]):
+    pending_humans = ((state.get("progressive") or {}).get("completion_proof", {}).get("pending_human_criteria", [])
+                      if human_only_gap and not require_human_reviews else [])
+    if any((c["status"] != "verified" or not c["evidence"].strip())
+           and not (c["id"] in pending_humans and c["status"] == "unverified")
+           for c in decision["acceptance_criteria"]):
         return False
     if (sol.get("verdict") != "PASS" and not human_only_gap) or sol.get("criteria_revision") != state.get("criteria_revision"):
         return False

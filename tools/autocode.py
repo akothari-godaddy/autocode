@@ -46,6 +46,7 @@ try:
     from . import autocode_reviewer_fallback as reviewer_fallback
     from . import autocode_planning_artifacts as planning_artifacts
     from . import autocode_budget_recovery as budget_recovery
+    from . import autocode_progressive_state as progressive_state
     from . import autocode_findings as findings_ledger
     from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from .autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
@@ -71,6 +72,7 @@ except ImportError:
     import autocode_reviewer_fallback as reviewer_fallback
     import autocode_planning_artifacts as planning_artifacts
     import autocode_budget_recovery as budget_recovery
+    import autocode_progressive_state as progressive_state
     import autocode_findings as findings_ledger
     import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
@@ -143,9 +145,10 @@ def recover_default_budget(state, run_dir, workspace, kind):
         else:
             state['settings']['limits'][kind] = extension['to']
         state.setdefault('resolver', {})['budget_extensions'] = candidate['resolver']['budget_extensions']
-        resolver_runtime._operational_receipt(state, run_dir, 'extend_default_budget',
+        receipt_id = resolver_runtime._operational_receipt(state, run_dir, 'extend_default_budget',
             f"AutoResolver extended internal {kind} from {extension['from']} to {extension['to']} "
             "once after verified progress; usage and failure history are retained.", extension)
+        progressive_state.apply_recovery_limit(state, extension, receipt_id)
         write_json(Path(run_dir) / 'state.json', state)
         return True
 
@@ -339,7 +342,7 @@ def run_role(
     if (joint_stage or stage == "astra_discovery") and (
             role != planning.role_for(state, stage) or allow_write or sandbox != "read-only"):
         raise support.Paused("PAUSED_DISCOVERY_WRITE", "Planning must use its assigned role read-only")
-    if original_stage in planning.V2_STAGES:
+    if original_stage in planning.V2_STAGES and not progressive_state.revision_pending(state):
         try:
             planning_artifacts.verify_predecessor(state, original_stage, run_dir)
         except ValueError as error:
@@ -474,6 +477,7 @@ def run_role(
                             grant['id'] for grant in state['planning']['reviewer_route_fallbacks']
                             if grant.get('consumed') and grant['binding']['selected_route'] == admitted)
                 resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], state, run_dir, workspace, record)
+                progressive_state.admit_attempt(state, record, before)
                 state["active_stage"] = record
                 write_json(run_dir / "state.json", state)
                 child_stdin = (subprocess.DEVNULL if engine == "opencode" and configured_tool
@@ -967,6 +971,7 @@ def reconcile_active(state, run_dir, workspace):
         if (("expected_session" in record and not thread)
                 or (record.get("expected_session") and thread != record["expected_session"])):
             raise support.Paused("PAUSED_UNCERTAIN_STAGE", "Recovered response belongs to an unexpected session")
+        record["thread_id"] = thread
         if thread and not record.get('report_only'):
             state["sessions"][record.get("route_role", record["role"])] = thread
     record["metrics"] = support.event_metrics(record["events"])
@@ -986,10 +991,6 @@ def reconcile_active(state, run_dir, workspace):
     write_json(base.with_suffix(".after.json"), after)
     record.update(after_ref=str(base.with_suffix(".after.json")), source_revision=after["revision"],
                   changed_files=support.changed_paths(before, after), recovered_at=now(), metrics=support.event_metrics(record["events"]))
-    if supports_sessions:
-        thread = event_thread_id(Path(record["events"]))
-        if thread and not record.get('report_only'):
-            state["sessions"][record.get("route_role", record["role"])] = thread
     try:
         value = load_stage_report(record, workspace,
             (state.get('pending_report_repair') or {}).get('original') if record.get('report_only') else None, state=state)
