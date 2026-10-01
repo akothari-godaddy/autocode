@@ -35,8 +35,12 @@ validates the final report against the stage schema, and verifies command eviden
 against actual completed bash events; the runner then re-runs a passing Validator's
 checks itself in a clean copy ([Execution](execution.md#the-runner-re-runs-the-validators-checks)). Raw events, session IDs and stage-local
 permission overrides are saved alongside the checkpoint. Token limits include cache
-reads/writes and reasoning tokens. Malformed, truncated or uncertain results pause;
-the runner does not automatically replay the provider request.
+reads/writes and reasoning tokens. Malformed or uncertain results pause; the runner
+does not automatically replay the provider request. The one exception is a Validator or
+Completion Owner response cut off by the output-token limit: when the process exited
+cleanly with the source unchanged, the runner archives the attempt and queues a bounded
+report-only repair from the saved partial response and check evidence rather than
+replaying the provider request.
 
 OpenCode has a different isolation boundary: Requirements Planner sessions and other
 read-only OpenCode roles have edit tools denied and their workspace snapshots
