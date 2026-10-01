@@ -296,6 +296,17 @@ def same_command(event_command, check_command):
     return False
 
 
+def _workspace_wrapped_command(executed, reported, workspace):
+    """Match a bare command to the recorded workspace wrapper and stderr redirect."""
+    prefix = f"cd {shlex.quote(str(Path(workspace).resolve()))} && "
+    if not executed.startswith(prefix):
+        return False
+    body = executed[len(prefix):]
+    if body.endswith(' 2>&1'):
+        body = body[:-5]
+    return body == reported
+
+
 def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_context=None):
     """Verify checks against executed events or attempt-bound, output-hashed receipts.
     Fill only absent exit codes from unique evidence."""
@@ -320,14 +331,9 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
             if len(matches) == 1 and isinstance(matches[0].get('command'), str):
                 executed = matches[0]['command']
                 same = same_command(executed, check['command'])
-                prefix = f"cd {shlex.quote(str(Path(workspace).resolve()))} && "
-                if not same and executed.startswith(prefix):
-                    body = executed[len(prefix):]
-                    if body.endswith(' 2>&1'):
-                        body = body[:-5]
-                    same = body == check['command']
-                    if same:
-                        check['command'] = executed
+                if not same and _workspace_wrapped_command(executed, check['command'], workspace):
+                    same = True
+                    check['command'] = executed
                 if (same and type(matches[0].get('exit_code')) is int
                         and (missing_exit or matches[0]['exit_code'] == check['exit_code'])):
                     check['exit_code'] = matches[0]['exit_code']
@@ -338,12 +344,14 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
                 alternates = [e["item"] for e in rows
                               if e.get("type") == "item.completed" and e.get("item", {}).get("type") == "command_execution"
                               and isinstance(e['item'].get('command'), str)
-                              and same_command(e['item']['command'], check['command'])
+                              and (same_command(e['item']['command'], check['command'])
+                                   or _workspace_wrapped_command(e['item']['command'], check['command'], workspace))
                               and (missing_exit or e['item'].get('exit_code') == check['exit_code'])]
                 if (len(alternates) == 1 and type(alternates[0].get('exit_code')) is int
                         and isinstance(alternates[0].get('id'), str) and alternates[0]['id']):
                     check["evidence_ref"] = "event:" + alternates[0]["id"]
                     check['exit_code'] = alternates[0]['exit_code']
+                    check['command'] = alternates[0]['command']
                     continue
             raise ValueError("Check is not supported by an exact executed Validator event")
         path = Path(check["evidence_ref"])

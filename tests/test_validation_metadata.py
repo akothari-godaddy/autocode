@@ -62,6 +62,23 @@ class ValidationMetadataTests(unittest.TestCase):
             support.verify_checks([{'command': 'python test.py', 'evidence_ref': 'event:actual', 'exit_code': 0}],
                                   self.workspace, self.log)
 
+    def test_unique_alias_canonicalizes_workspace_wrapper_only(self):
+        executed = f'cd {self.workspace} && python test.py 2>&1'
+        self.events(self.event(command=executed))
+        check = {'command': 'python test.py', 'evidence_ref': 'event:conversation-id', 'exit_code': 0}
+        support.verify_checks([check], self.workspace, self.log)
+        self.assertEqual({'command': executed, 'evidence_ref': 'event:actual', 'exit_code': 0}, check)
+
+        self.events(self.event(command=executed), self.event(id='other', command=executed))
+        with self.assertRaises(ValueError):
+            support.verify_checks([{'command': 'python test.py', 'evidence_ref': 'event:conversation-id', 'exit_code': 0}],
+                                  self.workspace, self.log)
+
+        self.events(self.event(command=f'cd {self.workspace.parent} && python test.py 2>&1'))
+        with self.assertRaises(ValueError):
+            support.verify_checks([{'command': 'python test.py', 'evidence_ref': 'event:conversation-id', 'exit_code': 0}],
+                                  self.workspace, self.log)
+
     def test_ambiguity_conflicts_and_unknown_exits_are_not_repaired(self):
         for items, check in [
             ([self.event(), self.event(id='other', exit_code=1)], {'evidence_ref': 'event:missing'}),
