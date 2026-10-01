@@ -297,6 +297,13 @@ Answering final blockers, giving feedback,
 or editing the goal starts fresh joint review and requires fresh approval. Old exchanges
 remain archived. Ordinary resume preserves the cycle and its spent budget.
 
+Before the plan is shown for approval, AutoResolver checks that it is the reviewed final plan and
+that the workspace has not changed since that review. If the check fails, approval is deferred and
+planning restarts with a new cycle. Planning restarts at most twice for the same reason since your
+last input. After that, the run pauses at `PAUSED_APPROVAL_DEFERRED` with the reason, instead of
+spending review calls on cycles that end the same way. `--resume-paused` runs one more cycle;
+`--feedback` restarts from requirements and renews the allowance.
+
 The default workflow uses OpenCode for every role. The Plan Reviewer, Builder, Validator,
 and Completion Owner use OpenCode's current ChatGPT OAuth connection; the Requirements Gatherer
 and Planner use separate sessions on the Z.ai connection by default. Changing

@@ -15,15 +15,17 @@ import tomllib
 
 # Re-export shared helpers for existing callers and test patches.
 try:
+    from .autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     from . import autocode_evidence_snapshot as evidence_snapshot
     from .autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                 model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
-    from . import autocode_receipts as receipts
+    from . import autocode_receipts as receipts, autocode_usage as token_usage
 except ImportError:
+    from autocode_report_schema import review_generation_schema, review_validation_schema, hydrate_review_report
     import autocode_evidence_snapshot as evidence_snapshot
     from autocode_util import (Paused, atomic_json, changed_paths, criteria_definition, digest, file_hash,
                                model_output_schema, now, read, run_lock, snapshot, validate_schema, workspace_lock)
-    import autocode_receipts as receipts
+    import autocode_receipts as receipts, autocode_usage as token_usage
 
 
 def duplicate_runner_command(command):
@@ -113,7 +115,7 @@ def event_metrics(path):
     usage = {k: sum(u[k] for u in usages) if usages and all(k in u for u in usages) else None for k in keys}
     return {"provider_tokens": usage,
             "provider_requests": None, "provider_retries": None,
-            "completed_turns": len(completed), "headroom_transformed": None}
+            "completed_turns": len(completed), "headroom_transformed": None, "provider_cost_usd": token_usage.reported_cost(rows)}
 
 
 def enforce_reported_token_limit(state):
@@ -234,7 +236,7 @@ def evidence_hashes(refs, workspace, run_dir):
         if not path.is_relative_to(Path(workspace).resolve()):
             raise ValueError(f"Evidence outside project: {ref}")
         if not path.is_file():
-            raise ValueError(f"Missing evidence: {ref}")
+            raise ValueError(f"Missing evidence: {ref} (cite a project file path, not a description of what you read)")
         path = evidence_snapshot.stable_path(path, run_dir)
         found[str(path)] = file_hash(path)
     if not found:
@@ -506,7 +508,7 @@ For criterion and end-to-end evidence from image/MCP calls or retained earlier
 stages, cite the exact existing artifact path (including the owning JSONL log),
 not a foreign or non-command event: ID. These artifacts still require independent
 inspection and source provenance; a file path alone is not proof of acceptance.
-Artifact evidence_refs must resolve inside the project. For checks using external
+Artifact evidence_refs are project file paths (README.md), never sentences like "README.md read: 38 lines". For external
 temporary artifacts, cite the current executed shell event that records the
 observation, or its project-contained event log, and preserve any limitations.
 open_findings in CURRENT HANDOFF DATA lists both reviewers' open findings. Each
@@ -524,8 +526,8 @@ decides what happens next. Do not declare project completion.
 """,
 }
 ASTRA_DECISIONS = """
-Return the complete ordered acceptance_criteria array from CURRENT HANDOFF DATA,
-preserving every id and criterion text exactly, including criteria outside the
+Return every acceptance criterion in CURRENT HANDOFF DATA order, preserving IDs and criterion text exactly.
+Only astra_review omits criterion text, returning id, status and evidence. Include criteria outside the
 current milestone. Mark unchecked criteria unverified; narrowing the review scope
 does not authorize dropping criteria from the approved contract.
 Choose exactly one status:
@@ -608,28 +610,6 @@ Do not invent a task-local comparator or loosen its checks. Unknown formats requ
 A matched comparison does not authorize a waiver: verify identical test selection,
 source provenance, and the saved exception separately; investigate baseline-only failures.
 """
-
-def review_generation_schema(schema, state, stage):
-    """Constrain runner-owned identity at generation, not by accepting bad reports."""
-    result = copy.deepcopy(schema)
-    if stage not in ("sol", "astra_review", "astra_checkpoint"):
-        return result
-    props = result.get("properties", {})
-    contract = state.get("goal_contract") or {}
-    for field, value in (("contract_hash", contract.get("hash")),
-                         ("contract_revision", contract.get("revision")),
-                         ("task_id", (state.get("current_task") or {}).get("id", ""))):
-        if field in props and value is not None:
-            props[field] = {**props[field], "enum": [value]}
-    source = "sol" if stage == "sol" else "astra"
-    own = [r["id"] for r in state.get("findings_ledger", [])
-           if r.get("source") == source and r.get("status") == "open"]
-    for field in ("findings", "finding_dispositions"):
-        fields = props.get(field, {}).get("items", {}).get("properties", {})
-        if "id" in fields:
-            fields["id"] = {**fields["id"], "enum": ["", *own]}
-    return result
-
 
 # Bug-fix runs: the runner has already executed the regression proof (autocode_regression).
 # The reviewers use it instead of re-running the same tests, and never override it.

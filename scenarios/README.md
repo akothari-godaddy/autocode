@@ -186,6 +186,23 @@ directory holds:
 A fake comparison proves only the plumbing and the scoring. What matters is a
 live comparison with matched models and a recorded profile.
 
+## Planning: today's pipeline vs adaptive planning
+
+`plan-compare` plans each build request in `planning.toml` twice: once with
+today's fixed AutoPlanner sequence and once with `--adaptive-planning`
+([docs/adaptive-planning.md](../docs/adaptive-planning.md)). It stops each run
+at the plan the user is asked to approve, so nothing is built. It reports
+stages, review calls and blocking concerns, questions, tokens and model time
+side by side. Under `blind/` it writes each request's two plans as Plan A and
+Plan B, with the key kept separately, for judging plan quality without knowing
+which variant wrote which.
+
+```sh
+$PY scenarios/run.py plan-compare --fake                   # every adaptive path, scripted, seconds
+$PY scenarios/run.py plan-compare --profile default --jobs 3 --i-authorize-live-model-spend
+$PY scenarios/run.py plan-compare --rebuild .scenario-runs/<dir>   # re-render a comparison cut short
+```
+
 ## Catalog
 
 | Scenario | Category | What it exercises |

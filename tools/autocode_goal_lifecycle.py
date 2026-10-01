@@ -17,6 +17,7 @@ import uuid
 try:
     from . import autocode_util as s, autocode_workflows as workflows, autocode_milestones as checkpoints
     from . import autocode_findings as findings, autocode_resolver_human as human, autocode_verification_plan as verification_plan
+    from . import autocode_adaptive_planning as adaptive
     from .autocode_goals import (
         BODY_SCHEMA, BRIEF_FIELDS, LEGACY_BODY_SCHEMA, PLANNING_BODY_SCHEMA, approved, check_delegable,
         handoff_ref, initial_decision, invalidate, missing_human_reviews, open_obligations,
@@ -25,6 +26,7 @@ try:
 except ImportError:
     import autocode_util as s, autocode_workflows as workflows, autocode_milestones as checkpoints
     import autocode_findings as findings, autocode_resolver_human as human, autocode_verification_plan as verification_plan
+    import autocode_adaptive_planning as adaptive
     from autocode_goals import (
         BODY_SCHEMA, BRIEF_FIELDS, LEGACY_BODY_SCHEMA, PLANNING_BODY_SCHEMA, approved, check_delegable,
         handoff_ref, initial_decision, invalidate, missing_human_reviews, open_obligations,
@@ -337,6 +339,7 @@ def render(state):
         for decision in final.get("decisions", []):
             lines += [f"  [{decision['concern_id']}] {decision['decision']}",
                       "    Why: " + decision["rationale"], "    Test: " + decision["acceptance_test"]]
+        lines += adaptive.review_notes(state["planning"])
     review = review_token(state) if public else None
     if review:
         lines += ["", f"Review token (current validated artifact): {review}",
@@ -519,6 +522,8 @@ def assign_task(state, decision, current):
     allowed = (set(c for mid in previous_batch for c in milestones[mid]["acceptance_criteria"])
                if spec["milestone_id"] in previous_batch else
                set(milestones.get(spec["milestone_id"], {}).get("acceptance_criteria", [])))
+    if spec["kind"] == "validate":
+        allowed |= checkpoints.recheckable(state)
     if milestones and (spec["milestone_id"] not in milestones or
             not set(ids) <= allowed):
         raise ValueError("Task must belong to an approved milestone and its acceptance criteria")

@@ -36,6 +36,8 @@ remain NOT_VERIFIED while later milestones are unfinished; explain what remains.
 Report other, unbuilt criteria as NOT_VERIFIED without treating them as milestone
 defects. Before overall COMPLETE, validate every contract criterion and the complete
 approved flow on the current artifact. Never weaken the full-task completion gate.
+For that final validation, assign a kind=validate task on the current milestone that lists
+every contract criterion: a validate task may recheck accepted milestones' criteria.
 The Plan Reviewer may advance only with current independent evidence for the entire milestone,
 no blocking findings in its approved scope and any required human reviews. Later-milestone
 findings remain open and still block their own milestones and final completion.
@@ -384,7 +386,8 @@ def before_assignment(state, decision, current):
             raise s.Paused("PAUSED_MILESTONE_HUMAN_REVIEW", "Current milestone requires the recorded human artifact reviews")
         accept(state, current)
         return
-    if not set(spec["acceptance_criteria"]) <= set(row["acceptance_criteria"]):
+    allowed = set(row["acceptance_criteria"]) | (recheckable(state) if spec["kind"] == "validate" else set())
+    if not set(spec["acceptance_criteria"]) <= allowed:
         raise ValueError("A saved milestone cannot silently expand its criteria")
     if spec['kind'] == 'implement':
         check_budget(state)
@@ -408,6 +411,13 @@ def accepted_ids(state):
             if r.get("accepted") and r.get("contract_hash") == contract_hash
             for mid in r.get("milestone_ids", [r["id"]])}
     return carryforward.current_ids(state, accepted)
+
+
+def recheckable(state):
+    """Criteria of milestones accepted under the current contract. A validate task may check them again:
+    final completion needs one validation passing every criterion, and validating changes no code."""
+    milestones = {m["id"]: m for m in state.get("goal_contract", {}).get("body", {}).get("milestones", [])}
+    return {c for mid in accepted_ids(state) for c in milestones.get(mid, {}).get("acceptance_criteria", [])}
 
 
 def require_prerequisites(state, milestone_id):

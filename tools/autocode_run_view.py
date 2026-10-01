@@ -12,6 +12,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+try:
+    from . import autocode_usage
+except ImportError:
+    import autocode_usage
+
 SCHEMA = 1
 COMPLETE = ("TASK_COMPLETE", "COMPLETE")
 # Statuses where relaunching the run, with no user input, continues the work.
@@ -46,6 +51,8 @@ def view(state: dict) -> dict:
         # (autocode_follow_up).
         "turn": len(state.get("turns") or []) + 1,
         "evidence": evidence(state),
+        # Tokens and cost so far, by role (autocode_usage.summary): reported, estimated and unknown kept apart.
+        "usage": autocode_usage.summary(state),
     }
 
 

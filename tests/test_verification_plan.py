@@ -23,6 +23,13 @@ class CommandsTests(unittest.TestCase):
             # Prose after a plain command (live bugfix-trivial, 2026-09-30): replayed as a command, it never passes.
             ("python3 -m unittest -v passes; Validator reads the diff", []),
             ("Run python3 -m unittest -v via capture and read the diff", []),
+            # A sentence after -c (live architecture-two-services, 2026-09-30): NameError when replayed.
+            ("Run python3 -c doing a topological sort/DFS over depends_on.", []),
+            ("Run `python3 -c doing a topological sort` over the graph", []),
+            ("python3 -c: Kahn topological sort over depends_on sorts all nodes (AC6)", []),
+            ("sh -c checking each file exists", []),
+            ("python3 -c exit", ["python3 -c exit"]),
+            ('python3 -c "import a; a.f()" x y', ['python3 -c "import a; a.f()" x y']),
             ("python3 -m unittest discover -s tests -t .", ["python3 -m unittest discover -s tests -t ."]),
             ("python3 -c 'assert f(1, 2) == 3'", ["python3 -c 'assert f(1, 2) == 3'"]),
             ("pytest --verify --output=out.xml tests", ["pytest --verify --output=out.xml tests"])):

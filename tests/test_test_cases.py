@@ -70,13 +70,13 @@ class ContractCasesTests(unittest.TestCase):
                          test_cases.contract_cases(state))
         self.assertIn('"guard:"', test_cases.builder_note(state))
 
-    def test_a_planning_revision_may_switch_test_and_guard_but_nothing_else(self):
+    def test_an_approved_revision_may_switch_test_and_guard_but_keeps_the_same_proof(self):
         # A live review-then-fix plan (2026-09-29) could not move a criterion from test: to guard:, as its
         # Plan Reviewer asked, without asking the user.
         import autocode_goals as goals
 
         def revise(method, text=EXAMPLE["criterion"]):
-            state = {"goal_contract": {"body": {"acceptance_criteria": [EXAMPLE]}, "approval_status": "draft"},
+            state = {"goal_contract": {"body": {"acceptance_criteria": [EXAMPLE]}, "approval_status": "approved"},
                      "answers": {}, "user_events": [], "brief_feedback": []}
             body = {"acceptance_criteria": [{**EXAMPLE, "criterion": text, "verification_method": method}]}
             goals.revision_guard(state, body, [], "glm_revise")
@@ -313,6 +313,29 @@ class PromptTests(unittest.TestCase):
             self.assertIn(autoplanner.EXAMPLE_CRITERIA_RULE, autoplanner.context(state, stage, state_path)[0], stage)
         self.assertNotIn(autoplanner.EXAMPLE_CRITERIA_RULE,
                          autoplanner.context(state, "requirements_gather", state_path)[0])
+
+    def test_the_plan_reviewer_recomputes_worked_examples(self):
+        from tests.test_bug_job import SmallCorrectionTests
+        from units import autoplanner
+        state = SmallCorrectionTests.start(SmallCorrectionTests(), fix_size="large")
+        state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+        state_path = Path(state["workspace"]) / "state.json"
+        for stage, wanted in (("astra_challenge", True), ("astra_finalize", True), ("astra_discovery", False),
+                              ("glm_revise", False)):
+            with self.subTest(stage=stage):
+                prompt = autoplanner.context(state, stage, state_path)[0]
+                self.assertEqual(wanted, "CHECK EVERY WORKED EXAMPLE" in prompt)
+
+    def test_every_planning_stage_forbids_timing_criteria_except_requirements(self):
+        from tests.test_bug_job import SmallCorrectionTests
+        from units import autoplanner
+        state = SmallCorrectionTests.start(SmallCorrectionTests(), fix_size="large")
+        state["settings"]["roles"]["plan_reviewer"] = {"model": "p"}
+        state_path = Path(state["workspace"]) / "state.json"
+        for stage, wanted in (("astra_discovery", True), ("astra_challenge", True), ("glm_revise", True),
+                              ("astra_finalize", True), ("requirements_gather", False)):
+            with self.subTest(stage=stage):
+                self.assertEqual(wanted, "NO TIMING CRITERIA" in autoplanner.context(state, stage, state_path)[0])
 
     def test_the_builder_is_told_to_write_the_named_tests(self):
         from tests.test_bug_job import approved_small_fix

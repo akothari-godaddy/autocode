@@ -17,7 +17,6 @@ DEFAULT_MODELS = {
     "requirements": "zai-coding-plan/glm-5.3",
     "glm": "zai-coding-plan/glm-5.3",
     # Independent Plan Reviewer must not be the Planner's model (or family).
-    # No MiMo anywhere (user 2026-09-27): OpenAI GPT via the ChatGPT login instead.
     # GPT-6 Sol, not Astra: Astra is too expensive and only for the Resolver (user 2026-09-28).
     "plan_reviewer": "openai/gpt-6-sol",
     # Execution path (user 2026-09-29): the cheap model does the volume, the expensive one

@@ -12,7 +12,7 @@ try:
     from .. import autocode_goals as goals, autocode_planning_artifacts as artifacts, autocode_support as s
     from .. import autocode_stage_context as stage_context
     from .. import autocode_bug_job as bug_job, autocode_workflows as workflows, autocode_test_cases as test_cases
-    from .. import autocode_follow_up as follow_up
+    from .. import autocode_follow_up as follow_up, autocode_adaptive_planning as adaptive
 except ImportError:
     import autocode_test_cases as test_cases
     import autocode_goals as goals
@@ -22,6 +22,7 @@ except ImportError:
     import autocode_bug_job as bug_job
     import autocode_follow_up as follow_up
     import autocode_workflows as workflows
+    import autocode_adaptive_planning as adaptive
 
 STAGES = ("requirements_gather", "astra_discovery", "astra_challenge", "glm_revise", "astra_finalize")
 # A build that implements an approved design (autocode_design_check_job) skips requirements
@@ -74,7 +75,8 @@ they leave open. Cite the review in code_refs as exactly its report_path.
 EXAMPLE_CRITERIA_RULE = """
 TESTS IN PLAIN ENGLISH: write every acceptance criterion a test can check as one concrete example a person can
 check without reading code: "Given <the exact starting data or state>, when <the exact action or command>,
-then <the exact result, with literal values>". No vague words such as "correctly" or "gracefully". Set its
+then <the exact result, with literal values>". No vague words such as "correctly" or "gracefully". Work each
+literal result out from the criterion's own rule (count the items, do the arithmetic), never estimate it. Set its
 verification_method to "test: test_<criterion id in lowercase>_<what it checks>" (C2 -> test_c2_...). The
 Builder writes that test; the runner itself checks that it passes with the change and did not pass before the
 run began, and refuses the milestone and completion otherwise. With several milestones, list each test
@@ -109,6 +111,27 @@ domains. Prove persistence, exact arithmetic, stale/unknown identifiers, and tra
 boundaries. SQLite INTEGER bindings stop at 64 bits and SQL arithmetic can promote overflow to REAL; use
 lossless storage and application integer arithmetic for unbounded values. Decimal int/str conversion can
 hit Python's digit limit too. Preserve the public contract; do not invent a bound to fit the implementation.
+Probe mixed-type numeric interactions as well as isolated bounds; valid operands can overflow in combination.
+ERROR PATHS: inject failures after staged or transactional work begins; verify the public error contract,
+unchanged persistent state and complete cleanup across the relevant underlying failure modes.
+"""
+# Two live ladder runs (Claude models, 2026-09-30) approved an example that contradicted its own rule: "2024-02-28
+# to 2024-03-01 is 4 dates", and an entry with a TTL of 2**63 still present at time 1e300. Both plan reviews passed
+# it, the Builder bent its test to fit, and the run stopped for a person after the build.
+EXAMPLE_CHECK_RULE = """
+CHECK EVERY WORKED EXAMPLE: recompute the literal result of each acceptance criterion's example from its own rule
+and the request: count the items in a range, do the arithmetic, apply the stated expiry, ordering or rounding rule
+to the example's inputs. An example whose stated result does not follow is a blocking concern naming the
+correct result: no implementation can satisfy both the rule and the example.
+"""
+# A live cent-drift plan (2026-09-30) required a 175,712-cart enumeration to "finish in under about 10 seconds". The
+# Builder asserted elapsed time, the test took 10.39 s on a loaded machine, and the run stopped after two retries
+# with correct billing code: no code change could make the criterion hold.
+NO_TIMING_RULE = """
+NO TIMING CRITERIA: no acceptance criterion, verification method or test may depend on elapsed time or machine
+speed ("finishes in under 10 seconds", a timing assertion, a benchmark threshold). It passes on an idle machine and
+fails on a loaded one, and the Builder cannot fix that by fixing code. Bound the work instead: state the size of an
+enumeration and keep it to a few thousand cases that run in seconds. A plan reviewer raises a blocking concern for one.
 """
 # A design job delivers documents only (autocode_test_cases.design_only), so it gets this instead of the
 # example-criteria rule, which made a live design run plan every criterion as a test and add tests/.
@@ -137,6 +160,16 @@ CONTRACT DELTA: contract_changes describes only changes from the current goal_co
 handoff, not cumulative history. A permission already incorporated into that revision is not a new change:
 retain its approved text, cite the saved authorization in the summary, and omit it from contract_changes.
 If no protected item changes against the current revision, return contract_changes=[].
+SOURCE CITATIONS: code_refs contains existing repository source paths, optionally :line, never a runner
+state file, .autocode/ artifact, cache, or explanatory sentence. state_file is context to read, not source
+to cite. Read the workspace_inventory candidates; a citation repair changes citations, not requirements.
+SETTLED REQUIREMENTS: preserve literal inputs and outputs from the task, approved design and saved answers.
+Create examples that match those literals. During a revision, protected criterion changes require a saved
+user answer or feedback entry and contract_changes; do not claim an original-request exception to that guard.
+Verification changes follow the same narrow draft-proof policy. Gather remaining decisions before drafting;
+do not reopen answered questions or invent extra clarification cycles for report wording.
+Keep existing test names and assertions. A planned case needs a separate new test if matching its id
+would otherwise require renaming an existing test; a guard must keep the original coverage as well.
 """
 # A live review-then-fix plan (2026-09-29) marked "the diff touches only the two fixes" for human
 # review although its own verification method was "Validator reads git diff"; the run then
@@ -407,7 +440,6 @@ def engine_for(settings, role):
 
 
 # Independent Plan Reviewer route (user 2026-09-26): never the Planner's model.
-# No MiMo anywhere (user 2026-09-27): OpenAI GPT-6 Sol via the ChatGPT login.
 # Astra is too expensive and only for the Resolver (user 2026-09-28).
 PINNED_REVIEWER_MODEL = "openai/gpt-6-sol"
 
@@ -895,8 +927,11 @@ def context(state, stage, state_path):
     design_rule += REVIEW_FINDINGS_RULE if findings else ""
     if stage != "requirements_gather":
         design_rule += DESIGN_DELIVERABLES_RULE if test_cases.design_only(state) else EXAMPLE_CRITERIA_RULE
+        design_rule += EXAMPLE_CHECK_RULE if stage in ("astra_challenge", "astra_finalize") else ""
+        design_rule += NO_TIMING_RULE
     if rows:
         design_rule += REQUIREMENT_TRACE_RULE
+    design_rule += adaptive.prompt_rule(state, stage)
     prompt = (PROMPTS[stage] + JOB_TYPE_POLICY + design_rule + recovery_instruction + figma_instruction + planning_policy + clarification_policy + s.COMMON
               + "\nWork read-only; return the report, the runner saves it.\nCURRENT HANDOFF DATA\n"
               + json.dumps(packet, indent=2))
@@ -912,7 +947,7 @@ def prepare(state, stage, state_path, schema_dir):
         prompt, metrics = workflows.prompt(state, workspace_inventory(state["workspace"], state["task"]),
                                           state["settings"].get("context_soft_tokens", 10000),
                                           engine_for(state["settings"], route_for(state, stage, role)))
-        return ModelRequest(role, route_for(state, stage, role), prompt, metrics, workflows.SCHEMA, False)
+        return ModelRequest(role, route_for(state, stage, role), prompt, metrics, schema_for(state, stage), False)
     if stage not in STAGES + V2_STAGES:
         raise ValueError(f"Autoplanner cannot run {stage}")
     joint = is_planning(state, stage)
@@ -925,7 +960,50 @@ def prepare(state, stage, state_path, schema_dir):
         raise
     role = role_for(state, stage)
     return ModelRequest(role, route_for(state, stage, role), prompt, metrics,
-                        SCHEMAS[stage] if joint else goals.DISCOVERY_SCHEMA, False)
+                        schema_for(state, stage) if joint else goals.DISCOVERY_SCHEMA, False)
+
+
+def schema_for(state, stage):
+    """The report schema for a planning stage in this run (adaptive runs extend two of them)."""
+    if stage == RECOGNIZE:
+        return adaptive.recognizer_schema(state, SCHEMAS[stage])
+    return adaptive.report_schema(state, stage, SCHEMAS[stage], goals.PLANNING_BODY_SCHEMA)
+
+
+def after_challenge(state, value, record):
+    """Where the first review leads. In an adaptive run, a review with no blocking concern approves
+    the Planner's draft as the final plan (autocode_adaptive_planning); otherwise the Planner revises."""
+    if not adaptive.enabled(state):
+        state["next_stage"] = "glm_revise"
+        return
+    planning, contract = state["planning"], state["goal_contract"]
+    if "adaptive" not in planning:
+        planning["adaptive"] = {**adaptive.plan_size(contract["body"]), "approved_at": None, "challenges": 0}
+        if planning.get("review_call_limit_origin") != "user_explicit":
+            planning["review_call_limit"] = adaptive.review_limit(planning["adaptive"]["size"], review_call_limit(state))
+        planning["adaptive"]["review_limit"] = review_call_limit(state)
+    planning["adaptive"]["challenges"] += 1
+    if adaptive.blocking(value["concerns"]) or not adaptive.approvable(contract["body"]):
+        state["next_stage"] = "glm_revise"
+        return
+    try:
+        from .. import autocode_goal_lifecycle as lifecycle
+    except ImportError:
+        import autocode_goal_lifecycle as lifecycle
+    # The same path a final review takes: install the approved body and queue the user's approval.
+    lifecycle.install_draft(state, copy.deepcopy(contract["body"]), origin="adaptive_review_approval", record=record)
+    planning["final_token"] = goals.token(state["goal_contract"])
+    planning["adaptive"].update(approved_at=f"astra_challenge#{planning['adaptive']['challenges']}",
+                                final_stage="astra_challenge")
+
+
+def after_revise(state):
+    """After a revision: the final review, or in an adaptive run another first-style review while budget allows."""
+    if not adaptive.enabled(state):
+        return "astra_finalize"
+    planning = state["planning"]
+    return adaptive.after_revise(review_call_limit(state), planning["astra_calls"],
+                                 (planning.get("adaptive") or {}).get("challenges", 0))
 
 
 def recognize(state, value, record):

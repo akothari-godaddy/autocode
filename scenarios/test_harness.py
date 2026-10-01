@@ -18,7 +18,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import run  # noqa: E402
-from harness import baseline, catalog, compare, oracle, processes, profiles, routing, stats, verdict  # noqa: E402
+from harness import baseline, catalog, compare, oracle, plan_compare, processes, profiles, routing, stats, verdict  # noqa: E402
 from harness.driver import Driver, DriveError, leaves_for_person, metrics, model_routes, split_by_turn, turn_state  # noqa: E402
 
 
@@ -655,6 +655,17 @@ class FakeSchemaTests(unittest.TestCase):
                           "kind": "none", "nested": {"n": 0}}, report)
 
 
+class HybridScenarioTests(unittest.TestCase):
+    def test_a_hybrid_scenario_is_skipped_under_a_live_profile(self):
+        with tempfile.TemporaryDirectory(prefix="scenario-test-") as out:
+            args = argparse.Namespace(fake=False, profile="codex-only", fake_solution="reference", out=Path(out),
+                                      autocode=None, max_steps=None, timeout_minutes=10,
+                                      i_authorize_live_model_spend=True)
+            result = run.run_one(catalog.load("stuck-planner-citation"), args)
+        self.assertEqual(verdict.SKIPPED, result["verdict"])
+        self.assertIn("run it with --fake --i-authorize-live-model-spend", result["summary"])
+
+
 class FakeRunTests(unittest.TestCase):
     """End to end through AutoCode's real CLI, with the scripted model (about 30 s each)."""
 
@@ -722,6 +733,35 @@ class FakeRunTests(unittest.TestCase):
     def test_an_invented_blocker_in_a_review_is_judged_false_complete(self):
         result = self.run_fake("broken/invented-blocker", "review-clean-pr")
         self.assertEqual(verdict.FALSE_COMPLETE, result["verdict"], result["summary"])
+
+
+class PlanCompareTests(unittest.TestCase):
+    """scenarios/planning.toml and `run.py plan-compare`, with the scripted model (seconds)."""
+
+    def test_the_planning_corpus_loads_and_covers_clear_and_vague_requests(self):
+        cases = plan_compare.load()
+        self.assertEqual(len(cases), len({case.id for case in cases}))
+        self.assertEqual({"clear", "vague"}, {case.expect.get("clarity") for case in cases})
+        self.assertTrue(all(case.brief for case in cases))
+
+    def test_each_adaptive_path_reaches_plan_approval_with_fewer_calls(self):
+        wanted = {"tiny-greeting": ["recognize_workflow", "astra_discovery", "astra_challenge"],
+                  "vague-refunds": ["recognize_workflow", "requirements_gather", "astra_discovery", "astra_challenge"],
+                  "diamond-four-milestones": ["recognize_workflow", "astra_discovery", "astra_challenge",
+                                              "glm_revise", "astra_challenge"]}
+        cases = [case for case in plan_compare.load() if case.id in wanted]
+        with tempfile.TemporaryDirectory(prefix="plan-compare-test-") as out:
+            records = plan_compare.run(cases, Path(out), jobs=4, fake=True, profile=None,
+                                       autocode=run.default_autocode(), timeout_minutes=5, max_steps=20)
+            self.assertTrue((Path(out) / "blind" / "key.json").is_file())
+        for case_id, stages in wanted.items():
+            with self.subTest(case=case_id):
+                today, adaptive = records[(case_id, "today")], records[(case_id, "adaptive")]
+                self.assertEqual(("approve_plan", "approve_plan"), (today["ended"], adaptive["ended"]),
+                                 today["error"] or adaptive["error"])
+                self.assertEqual(stages, adaptive["model_stages"])
+                self.assertEqual(6, today["model_calls"], today["model_stages"])
+                self.assertTrue(adaptive["final_plan"])
 
 
 class BaselineTests(unittest.TestCase):

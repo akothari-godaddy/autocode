@@ -20,12 +20,12 @@ try:
     from . import autocode_support as support, autocode_goals as goals, autocode_providers
     from . import autocode_opencode, autocode_gocode as gocode, autocode_figma as figma
     from . import autocode_budget_recovery as budget_recovery, autocode_verification_config as verification_config
-    from . import autocode_planner_routes as planner_routes
+    from . import autocode_planner_routes as planner_routes, autocode_adaptive_planning as adaptive
 except ImportError:
     import autocode_support as support, autocode_goals as goals, autocode_providers
     import autocode_opencode, autocode_gocode as gocode, autocode_figma as figma
     import autocode_budget_recovery as budget_recovery, autocode_verification_config as verification_config
-    import autocode_planner_routes as planner_routes
+    import autocode_planner_routes as planner_routes, autocode_adaptive_planning as adaptive
 
 DEFAULT_ROLE_MODELS = {
     "astra": "gpt-5.6-sol",
@@ -72,6 +72,8 @@ def configure(args, state, *, planning, milestones, autopilot, opencode=None):
     started = bool(state.get("settings") or state.get("sessions") or state.get("history"))
     if started and getattr(args, 'builder_strong_model', None):
         raise ValueError('--builder-strong-model is a new-run policy; existing runs keep their persisted budget and route')
+    if started and adaptive.resume_refused(state.get('settings') or {}, getattr(args, 'adaptive_planning', False)):
+        raise ValueError('--adaptive-planning is a new-run policy; start a new run to use it')
     saved_provider = dict(state.get("settings") or {})
     # Checkpoints created before provider selection shipped were necessarily
     # OpenCode runs.  Treating that as explicit prevents an unsafe transport
@@ -318,6 +320,10 @@ def configure(args, state, *, planning, milestones, autopilot, opencode=None):
         planner_routes.configure_runner_profile(settings, args)
     if getattr(args, 'planning_v2', False):
         settings['planning_flow'] = 'v2'
+    if getattr(args, 'adaptive_planning', False):
+        if not joint or settings.get('planning_flow') == 'v2':
+            raise ValueError("--adaptive-planning needs joint planning and the default planning flow")
+        settings['adaptive_planning'] = True
     if getattr(args,'unlimited_iterations',False):
         settings['limits']['iteration_ceiling']=None
     return autopilot.stuck.configure(settings, args)
