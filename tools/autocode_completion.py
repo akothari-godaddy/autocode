@@ -9,8 +9,10 @@ from pathlib import Path
 
 try:
     from .autocode_util import Paused, criteria_definition, file_hash
+    from .autocode_progressive_completion import ready as progressive_ready
 except ImportError:
     from autocode_util import Paused, criteria_definition, file_hash
+    from autocode_progressive_completion import ready as progressive_ready
 
 REFUSED = "Completion rejected: missing, stale, failed or unverified independent evidence"
 
@@ -32,6 +34,8 @@ def rejection(state) -> str:
 
 
 def completion_ready(state, decision, current, *, require_human_reviews=True, require_independent=True):
+    if not progressive_ready(state, current):
+        return False
     human_only_gap = False
     if (require_independent and state.get('settings', {}).get('milestone_checkpoints', {}).get('enabled')
             and state.get('validation', {}).get('reviewer_role') != 'sol'):

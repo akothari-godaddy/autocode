@@ -37,7 +37,7 @@ MUTATIONS = [
      'or selected != token(contract) or state.get("displayed_goal") != selected):',
      '):',
      ["tests.test_catalogue_t01"]),
-    ("M02", "tools/autocode_goals.py",
+    ("M02", "tools/autocode_contract_identity.py",
      'and not contract["body"]["open_blocking_questions"]',
      'and True',
      ["tests.test_catalogue_t01"]),

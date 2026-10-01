@@ -109,6 +109,31 @@ def context_packet(state, stage, state_path):
     base["capture_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "capture"])
     base["baseline_compare_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "compare-baseline"])
     instruction = support.STABLE.get(stage, "") + proof_note
+    if stage in ("terra", "sol", "astra_review", "astra_checkpoint"):
+        try:
+            from . import autocode_progressive_state as progressive_state
+            from . import autocode_verification_plan as verification_plan
+        except ImportError:
+            import autocode_progressive_state as progressive_state
+            import autocode_verification_plan as verification_plan
+        progressive = progressive_state.context(state)
+        if progressive:
+            base["progressive_verification"] = {
+                **progressive,
+                "required_commands": verification_plan.approved_commands(state, progressive_context=progressive)}
+            instruction += ("\nPROGRESSIVE VERIFICATION: progressive_verification is the authoritative approved "
+                "active slice, not a tentative proposal. required_checks and required_commands are due for "
+                "this intermediate task; checkpoint_checks is the full cumulative checklist required at the "
+                "slice boundary. Keep the stable whole-product contract. Retained earlier demonstrations "
+                "remain mandatory. At a slice checkpoint every checkpoint check needs fresh independent "
+                "proof on the current source; historical PASS is not a substitute. "
+                "Historical PASS is not current proof. A contributes_to check is only a contribution, never "
+                "full proof of its product criterion. Outstanding criteria are expected deferred product work; "
+                "a fully_verify obligation is due even if its criterion is still outstanding. Report actual "
+                "FAIL honestly; never change FAIL to PASS or PASS to FAIL to advance a slice. "
+                "Do not invent defects solely because that declared future work is not built. Never relabel "
+                "a real finding or a failed due check as future work: all product findings retain their normal "
+                "ownership, severity and closure rules. A verified slice is not product acceptance or completion.\n")
     if figma_file:
         try:
             from . import autocode_figma as figma

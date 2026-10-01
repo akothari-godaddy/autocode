@@ -46,10 +46,11 @@ try:
     from . import autocode_reviewer_fallback as reviewer_fallback
     from . import autocode_planning_artifacts as planning_artifacts
     from . import autocode_budget_recovery as budget_recovery
+    from . import autocode_progressive_state as progressive_state
     from . import autocode_findings as findings_ledger
     from . import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from .autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
-        assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
+        assert_stage_stopped, attempt_id, check_evidence_options, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
         repair_limit, stage_completed, stage_supports_sessions, timeout_recovery_route, write_json)
     from .autocode_stage_recovery import (MAX_AUTOMATIC_CAPACITY_RECOVERIES, abandon_stage,
@@ -71,10 +72,11 @@ except ImportError:
     import autocode_reviewer_fallback as reviewer_fallback
     import autocode_planning_artifacts as planning_artifacts
     import autocode_budget_recovery as budget_recovery
+    import autocode_progressive_state as progressive_state
     import autocode_findings as findings_ledger
     import autocode_configure, autocode_args as cli_args, autocode_run_actions as run_actions, autocode_build_loop as build_loop, autocode_run_setup as run_setup
     from autocode_run_records import (PLANNING_STAGES, PROVENANCE_LISTS, account_stage, archive_rejected_stage,
-        assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
+        assert_stage_stopped, attempt_id, check_evidence_options, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
         repair_limit, stage_completed, stage_supports_sessions, timeout_recovery_route, write_json)
     from autocode_stage_recovery import (MAX_AUTOMATIC_CAPACITY_RECOVERIES, abandon_stage,
@@ -143,16 +145,15 @@ def recover_default_budget(state, run_dir, workspace, kind):
         else:
             state['settings']['limits'][kind] = extension['to']
         state.setdefault('resolver', {})['budget_extensions'] = candidate['resolver']['budget_extensions']
-        resolver_runtime._operational_receipt(state, run_dir, 'extend_default_budget',
+        receipt_id = resolver_runtime._operational_receipt(state, run_dir, 'extend_default_budget',
             f"AutoResolver extended internal {kind} from {extension['from']} to {extension['to']} "
             "once after verified progress; usage and failure history are retained.", extension)
+        progressive_state.apply_recovery_limit(state, extension, receipt_id)
         write_json(Path(run_dir) / 'state.json', state)
         return True
 
 
-def slug(task: str) -> str:
-    value = re.sub(r"[^a-z0-9]+", "-", task.lower()).strip("-")
-    return (value or "task")[:48]
+slug = util.slug
 
 
 def event_thread_id(jsonl: Path) -> str | None:
@@ -160,11 +161,6 @@ def event_thread_id(jsonl: Path) -> str | None:
         if event.get("type") == "thread.started" and event.get("thread_id"):
             return str(event["thread_id"])
     return None
-
-
-def check_evidence_options(record):
-    return {'receipt_only': record.get('output_mode') == 'report_file',
-            'capture_context': record.get('capture_context')}
 
 
 def load_stage_report(record, workspace=None, evidence_record=None, state=None):
@@ -346,7 +342,7 @@ def run_role(
     if (joint_stage or stage == "astra_discovery") and (
             role != planning.role_for(state, stage) or allow_write or sandbox != "read-only"):
         raise support.Paused("PAUSED_DISCOVERY_WRITE", "Planning must use its assigned role read-only")
-    if original_stage in planning.V2_STAGES:
+    if original_stage in planning.V2_STAGES and not progressive_state.revision_pending(state):
         try:
             planning_artifacts.verify_predecessor(state, original_stage, run_dir)
         except ValueError as error:
@@ -481,6 +477,7 @@ def run_role(
                             grant['id'] for grant in state['planning']['reviewer_route_fallbacks']
                             if grant.get('consumed') and grant['binding']['selected_route'] == admitted)
                 resolver_runtime.charge_diagnostic_dispatch(sys.modules[__name__], state, run_dir, workspace, record)
+                progressive_state.admit_attempt(state, record, before)
                 state["active_stage"] = record
                 write_json(run_dir / "state.json", state)
                 child_stdin = (subprocess.DEVNULL if engine == "opencode" and configured_tool
