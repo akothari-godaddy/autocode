@@ -108,6 +108,12 @@ class TaskRun:
                      "--no-chat", *self.options, advancing=True)
         return self.status()
 
+    def retry_report(self, attempt_id: str) -> dict:
+        """Request one fresh report for the exact inspected rejected attempt."""
+        self._invoke("retry report", "--resume-paused", "--retry-report", attempt_id,
+                     "--no-chat", advancing=True)
+        return self.status()
+
     def bind_dependency(self, specification: Path) -> dict:
         return self._act("bind dependency", "--bind-dependency", str(specification))
 
