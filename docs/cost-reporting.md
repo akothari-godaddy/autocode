@@ -23,6 +23,11 @@ itself (the regression proof, the orchestrator) cost nothing. The OpenCode/Codex
 tokens but no price, so its cost shows as unknown until a rate is added to
 `autocode_usage.REFERENCE_PRICES`.
 
+Parallel Builders are counted once, in their parent. A worker run keeps no ledger of its own: when a
+batch finishes, the parent copies each worker's finished stages, cost included, into its own record
+(`autocode_dispatch.account_workers`), so the parent's row holds them. While a batch is still running its
+workers' spend is not yet in the parent's row; it appears when the batch is accounted.
+
 The sections below describe the scorer and sampler, which inspect a saved run after the fact.
 
 The existing scorer and live sampler can inspect a saved run without launching

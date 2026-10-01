@@ -67,21 +67,32 @@ def estimate(model, tokens):
     return None if prices is None or inp is None or out is None else (inp * prices["input"] + out * prices["output"]) / 1e6
 
 
+def _dict(value):
+    return value if isinstance(value, dict) else {}
+
+
 def _model(record):
+    """The model a stage ran: the launch command first (`--model X` or `--model=X`), then the saved launch route."""
     command = record.get("command")
     if isinstance(command, list):
-        for flag in ("--model", "-m"):
-            if flag in command and command.index(flag) + 1 < len(command):
-                return str(command[command.index(flag) + 1])
-    return record.get("model") if isinstance(record.get("model"), str) else ""
+        for index, arg in enumerate(command):
+            if arg in ("--model", "-m") and index + 1 < len(command):
+                return str(command[index + 1])
+            if isinstance(arg, str) and arg.startswith("--model="):
+                return arg.partition("=")[2]
+    for model in (_dict(record.get("launch_route")).get("model"), record.get("model")):
+        if isinstance(model, str) and model:
+            return model
+    return ""
 
 
 def stage_rows(state):
     """One row per finished stage: role, model, tokens, cost and where the cost came from."""
     rows = []
-    for record in state.get("stages") or []:
-        metrics = record.get("metrics") or {}
-        tokens = metrics.get("provider_tokens") or {}
+    stages = state.get("stages")
+    for record in [item for item in stages if isinstance(item, dict)] if isinstance(stages, list) else []:
+        metrics = _dict(record.get("metrics"))
+        tokens = _dict(metrics.get("provider_tokens"))
         model = _model(record)
         if record.get("runner_owned") is True and record.get("engine") == "runner":
             cost, basis = 0.0, "runner"
@@ -91,7 +102,7 @@ def stage_rows(state):
             cost, basis = guess, "estimated"
         else:
             cost, basis = None, "unknown"
-        rows.append({"stage": record.get("stage"), "role": record.get("role") or record.get("route_role") or "",
+        rows.append({"stage": record.get("stage"), "role": str(record.get("role") or record.get("route_role") or ""),
                      "model": model, "tokens": {key: _count(tokens.get(key)) for key in TOKEN_KEYS},
                      "cost_usd": cost, "basis": basis})
     return rows
@@ -118,15 +129,13 @@ def summary(state):
     unknown = sum(row["basis"] == "unknown" for row in rows)
     return {
         "stages": len(rows),
-        "active_stage": ((state.get("active_stage") or {}).get("stage")),
+        "active_stage": _dict(state.get("active_stage")).get("stage"),
         "tokens": {key: _sum(row["tokens"][key] for row in rows) for key in TOKEN_KEYS},
         "cost_usd": {"reported": round(reported, 6), "estimated": round(guessed, 6),
                      "complete": unknown == 0 and not state.get("active_stage")},
         "unknown_stages": unknown,
         "by_role": {role: {key: round(value, 6) if isinstance(value, float) else value for key, value in entry.items()}
                     for role, entry in sorted(roles.items())},
-        "basis": "reported is the provider's own cost; estimated is tokens at flat comparison rates "
-                 "(not a bill); unknown is not zero",
     }
 
 
@@ -171,7 +180,9 @@ def record(path, state):
     """Keep this run's ledger row current. Best effort: a failure never fails the checkpoint or the run."""
     try:
         run_dir = Path(path).resolve().parent
-        if run_dir.parent.name != "runs" or not (state.get("stages") or state.get("active_stage")):
+        # A parallel Builder's attempts are charged to its parent run (autocode_dispatch.account_workers copies
+        # each finished stage, cost included), so the worker keeps no ledger of its own: it would count twice.
+        if state.get("parent_run") or run_dir.parent.name != "runs" or not (state.get("stages") or state.get("active_stage")):
             return
         totals = summary(state)
         signature = json.dumps([state.get("status"), totals], sort_keys=True)

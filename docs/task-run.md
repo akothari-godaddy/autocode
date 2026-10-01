@@ -115,10 +115,10 @@ current validation's checks as the runner itself re-ran them in a clean copy:
 `timed_out`, `output`); `null` before a PASS validation and for validations
 that predate it (see [Execution](execution.md#the-runner-re-runs-the-validators-checks)).
 
-`usage` is the run's tokens and cost so far (`stages`, `tokens`, `cost_usd` with
-`reported`, `estimated` and `complete`, `unknown_stages`, `by_role`; see
-[Cost reporting](cost-reporting.md#every-task-continuously)). Unknown cost is not zero:
-`complete` is false while a stage has none or is running.
+`usage` is the run's tokens and cost so far: `stages` (finished), `active_stage` (the stage
+running now, or null), `tokens`, `cost_usd` (`reported`, `estimated`, `complete`), `unknown_stages`
+and `by_role` (see [Cost reporting](cost-reporting.md#every-task-continuously)). Unknown cost is
+not zero: `complete` is false while a stage has none or is running.
 
 `workflow` is the kind of job AutoCode recognized from the request, decided by
 the first stage of every new run (`recognize_workflow`): one of `build`,

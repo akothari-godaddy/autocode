@@ -48,6 +48,23 @@ class TotalsTests(unittest.TestCase):
         self.assertIsNone(usage.reported_cost([{"type": "turn.completed", "cost_usd": True}, {"type": "item"}]))
         self.assertIsNone(usage.reported_cost([{"type": "item.completed"}]))
 
+    def test_the_model_comes_from_the_command_however_it_spells_the_flag_else_the_launch_route(self):
+        tokens = {"input_tokens": 1_000_000, "output_tokens": 1_000_000}
+        for record in ({"command": ["x", "--model", GLM]}, {"command": ["x", "--model=" + GLM]},
+                       {"command": ["x"], "launch_route": {"model": GLM}},
+                       {"command": ["x", "--model", GLM], "launch_route": {"model": "claude-opus-5-5"}}):
+            with self.subTest(record=record):
+                state = {"stages": [{"stage": "terra", "metrics": {"provider_tokens": tokens}, **record}]}
+                self.assertEqual({"reported": 0.0, "estimated": 2.8, "complete": True}, usage.summary(state)["cost_usd"])
+        state = {"stages": [{"stage": "terra", "command": ["x"], "metrics": {"provider_tokens": tokens}}]}
+        self.assertEqual(1, usage.summary(state)["unknown_stages"])  # no model recorded anywhere
+
+    def test_a_damaged_state_still_gives_a_status_view(self):
+        for state in ({"active_stage": "terra"}, {"stages": "none"}, {"stages": ["x", None, {"metrics": "m"}]},
+                      {"stages": [{"stage": "terra", "metrics": {"provider_tokens": ["a"]}, "role": {"x": 1}}]}):
+            with self.subTest(state=state):
+                self.assertIn("usage", run_view.view({"status": "RUNNING", **state}))
+
     def test_the_status_view_carries_the_totals(self):
         view = run_view.view({"status": "RUNNING", "stages": [stage("terra", "terra", "m", cost=0.3)]})
         self.assertEqual(0.3, view["usage"]["cost_usd"]["reported"])
@@ -103,6 +120,18 @@ class LedgerTests(unittest.TestCase):
             (Path(temp) / ".autocode" / "usage.jsonl").mkdir()  # unwritable ledger
             status.persist(run / "state.json", {"status": "RUNNING", "stages": [stage("terra", "terra", "m", cost=1.0)]})
             self.assertTrue((run / "state.json").is_file())
+
+    def test_a_parallel_builders_attempts_are_charged_to_its_parent_not_to_a_ledger_of_its_own(self):
+        with tempfile.TemporaryDirectory() as temp:
+            worker = Path(temp) / ".autocode" / "builders" / "b1" / "1" / ".autocode" / "runs" / "builder-b1-1"
+            worker.mkdir(parents=True)
+            status.persist(worker / "state.json", {"status": "RUNNING", "parent_run": "/p",
+                                                   "stages": [stage("terra", "terra", "m", cost=1.0)]})
+            self.assertFalse((worker.parent.parent / "usage.jsonl").exists())
+            parent = self.run_dir(temp)
+            account = {**stage("terra", "terra", "m", cost=1.0), "worker_milestone": "M2", "batch_id": "b1"}
+            status.persist(parent / "state.json", {"status": "RUNNING", "stages": [account]})  # as account_workers copies it
+            self.assertIn("$1.00", usage.report(temp))
 
     def test_an_empty_project_says_so(self):
         with tempfile.TemporaryDirectory() as temp:
