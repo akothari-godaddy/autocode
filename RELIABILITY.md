@@ -63,10 +63,13 @@ budgets; same note for details):
   completion gate then all worked from the corrupted criteria, each honestly. The
   brief-to-criteria transcription is the one handoff with no independent check.
 
-Standing tally: feature and bug-fix cases pass end to end; the greenfield case has passed
-neither of its distinct blockers (validator sandbox paths, criteria transcription). One
-false completion has occurred, and it came through the requirements boundary, not the
-build or validation boundaries.
+After the fixes (prompt rules for criteria-vs-brief tracing and in-workspace scratch, the
+bug-fix budget, all in commit f001e317), the greenfield case **passed** on the same profile:
+TASK_COMPLETE, oracle 10/10, no permission recoveries, criteria carrying the brief's
+literals. One passing sample does not prove the prompt rules caused it; the next sweep
+should watch the same boundaries. Standing tally after the fixes: all three cases pass end
+to end; the one observed false completion came through the requirements boundary, and its
+guard is now model-dependent — verified by live runs, not mechanically.
 
 First run of the three cases (2026-10-01, master 68e89aa4, profile glm53-openai:
 GLM-5.3 producers on the Z.AI plan, GPT-6 verifiers on OpenCode's ChatGPT login;

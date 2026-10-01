@@ -87,6 +87,19 @@ Evidence kept in this checkout's `.scenario-runs/` (durable this time).
   a rule to re-derive each worked example from the brief text rather than from the
   criterion it is checking.
 
+## Validation run after the fixes (2026-10-01, master f001e317, same profile)
+
+greenfield-todo-cli: **PASS** — TASK_COMPLETE, oracle 10/10, all three previously failing
+checks passing (`add_then_list`, `complete_marks_done`, `ids_stable_across_restarts`),
+zero permission recoveries (the validator stayed in-workspace), zero report repairs,
+5 CLI calls with 2 answers, ~44 min of model time, evidence
+`20261001T061511Z-greenfield-todo-cli-glm53-openai-aisqo2ir`. The critical list-format
+criterion carried the brief's literals ("stdout is exactly the two lines `1 buy milk
+[open]` and `2 walk dog [open]`"). Caveat recorded honestly: one passing sample does not
+prove the prompt rules caused the correct transcription; the failure mode was absent, not
+provably prevented. The next sweep should watch both boundaries (criteria literals,
+validator scratch) across repeats.
+
 ## Follow-ups worth doing
 
 1. ~~Criteria-vs-brief verification~~ **Fixed 2026-10-01**: `BRIEF_TRACE_RULE` now reaches the Plan
