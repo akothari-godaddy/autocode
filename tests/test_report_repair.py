@@ -670,6 +670,13 @@ class RepairTests(unittest.TestCase):
             self.reject_repair(7, error)
         self.state = support.read(self.run / 'state.json')
         selected = runner.attempt_id(self.state['stages'][-1])
+        original_schema = Path(self.state['pending_report_repair']['original']['schema'])
+        copied_schema = self.run / 'same-validator-schema.json'
+        copied_schema.write_text('{"not": "the validator schema"}')
+        self.state['stages'][-1]['schema'] = str(copied_schema)
+        with self.assertRaises(ValueError):
+            runner.retry_format_failed_report(self.state, self.run, self.root, selected)
+        copied_schema.write_bytes(original_schema.read_bytes())
         runner.retry_format_failed_report(self.state, self.run, self.root, selected)
         self.assertEqual('sol', self.state['next_stage'])
         self.assertNotIn('pending_report_repair', self.state)

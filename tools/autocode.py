@@ -873,7 +873,9 @@ def retry_format_failed_report(state, run_dir, workspace, selected):
             or not repair or selected != attempt_id(repair)
             or repair.get('original_stage') != original.get('stage')
             or repair.get('source_revision') != original.get('source_revision')
-            or repair.get('schema') != original.get('schema')
+            or not repair.get('schema') or not original.get('schema')
+            or not Path(repair['schema']).is_file() or not Path(original['schema']).is_file()
+            or support.file_hash(repair['schema']) != support.file_hash(original['schema'])
             or pending.get('attempts') != repair_limit(state)):
         raise ValueError('--retry-report must match the exhausted rejected report-only attempt')
     if (support.snapshot(workspace)['revision'] != original['source_revision']
