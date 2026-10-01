@@ -57,7 +57,7 @@ try:
         automatically_recover_external_directory_denial, automatically_recover_report_repair_timeout,
         automatically_recover_timed_out_stage, prepare_abandoned_completion_revalidation,
         prepare_exhausted_execution_report_retry, prepare_planning_retry, reconcile_rate_limited_stage,
-        recover_legacy_report_repair)
+        recover_legacy_report_repair, retry_format_failed_report)
     from .autocode_activity import ActivityMonitor
 except ImportError:
     import autocode_workspaces as task_workspaces
@@ -82,7 +82,7 @@ except ImportError:
         automatically_recover_external_directory_denial, automatically_recover_report_repair_timeout,
         automatically_recover_timed_out_stage, prepare_abandoned_completion_revalidation,
         prepare_exhausted_execution_report_retry, prepare_planning_retry, reconcile_rate_limited_stage,
-        recover_legacy_report_repair)
+        recover_legacy_report_repair, retry_format_failed_report)
     from autocode_activity import ActivityMonitor
 
 
@@ -853,40 +853,6 @@ def timeout_recovery_guard(state):
             "AutoResolver retained the diagnosis and failure history; this is an operational "
             "stop, not a request for approval. After fixing the cause, authorize more recoveries "
             "explicitly with --resume-paused --grant-recovery N.")
-
-
-def retry_format_failed_report(state, run_dir, workspace, selected):
-    """Explicitly request fresh evidence after a bounded report rejection."""
-    pending = state.get('pending_report_repair') or {}
-    original = pending.get('original') or {}
-    repair = next((row for row in reversed(state.get('stages', []))
-                   if row.get('report_only') and row.get('rejected')
-                   and row.get('original_stage') == original.get('stage')), None)
-    if (state.get('status') != 'PAUSED_REPEATED_FAILURE'
-            or pending.get('error') not in (
-                'OpenCode final message is not a JSON report; inspect the saved raw events',
-                'Check is not supported by an exact executed Validator event')
-            or original.get('stage') != 'sol'
-            or not repair or selected != attempt_id(repair)
-            or repair.get('original_stage') != original.get('stage')
-            or repair.get('source_revision') != original.get('source_revision')
-            or not repair.get('schema') or not original.get('schema')
-            or not Path(repair['schema']).is_file() or not Path(original['schema']).is_file()
-            or support.file_hash(repair['schema']) != support.file_hash(original['schema'])
-            or pending.get('attempts') != repair_limit(state)):
-        raise ValueError('--retry-report must match the exhausted rejected report-only attempt')
-    if (support.snapshot(workspace)['revision'] != original['source_revision']
-            or (state.get('goal_contract') or {}).get('hash') != pending.get('contract_hash')
-            or any(not Path(p).is_file() or support.file_hash(p) != h
-                   for p, h in pending.get('pins', {}).items())):
-        raise ValueError('Saved report inputs changed; reconcile them before retrying')
-    if not prepare_exhausted_execution_report_retry(
-            state, run_dir, workspace, allow_repeated=True):
-        raise ValueError('Saved stage cannot be retried as a fresh execution report')
-    state.setdefault('user_events', []).append({
-        'kind': 'report_retry_after_format_fix', 'actor': 'user_cli', 'at': now(),
-        'attempt_id': selected, 'source_revision': original['source_revision']})
-    write_json(run_dir / 'state.json', state)
 
 
 def grant_recovery_allowance(state, run_dir, amount):
