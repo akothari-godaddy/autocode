@@ -677,6 +677,10 @@ class RepairTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             runner.retry_format_failed_report(self.state, self.run, self.root, selected)
         copied_schema.write_bytes(original_schema.read_bytes())
+        self.state['stages'].append({'stage': 'investigate_stuck_report_repair',
+                                     'original_stage': 'investigate_stuck',
+                                     'report_only': True, 'rejected': True,
+                                     'output': str(self.run / 'investigate_stuck_report_repair-02.json')})
         runner.retry_format_failed_report(self.state, self.run, self.root, selected)
         self.assertEqual('sol', self.state['next_stage'])
         self.assertNotIn('pending_report_repair', self.state)

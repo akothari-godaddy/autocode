@@ -5,10 +5,12 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import autocode_run_view as run_view
 import autocode_taskrun as taskrun
+import autocode_run_actions as run_actions
 
 HERE = Path(__file__).resolve().parents[1] / "tools"  # its fixtures stay beside the runtime
 # The offline fixture provider plans and builds exactly this greeting task.
@@ -22,6 +24,10 @@ FIXTURE_OPTIONS = ("--engine", "codex", "--joint-planning", "--astra-model", "gp
 
 
 class RunViewTests(unittest.TestCase):
+    def test_explicit_report_retry_bypasses_automatic_escalation(self):
+        self.assertTrue(run_actions.explicit_recovery_requested(SimpleNamespace(retry_report='001/sol_report_repair-02')))
+        self.assertFalse(run_actions.explicit_recovery_requested(SimpleNamespace(retry_report=None)))
+
     def test_contract_fields(self):
         self.assertEqual({"schema", "status", "done", "needs", "phase", "next_stage", "iteration", "stop_reason", "runner_check",
                           "current_task", "workflow", "workflow_source", "workflow_reason", "turn", "evidence",

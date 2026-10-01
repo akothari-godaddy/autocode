@@ -864,7 +864,8 @@ def retry_format_failed_report(state, run_dir, workspace, selected):
     pending = state.get('pending_report_repair') or {}
     original = pending.get('original') or {}
     repair = next((row for row in reversed(state.get('stages', []))
-                   if row.get('report_only') and row.get('rejected')), None)
+                   if row.get('report_only') and row.get('rejected')
+                   and row.get('original_stage') == original.get('stage')), None)
     if (state.get('status') != 'PAUSED_REPEATED_FAILURE'
             or pending.get('error') not in (
                 'OpenCode final message is not a JSON report; inspect the saved raw events',

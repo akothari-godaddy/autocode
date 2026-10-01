@@ -52,6 +52,16 @@ except ImportError:
     import autocode_worktrees as worktrees
 
 
+def explicit_recovery_requested(args):
+    """Whether this invocation carries a scoped operator recovery action."""
+    return any((getattr(args, 'retry_builder', None),
+                getattr(args, 'retry_failed_stage', False),
+                getattr(args, 'retry_report', None),
+                getattr(args, 'abandon_stage', None),
+                getattr(args, 'diagnose_failed_stage', False),
+                getattr(args, 'grant_recovery', None) is not None))
+
+
 def handle(runner, args, parser, state, state_path, run_dir, workspace):
     """Apply this invocation's action to the saved run; return an exit code to stop, or None to build."""
     try:
@@ -129,8 +139,7 @@ def handle(runner, args, parser, state, state_path, run_dir, workspace):
         state.update(status='RUNNING', phase='EXECUTING')
         state.pop('stop_reason', None)
         runner.write_json(state_path, state)
-    if (not decision_action and args.abandon_stage is None
-            and args.grant_recovery is None and not args.diagnose_failed_stage and not args.retry_builder
+    if (not decision_action and not explicit_recovery_requested(args)
             and state.get('status') != 'RUNNING'
             and not acknowledged_planning_extension and not acknowledged_bound_change
             and str(state.get('status', '')).startswith('PAUSED_')
@@ -157,10 +166,7 @@ def handle(runner, args, parser, state, state_path, run_dir, workspace):
         runner.commit_user_action(state, candidate, run_dir)
         print('AutoResolver received the response. Work, approvals and budgets remain unchanged; no provider launched.')
         return 0
-    if (not decision_action and not any((args.retry_builder, args.retry_failed_stage,
-                                           args.retry_report, args.abandon_stage,
-                                           args.diagnose_failed_stage,
-                                           args.grant_recovery is not None))
+    if (not decision_action and not explicit_recovery_requested(args)
             and not (args.chat and state.get('status') == 'WAITING_FOR_USER'
                      and resolver_human.current(state))
             and (state.get(resolver_human.PUBLIC) or {}).get('scope') == 'operational_exhaustion'):
