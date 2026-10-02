@@ -802,6 +802,37 @@ class RepairTests(unittest.TestCase):
         self.assertNotIn('pending_report_repair', self.state)
         self.assertEqual('report_retry_after_format_fix', self.state['user_events'][-1]['kind'])
 
+    def test_explicit_validator_retry_survives_resolver_exhaustion_without_resetting_limits(self):
+        self.state['next_stage'] = 'sol'
+        error = ValueError('Check is not supported by an exact executed Validator event')
+        self.queue(role='sol', stage='sol', error=error)
+        self.state['pending_report_repair']['attempts'] = 1
+        with self.assertRaises(runner.ReportRepairQueued):
+            self.reject_repair(6, error)
+        self.state = support.read(self.run / 'state.json')
+        self.state['pending_report_repair']['attempts'] = 2
+        with self.assertRaises(support.Paused):
+            self.reject_repair(7, error)
+        self.state = support.read(self.run / 'state.json')
+        self.state.update(status='PAUSED_RESOLVER', stop_reason='Corrective information retained')
+        selected = runner.attempt_id(self.state['stages'][-1])
+        before = copy.deepcopy(self.state)
+        for status in ('PAUSED_TIME_LIMIT', 'PAUSED_RATE_LIMIT', 'PAUSED_PROVIDER_UNCERTAIN'):
+            candidate = {**copy.deepcopy(before), 'status': status}
+            with self.subTest(status=status), self.assertRaises(ValueError):
+                runner.retry_format_failed_report(candidate, self.run, self.root, selected)
+            self.assertEqual({**before, 'status': status}, candidate)
+        with self.assertRaises(ValueError):
+            runner.retry_format_failed_report(self.state, self.run, self.root, selected + '-wrong')
+        self.assertEqual(before, self.state)
+        runner.retry_format_failed_report(self.state, self.run, self.root, selected)
+        self.assertNotIn('pending_report_repair', self.state)
+        self.assertEqual(before['settings'], self.state['settings'])
+        self.assertEqual(before['stages'], self.state['stages'])
+        self.assertEqual(before.get('goal_contract'), self.state.get('goal_contract'))
+        self.assertEqual(before['pending_report_repair'], self.state['report_repair_archive'][-1]['repair'])
+        self.assertEqual(selected, self.state['user_events'][-1]['attempt_id'])
+
     def test_terminal_error_is_durably_queued_without_replaying_implementation(self):
         sessions = copy.deepcopy(self.state['sessions'])
         pending = self.queue()

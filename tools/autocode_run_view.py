@@ -253,13 +253,13 @@ def needs(state: dict) -> dict | None:
     if status == "PAUSED_PLANNING_BUDGET":
         return {"kind": "planning_budget", "reason": state.get("stop_reason")}
     if status.startswith(("PAUSED_", "BLOCKED_")) or status not in CONTINUE:
+        try:
+            from . import autocode_validator_retry as validator_retry
+        except ImportError:
+            import autocode_validator_retry as validator_retry
         need = {"kind": "resume", "reason": state.get("stop_reason") or status}
-        pending = state.get("pending_report_repair") or {}
-        rejected = pending.get("latest_rejected") or {}
-        if (status == "PAUSED_REPEATED_FAILURE"
-                and pending.get("error") == "Check is not supported by an exact executed Validator event"
-                and pending.get("attempts") == (state.get("settings") or {}).get("report_repair", {}).get("max_attempts", 2)
-                and isinstance(rejected.get("iteration"), int) and rejected.get("output")):
-            need["retry_report_attempt"] = f"{rejected['iteration']:03d}/{Path(rejected['output']).stem}"
+        attempt = validator_retry.offered_attempt(state)
+        if attempt:
+            need['retry_report_attempt'] = attempt
         return need
     return {"kind": "continue"}
