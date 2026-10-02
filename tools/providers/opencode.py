@@ -273,7 +273,7 @@ def prompt_for_schema(prompt, schema, events):
         "private_source_exceptions. Use their workspacePath only, preserve their canonicalPath, "
         "sourceId, and SHA-256 identity, and do not treat this as permission to access the "
         "external canonical location or any other external file.\n"
-        + json.dumps(schema, indent=2) + "\n")
+        + json.dumps(schema, separators=(",", ":")) + "\n")
     return prompt.replace("\nCURRENT HANDOFF DATA\n", instructions + "\nCURRENT HANDOFF DATA\n", 1)
 
 
