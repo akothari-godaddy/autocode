@@ -58,7 +58,8 @@ def prepare_investigation(state):
     prompt, metrics = bug_job.prompt(
         state, autoplanner.workspace_inventory(state["workspace"], state["task"]),
         state["settings"].get("context_soft_tokens", 10000),
-        autoplanner.engine_for(state["settings"], "investigator"), scratch_workspace=str(scratch))
+        autoplanner.engine_for(state["settings"], "investigator"), scratch_workspace=str(scratch),
+        python_executable=verify.python_for(state['workspace']))
     return ModelRequest("astra", "investigator", prompt, metrics, bug_job.SCHEMA, True)
 
 

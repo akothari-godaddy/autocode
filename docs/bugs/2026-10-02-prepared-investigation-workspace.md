@@ -17,7 +17,14 @@ copied file does not change its original.
 
 Symlinked runner directories, external or state links, and directory symlinks
 are rejected. Internal file links are copied as independent file contents.
-Directory-link dependency layouts remain unsupported by this preparation path;
+Root `.venv` and `venv` environments identified by a regular `pyvenv.cfg` are
+excluded from the source copy. Their normal external interpreter links and Linux
+`lib64` directory links therefore do not block investigation preparation. The
+handoff provides `investigation_python` through the existing project-environment
+lookup; the Investigator uses it with bytecode writes disabled against the scratch
+source, without installing into or modifying the shared environment. Other source
+symlinks retain the same checks, and ordinary directories named `venv` are copied.
+Other directory-link dependency layouts remain unsupported by this preparation path;
 they fail before a model launches. No GoCode guard, model permission, recovery
 limit or human approval requirement is weakened.
 
