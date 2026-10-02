@@ -71,19 +71,26 @@ def canonical_items(previous: dict, changes: list) -> list:
     GLM 5.3 sometimes wrapped the item it declared (`required_behaviors: "<text>"`, `AC12: '<text>'`,
     `AC9.criterion`), and the guard refused a correctly declared, user-backed change: 8 of 50 guard
     refusals to 2026-10-02. A reference is rewritten only when it holds exactly one protected text of the
-    previous contract with little else around it, or else names exactly one of its criterion IDs.
+    previous contract with little else around it and names no criterion, or names exactly one criterion ID
+    (quoting at most that criterion's own wording). A reference that could mean two items is left for the
+    guard to refuse.
     """
-    ids = [row["id"] for row in previous.get("acceptance_criteria", []) if row.get("id")]
+    criteria = {row["id"]: row.get("criterion", "") for row in previous.get("acceptance_criteria", []) if row.get("id")}
     texts = {text for key in (*PROTECTED_LISTS, "permission_boundaries") for text in previous.get(key, [])}
 
     def canonical(item):
-        if not isinstance(item, str) or item in texts or item in ids:
+        if not isinstance(item, str) or item in texts or item in criteria:
             return item
         wrapped = [text for text in texts if text in item and len(item) - len(text) <= 80]
-        if len(wrapped) == 1:
-            return wrapped[0]
-        named = [cid for cid in ids if re.search(r"(?<![\w-])" + re.escape(cid) + r"(?![\w-])", item)]
-        return named[0] if len(named) == 1 and not wrapped else item
+        rest = item
+        for text in wrapped:
+            rest = rest.replace(text, "")
+        named = [cid for cid in criteria if re.search(r"(?<![\w-])" + re.escape(cid) + r"(?![\w-])", rest)]
+        # An explicit criterion ID names that criterion, as long as any protected text it quotes is the
+        # criterion's own wording; quoting another item's text beside it is ambiguous (review of #259).
+        if len(named) == 1 and all(text == criteria[named[0]] for text in wrapped):
+            return named[0]
+        return wrapped[0] if len(wrapped) == 1 and not named else item
 
     return [dict(raw, item=canonical(raw.get("item"))) if isinstance(raw, dict) else raw for raw in changes]
 
