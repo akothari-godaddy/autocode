@@ -16,9 +16,9 @@ try:
     from . import autocode_planning_clarification as clarification
     from . import autocode_progressive_state as progressive_state
     from .units import autoplanner as planning_unit
-    from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
+    from . import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay, autocode_check_refs as check_refs
 except ImportError:
-    import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay
+    import autocode_regression as regression, autocode_verify as verify, autocode_check_replay as check_replay, autocode_check_refs as check_refs
     import autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs
     import autocode_stuck_job as stuck, autocode_goals as goals, autocode_goal_lifecycle as lifecycle
     import autocode_planning_artifacts as planning_artifacts, autocode_planning_graph as planning_graph
@@ -490,8 +490,8 @@ def apply_build_result(runtime, state, value, record, workspace, run_dir):
 def apply_review_result(runtime, state, stage, value, record, workspace, run_dir):
     modern = state.get("version", 2) >= 3
     progressive_state.require_reported_checks(state, value["checks"])
-    support.verify_checks(value["checks"], workspace, record["events"],
-                          **runtime.check_evidence_options(record))
+    support.verify_checks(value["checks"], workspace, record["events"], **runtime.check_evidence_options(record))
+    check_refs.resolve(value)  # check:<n> evidence names a check whose event the runner just attached
     refs = [c["evidence_ref"] for c in value["checks"]]
     for check in value["checks"]:
         if not check["evidence_ref"].startswith("event:"):
