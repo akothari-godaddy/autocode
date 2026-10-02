@@ -302,10 +302,10 @@ def verify_checks(checks, workspace, event_path, *, receipt_only=False, capture_
                 check['exit_code'] = matches[0]['exit_code']
                 continue
             # A model sees no event IDs or exit codes, so a check may cite a bare "event:": it binds to the LATEST
-            # run of its exact command, and a claimed exit must match that run (no convenient success, EVD-06).
+            # run of its exact command, exit-less runs included, whose exit must be known and match (EVD-06).
             if not matches:
-                alternates = [e["item"] for e in rows
-                              if e.get("type") == "item.completed" and e.get("item", {}).get("type") == "command_execution"
+                alternates = [e["item"] for e in rows if e.get("type") == "item.completed"
+                              and e.get("item", {}).get("type") in ("command_execution", "tool_output")
                               and isinstance(e['item'].get('command'), str)
                               and same_command(e['item']['command'], check['command'])]
                 latest = alternates[-1] if alternates else {}

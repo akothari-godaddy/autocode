@@ -67,6 +67,19 @@ class ValidationMetadataTests(unittest.TestCase):
             support.verify_checks(checks, self.workspace, self.log)
         self.assertEqual('event:', checks[0]['evidence_ref'])
 
+    def test_a_later_run_without_an_exit_code_is_never_skipped_for_an_earlier_success(self):
+        # Review of #260: the latest run's exit was unknown (an OpenCode bridge without exit metadata), and the check
+        # was bound to the run before it, a convenient success. It must be refused: capture a receipt instead.
+        self.events(self.event(id='r1'), self.event(id='r2'),
+                    {'type': 'tool_output', 'id': 'r3', 'command': 'python test.py', 'aggregated_output': 'FAILED'})
+        for check in ({'evidence_ref': 'event:', 'exit_code': None}, {'evidence_ref': 'event:', 'exit_code': 0},
+                      {'evidence_ref': 'event:r3', 'exit_code': None}):
+            with self.subTest(check=check):
+                checks = [{'command': 'python test.py', **check}]
+                with self.assertRaises(ValueError):
+                    support.verify_checks(checks, self.workspace, self.log)
+                self.assertEqual(check['evidence_ref'], checks[0]['evidence_ref'])
+
     def test_ambiguity_conflicts_and_unknown_exits_are_not_repaired(self):
         for items, check in [
             ([self.event(), self.event()], {'evidence_ref': 'event:actual'}),
