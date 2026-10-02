@@ -37,6 +37,32 @@ class RevisionGuardTests(unittest.TestCase):
             lifecycle.install_draft(current, wider, origin="glm_revise")
         self.assertEqual(["Print Hello, NAME for a nonempty name"], current["goal_contract"]["body"]["required_behaviors"])
 
+    def test_a_declared_change_may_wrap_the_item_it_names(self):
+        # Live feedback revision (tiny-greeting, 2026-10-02): the item was `required_behaviors: "<text>"`.
+        current = state("Print Hello, NAME.")
+        lifecycle.install_draft(current, body(), origin="glm_draft")
+        feedback = {"kind": "brief_feedback", "id": "feedback-1", "actor": "user_cli", "text": "Add --shout."}
+        current["user_events"].append(feedback)
+        current["brief_feedback"] = [feedback]
+        revised = body()
+        revised["required_behaviors"] = ["Print Hello, NAME, or HELLO, NAME with --shout"]
+        revised["acceptance_criteria"][0]["criterion"] = "Contract holds, --shout included"
+        old = "Print Hello, NAME for a nonempty name"
+        changes = [{"item": f'required_behaviors: "{old}"', "change": "reworded", "basis": "user_feedback",
+                    "answer_id": "feedback-1", "replacement": revised["required_behaviors"][0]},
+                   {"item": "C1.criterion", "change": "reworded", "basis": "user_feedback", "answer_id": "feedback-1",
+                    "replacement": revised["acceptance_criteria"][0]["criterion"]}]
+        lifecycle.install_draft(current, revised, origin="glm_revise", changes=changes)
+        self.assertEqual([old, "C1"], [row["item"] for row in current["goal_contract"]["declared_changes"]])
+
+    def test_a_reference_to_two_items_is_not_guessed(self):
+        current = state("Print Hello, NAME.")
+        lifecycle.install_draft(current, body(), origin="glm_draft")
+        import autocode_contract_revision as revision
+        previous = {**current["goal_contract"]["body"], "acceptance_criteria": [{"id": "C1"}, {"id": "C2"}]}
+        rows = revision.canonical_items(previous, [{"item": "C1 and C2"}, {"item": "C2: reworded"}, {"item": "Q1"}])
+        self.assertEqual(["C1 and C2", "C2", "Q1"], [row["item"] for row in rows])
+
     def install_with_tab_text(self):
         first = body()
         first["required_behaviors"] = ["Print the fields separated by a literal \\t"]
