@@ -258,6 +258,48 @@ class RepairTests(unittest.TestCase):
         self.assertNotIn('Fix an existing test race.', data['source_texts'])
         self.assertIn('current Builder task and approved contract are inherited obligations', prompt)
 
+    def test_planning_report_repair_receives_open_questions_answers_and_investigation_request(self):
+        questions = [
+            {'id': 'Q1', 'category': 'behavior', 'kind': 'decision',
+             'question': 'What behavior should names with no letters use?',
+             'why': 'The task does not settle this.', 'delegable': False,
+             'options': ['Reject blank names only', 'Reject punctuation too'],
+             'proposed_default': 'Reject blank names only.'},
+            {'id': 'Q3', 'category': 'other', 'kind': 'decision',
+             'question': 'Should the fix make a local commit?',
+             'why': 'Commit scope is not a code behavior.', 'delegable': False,
+             'options': ['Commit after tests', 'Leave changes uncommitted'],
+             'proposed_default': 'Commit after tests.'},
+        ]
+        self.state.update(
+            next_stage='requirements_gather',
+            requirements_handoff={'report': {'requirements': [{'id': 'R1', 'text': 'Fix blank names'}],
+                                             'open_questions': questions}, 'output': 'requirements.json'},
+            investigation_request={'stage': 'requirements_gather', 'questions': [questions[0]],
+                                   'all_question_ids': ['Q1', 'Q3'], 'handoff_hash': 'handoff-1'},
+            answers={'Q3': {'kind': 'answer', 'question': questions[1],
+                            'text': 'Commit after all tests pass.'}},
+            brief_feedback=[{'kind': 'brief_feedback', 'id': 'intervention-feedback-1',
+                             'text': 'Reject only blank names; commit after tests pass.'}],
+        )
+        self.state['settings']['roles']['requirements'] = {'model': 'requirements-model'}
+        self.queue(stage='requirements_gather', role='requirements')
+
+        prompt = self.repair_request()['prompt']
+        data = json.loads(prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+        context = data['clarification_context']
+        self.assertEqual(self.state['requirements_handoff'], context['requirements_handoff'])
+        self.assertEqual(self.state['requirements_handoff']['report']['requirements'],
+                         context['previous_requirements'])
+        self.assertEqual(self.state['investigation_request'], context['investigation_request'])
+        self.assertEqual(self.state['answers'], context['saved_answers'])
+        self.assertEqual([{'id': row['id'], 'text': row['text']}
+                          for row in self.state['brief_feedback']], context['saved_feedback'])
+        self.assertIn('Human answers and feedback are never machine_resolutions', prompt)
+        self.assertIn('machine_resolutions only when clarification_context has an investigation_request', prompt)
+        self.assertIn('original_report is historical planning context', prompt)
+        self.assertNotIn('original_report is also supplied, it is the immutable execution-history baseline', prompt)
+
     def assert_repair_blocked(self, status='PAUSED_REPORT_REPAIR_INPUT'):
         attempts = self.state['pending_report_repair']['attempts']
         with patch.object(runner, 'run_role') as launch, self.assertRaises(support.Paused) as error:
