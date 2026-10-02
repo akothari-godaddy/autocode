@@ -136,11 +136,13 @@ class RunViewTests(unittest.TestCase):
         self.assertEqual("resume", run_view.needs({"status": "PLAN_REWORK_REQUIRED"})["kind"])
 
     def test_rejected_validator_report_exposes_exact_retry_attempt(self):
-        state = {"status": "PAUSED_REPEATED_FAILURE", "stop_reason": "report rejected",
+        state = {"status": "PAUSED_REPEATED_FAILURE", "next_stage": "sol", "stop_reason": "report rejected",
                  "settings": {"report_repair": {"max_attempts": 2}},
                  "pending_report_repair": {"error": "Check is not supported by an exact executed Validator event",
-                                           "attempts": 2,
-                                           "latest_rejected": {"iteration": 1, "output": "/run/sol_report_repair-02.json"}}}
+                                           "attempts": 2, "original": {"stage": "sol"},
+                                           "latest_rejected": {"iteration": 1, "output": "/run/sol_report_repair-02.json",
+                                                               "original_stage": "sol", "report_only": True,
+                                                               "rejected": True}}}
         self.assertEqual("001/sol_report_repair-02", run_view.needs(state)["retry_report_attempt"])
 
     def test_running_continues(self):
