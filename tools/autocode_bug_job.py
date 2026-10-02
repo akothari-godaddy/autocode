@@ -114,7 +114,7 @@ What to do:
      call or command) and then (the exact expected result, with literal values: "returns 1", "prints
      'Hello, Ada'", "exits 2"). No vague words such as "correctly" or "gracefully". The Builder writes one
      test per case named test_<id>_<what it checks> (for example test_t1_new_year_week_is_one_row), and
-     the runner checks that each case's test fails on the original code and passes after the fix. A case
+     the runner proves each case according to its kind. A restore case's test must fail on the original code and pass after the fix. A case
      may carry kind (restore by default, or preserve): restore is behavior the fix restores; preserve is
      behavior that already worked and must keep working (for example "an exact multiple still gives the
      same page count") — its test must pass on the original code and after the fix, and a preserve case

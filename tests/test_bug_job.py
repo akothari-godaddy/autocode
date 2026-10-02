@@ -57,6 +57,30 @@ class RoutingTests(unittest.TestCase):
         self.assertIn(bug_job.STAGE, jobs.STAGES)
 
 
+class BugProofPromptTests(unittest.TestCase):
+    def test_investigator_distinguishes_restore_proof_from_preservation_proof(self):
+        text, _ = bug_job.prompt(state_for('/repo'), engine='opencode')
+        self.assertIn("A restore case's test must fail on the original code and pass after the fix", text)
+        self.assertNotIn("each case's test fails on the original code", text)
+        self.assertIn("its test must pass on the original code and after the fix", text)
+
+    def test_planning_and_review_keep_preserve_cases_as_guards(self):
+        from units import autoplanner
+        state = state_for('/repo')
+        state['investigation'] = diagnosis(fix_size='large', test_cases=[CASE, {
+            'id': 'T2', 'given': 'no timeout', 'when': "renew('example.com') runs",
+            'then': 'exactly 1 mutation', 'kind': 'preserve'}])
+        for stage in ('astra_discovery', 'astra_challenge', 'glm_revise', 'astra_finalize'):
+            with self.subTest(stage=stage):
+                text, _ = autoplanner.context(state, stage, Path('/repo/state.json'))
+                rule = text.split('BUG FIX:', 1)[1].split('TESTS IN PLAIN ENGLISH:', 1)[0]
+                self.assertIn('restore (the default)', rule)
+                self.assertIn('preserve', rule)
+                self.assertIn('verification_method "guard: test_<id>_<what it checks>"', rule)
+                self.assertIn('passes on the original code and after the fix', rule)
+                self.assertNotIn('every case has such a test that fails on the original code', rule)
+
+
 class InvestigationPromptBoundaryTests(unittest.TestCase):
     def test_prepared_scratch_handoff_requires_using_complete_copy_without_rebuilding(self):
         scratch = '/repo/.autocode/investigation/bug-example'

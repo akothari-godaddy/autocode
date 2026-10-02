@@ -46,9 +46,13 @@ repository at its note_path. It is the requirements: plan the correction of its 
 Every plan must uphold its invariant as an acceptance criterion, checked as exactly as the invariant states it
 (never "to 2 decimal places" or "within 0.001" when the rule is exact), with a regression test that fails on the
 original code and passes after the fix, and must keep the project's existing tests passing. Its test_cases
-are those regression tests in plain English: make each one an acceptance criterion quoting its given, when
-and then, and require one test per case named test_<id>_<what it checks> (T1 -> test_t1_...); the runner
-refuses the fix unless every case has such a test that fails on the original code and passes after it. Fix the cause,
+describe restore and preserve cases in plain English: make each one an acceptance criterion quoting its
+given, when and then, and require one test per case named test_<id>_<what it checks> (T1 -> test_t1_...).
+A case with kind restore (the default) requires verification_method "test: test_<id>_<what it checks>";
+its test must fail on the original code and pass after the fix. A case with kind preserve requires
+verification_method "guard: test_<id>_<what it checks>"; its test passes on the original code and after the fix.
+The runner proves every case according to its kind. Keep preserve cases as guards during review and revision;
+do not invent a fail-first obligation for behavior that already works. Fix the cause,
 not the symptom, and do not widen the change beyond what the root cause needs. Do not ask the user what the
 fix should achieve; ask only about a genuine choice the diagnosis leaves open.
 Cite the diagnosis in code_refs as exactly its note_path; explanations go in summaries, never inside a path.
