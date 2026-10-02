@@ -14,6 +14,7 @@ import fcntl
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -21,6 +22,11 @@ import tempfile
 
 def now():
     return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
+def slug(task: str) -> str:
+    value = re.sub(r"[^a-z0-9]+", "-", task.lower()).strip("-")
+    return (value or "task")[:48]
 
 
 def digest(value):
