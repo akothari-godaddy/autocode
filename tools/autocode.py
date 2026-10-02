@@ -52,8 +52,9 @@ try:
         assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
         repair_limit, stage_completed, stage_supports_sessions, timeout_recovery_route, write_json)
-    from .autocode_report_source import (REPAIR_REPORT_BYTES, repair_report_instruction, repair_report_source,
-        valid_truncated_report_attempt)
+    from .autocode_report_source import (REPAIR_REPORT_BYTES, original_report_for_repair,
+        repair_report_instruction, repair_report_source, valid_truncated_report_attempt)
+    from .autocode_report_findings import preserved_dispositions
     from .autocode_stage_recovery import (MAX_AUTOMATIC_CAPACITY_RECOVERIES, abandon_stage,
         authorize_failure_retry, automatically_recover_capacity_stage,
         automatically_recover_external_directory_denial, automatically_recover_report_repair_timeout,
@@ -80,8 +81,9 @@ except ImportError:
         assert_stage_stopped, attempt_id, count_automatic_recovery, default_missing_provenance,
         normalize_human_boundary, normalize_plan_challenge_blocking, now, read_json, recovery_count,
         repair_limit, stage_completed, stage_supports_sessions, timeout_recovery_route, write_json)
-    from autocode_report_source import (REPAIR_REPORT_BYTES, repair_report_instruction, repair_report_source,
-        valid_truncated_report_attempt)
+    from autocode_report_source import (REPAIR_REPORT_BYTES, original_report_for_repair,
+        repair_report_instruction, repair_report_source, valid_truncated_report_attempt)
+    from autocode_report_findings import preserved_dispositions
     from autocode_stage_recovery import (MAX_AUTOMATIC_CAPACITY_RECOVERIES, abandon_stage,
         authorize_failure_retry, automatically_recover_capacity_stage,
         automatically_recover_external_directory_denial, automatically_recover_report_repair_timeout,
@@ -603,6 +605,9 @@ def accept_repaired_report(state, run_dir, workspace, value, repair_record):
     # Evidence checks use ORIGINAL tool events, not new commands from the repairer.
     try:
         assert_repair_preserves_builder_history(original, value)
+        # Only unchanged dispositions from the pinned fresh review may survive.
+        original['preserved_finding_dispositions'] = preserved_dispositions(original,
+            original_report_for_repair(original)['report'] if stage_completed(state, original) else None, value)
         original.update(output=repair_record['output'], repaired_by=repair_record['events'],
                         rejected=False, report_repaired=True)
         apply_result(state, original['stage'], value, original, workspace, run_dir)
@@ -624,23 +629,6 @@ def accept_repaired_report(state, run_dir, workspace, value, repair_record):
         state['phase'] = 'PLANNING' if planning.is_planning(state, state['next_stage']) else 'EXECUTING'
         state.pop('stop_reason', None)
     commit_boundary_candidate(owner, state, run_dir, workspace)
-
-
-def original_report_for_repair(original):
-    """Expose terminal output directly, including reports rejected before saving.
-
-    OpenCode's schema-invalid JSON may exist only in a long raw event line.
-    Read tools cannot reliably recover those lines. Extract the same terminal
-    report as admission does, without validating, accepting or altering it.
-    """
-    try:
-        if original.get('engine') == 'opencode':
-            value = opencode.final_report(original['events'])
-        else:
-            value = read_json(Path(original['output']))
-        return {'report': value, 'extraction_error': None}
-    except (OSError, ValueError, RuntimeError, KeyError) as error:
-        return {'report': None, 'extraction_error': str(error)}
 
 
 def execute_report_repair(state, run_dir, workspace):
@@ -727,7 +715,8 @@ def execute_report_repair(state, run_dir, workspace):
               'Finding identities belong to their source reviewer: the Validator may reuse only open sol IDs, '
               'and the Plan Reviewer only open astra IDs. If the original report copied the other reviewer\'s ID, '
               'leave id empty while preserving the defect, severity, blocking status and evidence. '
-              'A report-only repair cannot resolve or retract findings. '
+              'Never introduce or change finding resolutions or retractions. Copy only exact '
+              'finding_dispositions already present in the original completed, nonblocked review, not claims from a later repair. '
               'For a Plan Reviewer execution decision, return every acceptance_criteria definition '
               'in order with exact IDs and criterion text; omit text only when the schema requests IDs only. '
               'Restore omitted criteria as unverified; do not treat milestone scope as permission '
