@@ -9,7 +9,7 @@ FIELDS = frozenset(('id', 'disposition', 'evidence'))
 REVIEW_SOURCES = {'sol': 'sol', 'astra_review': 'astra', 'astra_plan': 'astra'}
 # These original outcomes already reach disposition application. A BLOCKED
 # result carries no such authority, even if repair changes its outcome later.
-APPLICABLE_OUTCOMES = {'sol': ('verdict', ('PASS', 'FAIL', 'NOT_VERIFIED')),
+APPLICABLE_OUTCOMES = {'sol': ('verdict', ('PASS', 'FAIL')),
                       'astra': ('status', ('CONTINUE', 'REWORK', 'COMPLETE', 'TASK_COMPLETE'))}
 
 
