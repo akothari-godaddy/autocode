@@ -10,6 +10,9 @@ A child exit of zero cannot override recorded unexpected requests: the raw
 sequence stays ERROR and the catalog oracle rejects acceptance. Each record
 includes roots, traffic identity, refusals and the started/polled/stopped smoke
 lifecycle. Previous evidence stays untouched.
+Refusal ledgers are created before execution in a separate observer directory,
+outside the phase's mutable state. State teardown preserves recorded refusals;
+a missing or corrupt ledger produces ERROR with unknown requests, never GREEN.
 
 Use `harness.phase_env.PhaseSequence` for new acceptance sequences. Its phases
 copy the ambient environment, preserve HOME and provider OAuth, and add their

@@ -35,7 +35,7 @@ assert lifecycle['status'] == 200 and lifecycle['body'] == {'status': 'ok'} and 
 '''
 
 COMPAT = r'''
-import json, os, sys
+import json, os, shutil, sys
 sys.path.insert(0, os.environ['PHASE_HARNESS_ROOT'])
 from harness.phase_env import DEFAULT_USAGE_URL, RefusedTransportError, find_credentials, guard, write_synthetic_credentials
 policy = json.load(open('phase_policy.json'))
@@ -49,6 +49,8 @@ startup()
 if policy['teardown']:
     write_synthetic_credentials(os.environ['PHASE_CREDENTIAL_ROOT'], 'synthetic-teardown-token')
     startup()
+if policy.get('cleanup_state'):
+    shutil.rmtree(os.environ['PHASE_STATE_ROOT'])
 print('compatibility assertions passed')
 '''
 

@@ -60,7 +60,8 @@ class PhaseCatalogTests(unittest.TestCase):
     def test_phase_catalog_seed_reference_and_controls(self):
         rows = run.self_test(catalog.load('acceptance-phase-isolation'))
         self.assertEqual({'seed', 'reference', 'broken/contamination', 'broken/swallowed-call',
-                          'broken/swallowed-teardown'}, {name for name, _, _ in rows})
+                          'broken/swallowed-teardown', 'broken/swallowed-teardown-cleanup'},
+                         {name for name, _, _ in rows})
         self.assertTrue(all(ok for _, ok, _ in rows), rows)
 
     def _score(self, overlay):
@@ -110,7 +111,7 @@ class PhaseCatalogTests(unittest.TestCase):
     def test_swallowed_call_and_teardown_remain_error_with_green_children(self):
         from harness.phase_env import ERROR
         scenario = catalog.load('acceptance-phase-isolation')
-        for name in ('swallowed-call', 'swallowed-teardown'):
+        for name in ('swallowed-call', 'swallowed-teardown', 'swallowed-teardown-cleanup'):
             with self.subTest(control=name):
                 result, record = self._score(scenario.dir / 'broken' / name)
                 self.assertFalse(result.passed)
@@ -1034,6 +1035,40 @@ class PhaseEnvironmentTests(unittest.TestCase):
         stats.run([sys.executable, "-c", STATS_PHASE_SCRIPT])
         compat.run([sys.executable, "-c", COMPAT_PHASE_SCRIPT, "call"])
         return sequence, stats, compat
+
+    def test_state_teardown_preserves_refusals_without_failing_clean_phases(self):
+        phase_env = self.phase_env()
+        for refused in (False, True):
+            with self.subTest(refused=refused):
+                sequence = phase_env.PhaseSequence('teardown', self.sequence_base('state-cleanup'))
+                phase = sequence.phase('compat')
+                if refused:
+                    phase_env.write_synthetic_credentials(phase.credential_root, 'synthetic-token')
+                script = COMPAT_PHASE_SCRIPT.replace(
+                    'sys.exit(0)', "import shutil\nshutil.rmtree(os.environ['PHASE_STATE_ROOT'])\nsys.exit(0)")
+                child = phase.run([sys.executable, '-c', script, 'teardown'])
+                self.assertEqual(0, child.returncode, child.stderr)
+                self.assertFalse(phase.state_root.exists())
+                record = sequence.finish()
+                self.assertEqual(phase_env.ERROR if refused else phase_env.GREEN, record['outcome'], record)
+                self.assertEqual(int(refused), len(record['phases'][0]['unexpected_requests']))
+
+    def test_missing_or_corrupt_refusal_ledger_cannot_be_green(self):
+        phase_env = self.phase_env()
+        for damage in ('missing', 'corrupt'):
+            with self.subTest(damage=damage):
+                sequence = phase_env.PhaseSequence('ledger', self.sequence_base('ledger-loss'))
+                phase = sequence.phase('compat')
+                phase_env.write_synthetic_credentials(phase.credential_root, 'synthetic-token')
+                teardown = ("from pathlib import Path\nledger = Path(os.environ['PHASE_UNEXPECTED_REQUESTS'])\n"
+                            + ("ledger.unlink()\n" if damage == 'missing' else "ledger.write_text('{broken')\n")
+                            + 'sys.exit(0)')
+                child = phase.run([sys.executable, '-c', COMPAT_PHASE_SCRIPT.replace('sys.exit(0)', teardown)])
+                self.assertEqual(0, child.returncode, child.stderr)
+                record = sequence.finish()
+                self.assertEqual(phase_env.ERROR, record['outcome'], record)
+                self.assertTrue(record['phases'][0]['evidence_error'])
+                self.assertIsNone(record['phases'][0]['unexpected_requests'])
 
     def test_ac1_isolated_compat_phase_sends_zero_default_usage_requests(self):
         phase_env = self.phase_env()

@@ -51,6 +51,10 @@ class RefusedTransportError(RuntimeError):
     """A request to a non-loopback or undeclared destination, refused before any socket was opened."""
 
 
+class PhaseEvidenceError(RuntimeError):
+    """A phase's pre-created refusal ledger is missing or unreadable."""
+
+
 class _GuardedRedirect(urllib.request.HTTPRedirectHandler):
     def __init__(self, guard):
         self.guard = guard
@@ -109,13 +113,14 @@ def find_credentials(credential_root) -> Path | None:
 def read_unexpected_requests(requests_log) -> list[dict]:
     """Every refusal recorded for a phase, in the order it was refused."""
     path = Path(requests_log)
-    if not path.exists():
-        return []
-    entries = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            entries.append(json.loads(line))
-    return entries
+    try:
+        entries = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()
+                   if line.strip()]
+        if any(not isinstance(entry, dict) for entry in entries):
+            raise ValueError('refusal records must be objects')
+        return entries
+    except (OSError, ValueError) as error:
+        raise PhaseEvidenceError(f'refusal ledger is missing or unreadable: {path}') from error
 
 
 def _inside(path, base: Path) -> bool:
@@ -203,12 +208,14 @@ class Phase:
         for root in roots:
             root.mkdir(parents=True, exist_ok=True)
         self.allowed_endpoints = sorted({normalize_endpoint(endpoint) for endpoint in allowed_endpoints})
+        self.requests_log.parent.mkdir(parents=True, exist_ok=True)
+        self.requests_log.touch(exist_ok=False)
         self.results: list = []
 
     @property
     def requests_log(self) -> Path:
         """The one recording path every refusal in this phase's lifecycle lands in."""
-        return self.state_root / "unexpected-requests.jsonl"
+        return self.sequence.base / '.phase-evidence' / f'{self.name}.jsonl'
 
     def build_env(self, **extra: str) -> dict:
         """The phase's subprocess environment: declared roots on top of the ambient one.
@@ -256,6 +263,11 @@ class Phase:
 
     def record(self) -> dict:
         """The phase's effective roots, synthetic identity and retained refusals."""
+        evidence_error = None
+        try:
+            unexpected = self.unexpected_requests()
+        except PhaseEvidenceError as error:
+            unexpected, evidence_error = None, str(error)
         return {"phase": self.name,
                 "credential_root": str(self.credential_root),
                 "config_root": str(self.config_root),
@@ -263,7 +275,8 @@ class Phase:
                 "cache_root": str(self.cache_root),
                 "traffic_identity": self.traffic_identity,
                 "requests_log": str(self.requests_log),
-                "unexpected_requests": self.unexpected_requests()}
+                "unexpected_requests": unexpected,
+                "evidence_error": evidence_error}
 
 
 class PhaseSequence:
@@ -316,11 +329,18 @@ class PhaseSequence:
             stray = [root for root in roots if not _inside(root, self.base)]
             checks.append({"name": f"{phase.name}: roots inside the sequence base",
                            "ok": not stray, "detail": stray})
+            checks.append({"name": f"{phase.name}: refusal ledger readable",
+                           "ok": not phase_record["evidence_error"],
+                           "detail": phase_record["evidence_error"]})
             checks.append({"name": f"{phase.name}: no unexpected requests",
-                           "ok": not phase_record["unexpected_requests"],
+                           "ok": phase_record["unexpected_requests"] == [],
                            "detail": phase_record["unexpected_requests"]})
+        missing_evidence = [record["phase"] for record in phase_records if record["evidence_error"]]
         contaminated = [record["phase"] for record in phase_records if record["unexpected_requests"]]
-        if contaminated:
+        if missing_evidence:
+            outcome, reason = ERROR, (f"phase evidence unavailable in {', '.join(missing_evidence)}; "
+                                      f"{ERROR_SEMANTICS}")
+        elif contaminated:
             outcome, reason = ERROR, ("phase contamination: refused default or non-loopback transport in "
                                       f"{', '.join(contaminated)}; {ERROR_SEMANTICS}")
         elif all(check["ok"] for check in checks):
