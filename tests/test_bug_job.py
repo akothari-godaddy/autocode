@@ -57,6 +57,21 @@ class RoutingTests(unittest.TestCase):
         self.assertIn(bug_job.STAGE, jobs.STAGES)
 
 
+class InvestigationPromptBoundaryTests(unittest.TestCase):
+    def test_opencode_investigation_uses_workspace_scratch_and_foreground_checks(self):
+        text, _ = bug_job.prompt(state_for('/repo'), engine='opencode')
+        self.assertIn('.autocode/investigation/', text)
+        self.assertIn('Do not create scratch copies outside the workspace', text)
+        self.assertIn('foreground', text)
+        self.assertNotIn('scratch copy OUTSIDE the workspace', text)
+
+    def test_scratch_copy_excludes_runner_state_and_preserves_application_source(self):
+        text, _ = bug_job.prompt(state_for('/repo'), engine='opencode')
+        self.assertIn('Exclude .autocode/ and .git/', text)
+        self.assertIn('Do not edit application source in the original workspace', text)
+        self.assertIn('never modify existing runner state or evidence', text)
+
+
 class PrepareTests(unittest.TestCase):
     def test_investigator_gets_its_own_route_and_a_scratch_copy_but_no_plan(self):
         with tempfile.TemporaryDirectory() as workspace:
