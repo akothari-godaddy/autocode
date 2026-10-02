@@ -24,12 +24,12 @@ import copy
 import uuid
 try:
     from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
-    from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, model_catalogue
+    from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, autocode_format_correction as format_correction, model_catalogue
     from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_event_log as event_log
 except ImportError:
     import autocode_dependency as dependency, autocode_status_command as status_command
-    import autocode_regression as regression, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes, autocode_event_log as event_log
+    import autocode_regression as regression, autocode_format_correction as format_correction, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes, autocode_event_log as event_log
     import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
     import autocode_process as processes, autocode_registry as registry, autocode_planning as planning
@@ -163,13 +163,6 @@ def slug(task: str) -> str:
     return (value or "task")[:48]
 
 
-def event_thread_id(jsonl: Path) -> str | None:
-    for event in support.events(jsonl):
-        if event.get("type") == "thread.started" and event.get("thread_id"):
-            return str(event["thread_id"])
-    return None
-
-
 def check_evidence_options(record):
     return {'receipt_only': record.get('output_mode') == 'report_file',
             'capture_context': record.get('capture_context')}
@@ -301,7 +294,7 @@ def reject_completed_stage(state, run_dir, record, error):
 def run_role(
     *, role: str, prompt: str, sandbox: str, workspace: Path, run_dir: Path,
     state: dict[str, Any], schema: Path, model: str | None, allow_write: bool,
-    dry_run: bool, report_only: bool = False,
+    dry_run: bool, report_only: bool = False, resume_session: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     if state.get('next_stage') == 'astra_diagnose' and state.get('active_stage'):
         raise support.Paused('PAUSED_UNCERTAIN_STAGE', 'Reconcile the active diagnosis before another provider request')
@@ -351,7 +344,7 @@ def run_role(
         route_role = fallback_route['role']
     supports_sessions = getattr(opencode, "SUPPORTS_SESSIONS", True)
     configured_tool = getattr(opencode, "CONFIGURED", False)
-    session = None if joint_stage or report_only or not supports_sessions else state.setdefault("sessions", {}).get(route_role)
+    session = resume_session or (None if joint_stage or report_only or not supports_sessions else state.setdefault("sessions", {}).get(route_role))
     engine = planning.engine_for(state["settings"], route_role)
     transport_args = support.transport_arguments(state["settings"])
     route = fallback_route or state["settings"]["roles"][route_role]
@@ -528,7 +521,7 @@ def run_role(
     if exit_code != 0:
         raise support.Paused(support.failure_status(events), f"{role} exited {exit_code}; reconcile {events}, no automatic replay")
     if supports_sessions:
-        thread = event_thread_id(events)
+        thread = format_correction.event_thread_id(events)
         if not thread or (session and thread != session):
             raise support.Paused("PAUSED_UNCERTAIN_STAGE", "Provider returned a missing or unexpected session ID")
         if not session and not report_only:
@@ -668,6 +661,8 @@ def execute_report_repair(state, run_dir, workspace):
             or any(not Path(p).is_file() or support.file_hash(p) != h for p, h in pending['pins'].items())):
         raise support.Paused('PAUSED_STALE_VALIDATION', 'Saved report-repair inputs changed; do not retry')
     resolver_runtime.boundary(sys.modules[__name__], state, run_dir, workspace)
+    if format_correction.execute(sys.modules[__name__], state, run_dir, workspace):
+        return
     original_source = repair_report_source(original)
     rejected_source = (repair_report_source(pending['latest_rejected'])
                        if pending.get('latest_rejected') else original_source)
@@ -936,7 +931,7 @@ def reconcile_active(state, run_dir, workspace):
             f"Uncertain stage must be inspected, never automatically replayed. After review, "
             f"use --abandon-stage {attempt_id(record)} to retain partial work and set aside this response.")
     if supports_sessions:
-        thread = event_thread_id(Path(record["events"]))
+        thread = format_correction.event_thread_id(Path(record["events"]))
         if (("expected_session" in record and not thread)
                 or (record.get("expected_session") and thread != record["expected_session"])):
             raise support.Paused("PAUSED_UNCERTAIN_STAGE", "Recovered response belongs to an unexpected session")
@@ -960,7 +955,7 @@ def reconcile_active(state, run_dir, workspace):
     record.update(after_ref=str(base.with_suffix(".after.json")), source_revision=after["revision"],
                   changed_files=support.changed_paths(before, after), recovered_at=now(), metrics=support.event_metrics(record["events"]))
     if supports_sessions:
-        thread = event_thread_id(Path(record["events"]))
+        thread = format_correction.event_thread_id(Path(record["events"]))
         if thread and not record.get('report_only'):
             state["sessions"][record.get("route_role", record["role"])] = thread
     try:
