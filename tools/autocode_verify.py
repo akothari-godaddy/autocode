@@ -36,7 +36,6 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
-from functools import partial
 
 try:
     from . import autocode_util as util, autocode_agent_env as agent_env
@@ -481,7 +480,23 @@ def copy_vendored_dependencies(source_root, tree):
         raise ValueError('Vendored dependencies must not use a symlinked root')
     if not source.is_dir() or target.exists():
         return  # Tracked dependencies already come from the selected Git base and overlay.
-    shutil.copytree(source, target, ignore=partial(investigation_workspace.ignored_entries, source_root))
+    ignored_files = _git(source_root, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard',
+                         '--', 'vendor').split('\0')
+    # Include only ignored, untracked files and their ancestors. In particular,
+    # a new tracked vendor tree must not bring candidate code into the base.
+    included = set()
+    for name in filter(None, ignored_files):
+        path = Path(name)
+        included.update((path, *path.parents))
+    if not included:
+        return
+
+    def ignored_entries(directory, names):
+        relative = Path(directory).relative_to(source_root)
+        omitted = {name for name in names if relative / name not in included}
+        return omitted | investigation_workspace.ignored_entries(source_root, directory, set(names) - omitted)
+
+    shutil.copytree(source, target, ignore=ignored_entries)
 
 def link_dependencies(source_root, tree):
     """Expose ignored dependency directories (node_modules, venvs) to a scratch tree."""

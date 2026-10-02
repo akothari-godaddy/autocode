@@ -60,6 +60,14 @@ class SourceFilterTests(unittest.TestCase):
 
 
 class PrepareTests(unittest.TestCase):
+    def test_a_directory_named_venv_without_a_virtualenv_is_still_copied(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'venv').mkdir()
+            (root / 'venv/source.py').write_text('value = 42\n')
+            scratch = investigation_workspace.prepare(root)
+            self.assertEqual('value = 42\n', (scratch / 'venv/source.py').read_text())
+
     def test_prepares_all_source_dependencies_and_non_go_resources_without_metadata(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
