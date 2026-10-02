@@ -153,8 +153,24 @@ def packet(state: dict, inventory: dict | None = None, engine: str | None = None
 
 
 def prompt(state: dict, inventory: dict | None = None, soft_budget_tokens: int = 10000,
-           engine: str | None = None) -> tuple[str, dict]:
-    text = PROMPT + "\nCURRENT HANDOFF DATA\n" + json.dumps(packet(state, inventory, engine), indent=2)
+           engine: str | None = None, *, scratch_workspace: str | None = None) -> tuple[str, dict]:
+    instruction = PROMPT
+    data = packet(state, inventory, engine)
+    if scratch_workspace is not None:
+        start = instruction.index('2. Try to reproduce')
+        end = instruction.index('3. If it reproduces')
+        instruction = instruction[:start] + """2. Use the runner-prepared investigation_workspace in CURRENT HANDOFF DATA. It already contains a
+   complete copy of the application source and dependencies. Do not rebuild the copy, copy individual
+   source files into it, or substitute an incomplete directory. Reproduce the reported behavior there.
+   Keep scratch tests, output and caches in that directory. Do not edit application source in the
+   original workspace, create scratch outside the workspace, or modify existing runner state or
+   evidence. Do not use /tmp or mktemp's default location. Run bounded checks in the foreground without
+   nohup or detached processes, preserve the real command exit status, and allow enough time for cold
+   compilation. If setup fails, report that failure; it is not evidence that the bug was reproduced.
+   Record exactly what you ran and what happened (reproduction, tests_run).
+""" + instruction[end:]
+        data['investigation_workspace'] = str(scratch_workspace)
+    text = instruction + "\nCURRENT HANDOFF DATA\n" + json.dumps(data, indent=2)
     return text, {"estimated_prompt_tokens": (len(text.encode()) + 3) // 4, "soft_budget_tokens": soft_budget_tokens}
 
 
