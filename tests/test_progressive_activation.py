@@ -94,7 +94,7 @@ class ProgressiveActivationTests(unittest.TestCase):
         self.assertEqual(result["outstanding_criteria"], ["C1"])
         self.assertNotEqual(result["active"]["plan_hash"], self.progressive["delegation"]["plan_hash"])
 
-    def test_recovery_identity_and_detached_result_preserve_budgets_and_inputs(self):
+    def test_repeated_preparation_is_deterministic_and_detached_preserving_inputs(self):
         before = deepcopy(self.inputs())
         result = self.prepare()
         recovered = self.prepare()

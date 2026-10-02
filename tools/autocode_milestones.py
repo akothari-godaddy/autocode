@@ -345,10 +345,13 @@ def observe_validation(state, current):
               if r["id"] in required and r["status"] == "PASS" and r["evidence_refs"]}
     improved = bool(passed - set(row["best_passed"]))
     if progressive.enabled(state):
-        improved = progressive.classify_validation(state, current)["kind"] == "progress"
+        # classify_validation disclaims pre-approval states (returns None);
+        # an unclassified review must not count as progress.
+        verdict = progressive.classify_validation(state, current)
+        improved = bool(verdict) and verdict["kind"] == "progress"
     row["best_passed"] = sorted(set(row["best_passed"]) | passed)
     ready = evidence_ready(state, current)
-    progresses = improved if progressive.enabled(state) else improved or ready
+    progresses = improved if progressive.armed(state) else improved or ready
     row["reviews_without_progress"] = 0 if progresses else row["reviews_without_progress"] + 1
     row["last_approach"] = approach(state["current_task"])
     row["reviews"].append({"receipt": receipt, "output": val["output"], "source_revision": current["revision"],
@@ -457,7 +460,9 @@ def accept(state, current):
 
 
 def check_budget(state):
-    if progressive.enabled(state):
+    # Pre-approval, check_local_budget disclaims the run; the ordinary
+    # milestone budget must keep applying until progressive authority exists.
+    if progressive.armed(state):
         progressive.check_local_budget(state)
         return
     row = progress(state)

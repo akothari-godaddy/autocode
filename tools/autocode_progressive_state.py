@@ -439,6 +439,16 @@ def enabled(state):
         for line in body.get("constraints", [])))
 
 
+def armed(state):
+    """Progressive budget and classification authority: enabled under the approved contract.
+
+    ``enabled`` alone is detection. Before approval the ordinary milestone
+    budget and stagnation rules still apply; the progressive policy takes over
+    only once the delegation is sealed under the current approved contract.
+    """
+    return enabled(state) and goals.approved(state)
+
+
 def require_active(state):
     record = view(state)
     contract = state.get("goal_contract") or {}

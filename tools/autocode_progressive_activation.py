@@ -15,10 +15,12 @@ This helper checks all resulting bindings; it cannot authenticate provenance.
 
 The caller holds its activation boundary lock, supplies every blocker as an
 explicit boolean, and rechecks source/approval/boundary freshness before its
-atomic pointer update. Persist both artifacts first. Record transition_identity
-as an idempotence fence; on recovery reuse the same inputs rather than treating
-the candidate as its own predecessor. This module never writes state, allocates
-allowances, resets counters or substitutes historical PASS for current replay.
+atomic pointer update. Persist both artifacts first. Restart safety is by
+determinism: re-preparation from the same immutable artifacts re-derives an
+identical result, and the state owner pauses any saved transition instead of
+treating the candidate as its own predecessor. This module never writes state,
+allocates allowances, resets counters or substitutes historical PASS for
+current replay.
 """
 from __future__ import annotations
 
@@ -149,8 +151,5 @@ def prepare_activation(*, run_dir, contract, contract_authenticated, progressive
     result = {"active": {"definition": parsed["slices"][0], "plan_hash": plan_hash,
                          "artifact": candidate_artifact, "review": review_artifact},
               "required_checks": checks,
-              "outstanding_criteria": sorted(set(criteria) - set(verified_criteria)),
-              "transition_identity": util.digest({"version": 1, **bindings,
-                                                   "artifact": candidate_artifact,
-                                                   "review": review_artifact})}
+              "outstanding_criteria": sorted(set(criteria) - set(verified_criteria))}
     return deepcopy(result)
