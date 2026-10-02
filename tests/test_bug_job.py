@@ -58,6 +58,16 @@ class RoutingTests(unittest.TestCase):
 
 
 class InvestigationPromptBoundaryTests(unittest.TestCase):
+    def test_prepared_scratch_handoff_requires_using_complete_copy_without_rebuilding(self):
+        scratch = '/repo/.autocode/investigation/bug-example'
+        text, _ = bug_job.prompt(state_for('/repo'), engine='opencode', scratch_workspace=scratch)
+        data = json.loads(text.split('CURRENT HANDOFF DATA\n', 1)[1])
+        self.assertEqual(scratch, data['investigation_workspace'])
+        self.assertIn('Use the runner-prepared investigation_workspace', text)
+        self.assertIn('Do not rebuild the copy', text)
+        self.assertNotIn('Try to reproduce it in a fresh scratch copy', text)
+        self.assertIn('original workspace', text)
+
     def test_opencode_investigation_uses_workspace_scratch_and_foreground_checks(self):
         text, _ = bug_job.prompt(state_for('/repo'), engine='opencode')
         self.assertIn('.autocode/investigation/', text)
@@ -73,6 +83,17 @@ class InvestigationPromptBoundaryTests(unittest.TestCase):
 
 
 class PrepareTests(unittest.TestCase):
+    def test_investigation_request_contains_complete_scratch_before_model_launch(self):
+        with tempfile.TemporaryDirectory() as workspace:
+            root = Path(workspace)
+            (root / 'rule').mkdir()
+            (root / 'rule/rule.go').write_text('package rule')
+            request = autoresolver.prepare(state_for(workspace), bug_job.STAGE, '/run/state.json', None)
+            data = json.loads(request.prompt.split('CURRENT HANDOFF DATA\n', 1)[1])
+            scratch = Path(data['investigation_workspace'])
+            self.assertEqual('package rule', (scratch / 'rule/rule.go').read_text())
+            self.assertEqual(root.resolve() / '.autocode/investigation', scratch.parent)
+
     def test_investigator_gets_its_own_route_and_a_scratch_copy_but_no_plan(self):
         with tempfile.TemporaryDirectory() as workspace:
             state = state_for(workspace)
