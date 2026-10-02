@@ -162,12 +162,22 @@ class OpenCodeTests(unittest.TestCase):
             rows[1]["part"]["text"] = 'The probe confirms the claims. Report:\n\n{"ok":true}'
             path.write_text("\n".join(json.dumps(row) for row in rows))
             self.assertEqual({"ok": True}, oc.final_report(path))
-            # Anything after the object, a second object, long prose or a fence before it is still refused.
+            # A long prose lead (a live requirements attempt led with 730 characters)
+            # before the message-ending report is the report: recovered locally instead
+            # of paying a report-repair call (#217).
+            rows[1]["part"]["text"] = "Summary of the coverage walk. " * 27 + '\n\n{"ok":true}'
+            path.write_text("\n".join(json.dumps(row) for row in rows))
+            self.assertEqual({"ok": True}, oc.final_report(path))
+            # Anything after the object, a second object or a fence before it is still
+            # refused, including the two live malformed shapes: fields appended after
+            # an early-closed object, and an outer object that never closes around
+            # complete nested rows. Only a repair can re-serialize those.
             for text in ('Commentary {"ok":true} but I changed my mind',
                          'Commentary {"ok":true}{"ok":false}',
                          'Commentary {"ok":true}{"ok":true}',
-                         "x" * 501 + '{"ok":true}',
-                         'See ```the fence``` {"ok":true}'):
+                         'See ```the fence``` {"ok":true}',
+                         '{"summary": "done"}' + ',"decisions": [{"concern_id": "C1"}]',
+                         '{"rows": [{"id": "R1"}, {"id": "R2"}]'):
                 rows[1]["part"]["text"] = text
                 path.write_text("\n".join(json.dumps(row) for row in rows))
                 with self.subTest(text=text[:40]), self.assertRaisesRegex(RuntimeError, "not a JSON report"):
