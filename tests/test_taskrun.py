@@ -164,6 +164,7 @@ class TaskRunTests(unittest.TestCase):
         shutil.copy2(HERE / "live_fixture_provider.py", bindir / "codex")
         (bindir / "codex").chmod(0o755)
         self.env = {"PATH": f"{bindir}{os.pathsep}{os.environ['PATH']}", "AUTOCODE_HOME": str(root / "registry"),
+                    "CODEX_HOME": str(root / "codex-home"), "XDG_CONFIG_HOME": str(root / "config"),
                     "PYTHONDONTWRITEBYTECODE": "1"}
 
     def test_retired_token_cap_option_is_rejected_before_a_run_starts(self):
@@ -192,6 +193,27 @@ class TaskRunTests(unittest.TestCase):
         broken = taskrun.TaskRun(self.workspace, run.run_dir, options=("--no-such-flag",), env=self.env)
         with self.assertRaisesRegex(taskrun.TaskRunError, "unrecognized arguments"):
             broken.advance()
+
+
+class TaskRunFixtureIsolationTests(unittest.TestCase):
+    def test_setup_isolates_the_contributors_codex_configuration(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            contributor = Path(tmp) / 'contributor-codex'
+            contributor.mkdir()
+            config = contributor / 'config.toml'
+            original = 'model_provider = "gocode"\nopenai_base_url = "https://example.invalid"\n'
+            config.write_text(original)
+            fixture = TaskRunTests()
+            try:
+                with patch.dict(os.environ, {'CODEX_HOME': str(contributor)}):
+                    fixture.setUp()
+                self.assertIn('CODEX_HOME', fixture.env)
+                self.assertNotEqual(str(contributor), fixture.env['CODEX_HOME'])
+                self.assertFalse((Path(fixture.env['CODEX_HOME']) / 'config.toml').exists())
+                self.assertIn('XDG_CONFIG_HOME', fixture.env)
+                self.assertEqual(original, config.read_text())
+            finally:
+                fixture.doCleanups()
 
 
 class TaskRunClientTests(unittest.TestCase):
