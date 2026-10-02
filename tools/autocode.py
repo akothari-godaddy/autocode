@@ -181,7 +181,7 @@ def load_stage_report(record, workspace=None, evidence_record=None, state=None):
     evidence_record = evidence_record or record
     validation = value.get('validation', value)
     checks = validation.get('checks') if isinstance(validation, dict) else None
-    if isinstance(checks, list) and any(isinstance(check, dict) and 'exit_code' not in check for check in checks):
+    if isinstance(checks, list) and any(isinstance(check, dict) and check.get('exit_code') is None for check in checks):
         if workspace is None:
             raise ValueError('Cannot derive check metadata without the validation workspace')
         support.verify_checks(checks, workspace, evidence_record['events'], **check_evidence_options(evidence_record))
@@ -207,7 +207,7 @@ def load_stage_report(record, workspace=None, evidence_record=None, state=None):
             {'check_index': index, 'field': 'exit_code', 'value': check['exit_code'],
              'evidence_ref': check['evidence_ref'], 'events': evidence_record['events']}
             for index, check in enumerate(checks or [])
-            if 'exit_code' not in (reported.get('validation', reported)['checks'][index])]
+            if (reported.get('validation', reported)['checks'][index]).get('exit_code') is None]
     if record.get('engine') == 'opencode' or value != reported:
         write_json(Path(record['output']), value)
     return value

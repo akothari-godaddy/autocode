@@ -144,10 +144,6 @@ def context_packet(state, stage, state_path):
             import autocode_figma as figma
         instruction += figma.instructions(state["settings"], stage=stage,
                                            current_task=state.get("current_task"))
-    if stage == "sol" and base["execution_engine"] == "codex":
-        instruction += ("Read this stage's events .jsonl. Cite the item.id (item_N) of a completed "
-                        "command_execution item.completed event, with its full command and exit_code. "
-                        "Conversation call IDs are not event IDs.\n")
     if state.get("version", 2) >= 3:
         try:
             from . import autocode_goals as goals
