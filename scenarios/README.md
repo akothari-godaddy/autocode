@@ -92,6 +92,12 @@ comparison, not proof that changing the default is safe for every job.
 Add `--prepare` to save the exact protocol, including briefs and seed hashes,
 without launching AutoCode or needing live-spend authorization.
 
+Inspect recorded clarification answers before interpreting quality differences.
+The driver accepts model-proposed defaults; a default can change an output
+contract away from the original-brief oracle. Such a mismatch is not evidence
+that a Builder ignored its approved plan. Retain the attempt and flag the changed
+target rather than presenting its oracle score as a comparison on the same goal.
+
 A scenario whose `scenario.toml` carries `[run] known_failure = "why"` is one
 AutoCode is known not to pass yet. `run` still reports its verdict but does not
 count it as a failure, and says when it starts passing so the key can be
