@@ -97,6 +97,8 @@ def build_parser(unit, default_models) -> argparse.ArgumentParser:
     parser.add_argument("--headroom", choices=["off","on"], default=None,
                         help="Off by default; on fails closed until compatibility is verified")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--verbose", action="store_true",
+                        help="Stream each stage's live model activity (tools started/finished, new provider text) to stderr")
     parser.add_argument("--migrate-only", action="store_true")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--pause-after-stage", action="store_true")
@@ -151,6 +153,7 @@ def build_parser(unit, default_models) -> argparse.ArgumentParser:
                         help="Set aside exactly this stopped uncertain attempt, preserving edits and logs; no agent is launched")
     parser.add_argument("--bind-dependency", help="Register an authorized prerequisite delivery from a JSON specification")
     parser.add_argument("--receive-dependency", help="Record a verified registered delivery manifest; never approves a plan")
+    parser.add_argument("--reconcile-finding-scopes", type=Path, help="Apply an explicitly authorized finding-scope manifest at a stopped checkpoint; no agent launched")
     parser.add_argument("--show-goal", action="store_true", help="Display the exact contract revision and approval token")
     parser.add_argument("--answer", action="append", default=[], metavar="QUESTION_ID=TEXT")
     parser.add_argument("--feedback", metavar="TEXT", help="Send brief feedback to the Requirements Gatherer; never approves implementation")
@@ -226,6 +229,12 @@ def parse(unit, argv, default_models):
         parser.error("Build and review units require an existing --run-dir with an approved plan")
     if args.chat is None:
         args.chat = sys.stdin.isatty() and sys.stdout.isatty()
+    if args.verbose:
+        try:
+            from . import autocode_verbose as verbose
+        except ImportError:
+            import autocode_verbose as verbose
+        verbose.enable()
     for flag in ("max_iterations", "legacy_iteration_ceiling", "max_seconds", "max_stage_seconds", "max_idle_seconds", "max_tool_seconds", "no_progress_limit", "max_milestone_seconds", "max_milestone_replans", "max_milestone_stalled_reviews", "max_findings_per_task"):
         if getattr(args, flag) is not None and getattr(args, flag) < 0:
             parser.error(f"--{flag.replace('_', '-')} must be nonnegative")
@@ -235,9 +244,11 @@ def parse(unit, argv, default_models):
                bool(args.approve_review), bool(args.reconcile_review),
                args.feedback is not None, args.follow_up is not None, args.accept_completion, args.abandon_stage is not None,
                args.request_milestone_checkpoints, args.planning_review_call_limit is not None,
-               args.bind_dependency, args.receive_dependency]
+               args.bind_dependency, args.receive_dependency, args.reconcile_finding_scopes]
     if sum(bool(a) for a in actions) > 1:
         parser.error("Choose one action per invocation; answering and approving are separate events")
+    if args.reconcile_finding_scopes and any((args.resume_paused, args.retry_failed_stage, args.retry_report, args.grant_recovery is not None, args.diagnose_failed_stage, args.accept_transport_change)):
+        parser.error('Finding-scope reconciliation cannot combine with execution recovery')
     if args.retry_builder and any(actions):
         parser.error("--retry-builder is a resume action; do not combine it with another action")
     if (args.delegate_all or args.reject_assumption) and not args.review_token:
