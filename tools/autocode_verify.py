@@ -36,13 +36,16 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path, PurePosixPath
+from functools import partial
 
 try:
     from . import autocode_util as util, autocode_agent_env as agent_env
     from . import autocode_test_environment as test_env
+    from . import autocode_investigation_workspace as investigation_workspace
 except ImportError:
     import autocode_util as util, autocode_agent_env as agent_env
     import autocode_test_environment as test_env
+    import autocode_investigation_workspace as investigation_workspace
 
 PASS, FAIL, UNVERIFIED = "PASS", "FAIL", "UNVERIFIED"
 # Directories that hold tests wherever they appear, and ones that do only at the repository root:
@@ -468,6 +471,18 @@ def per_test_results(framework, receipt, xml_path) -> dict | None:
 
 # --- scratch trees ----------------------------------------------------------
 
+def copy_vendored_dependencies(source_root, tree):
+    """Make ignored vendored dependencies available without sharing writable source files."""
+    if not source_root:
+        return
+    source_root = Path(source_root).resolve()
+    source, target = source_root / 'vendor', Path(tree) / 'vendor'
+    if source.is_symlink() or target.is_symlink():
+        raise ValueError('Vendored dependencies must not use a symlinked root')
+    if not source.is_dir() or target.exists():
+        return  # Tracked dependencies already come from the selected Git base and overlay.
+    shutil.copytree(source, target, ignore=partial(investigation_workspace.ignored_entries, source_root))
+
 def link_dependencies(source_root, tree):
     """Expose ignored dependency directories (node_modules, venvs) to a scratch tree."""
     if not source_root:
@@ -557,6 +572,7 @@ def make_tree(repo, base, destination, overlay_root, changes, *, dependencies_fr
             elif source.is_file():
                 shutil.copy2(source, target)
         link_dependencies(dependencies_from, destination)
+        copy_vendored_dependencies(dependencies_from, destination)
         copy_generated_sources(dependencies_from, destination)
     except BaseException:
         remove_tree(repo, destination)

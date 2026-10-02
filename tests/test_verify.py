@@ -69,6 +69,16 @@ class VerifyCase(unittest.TestCase):
         self.addCleanup(project.close)
         return project
 
+    def test_ignored_vendor_reaches_scratch_probe_without_sharing_writes(self):
+        project = self.project({**SEED, '.gitignore': 'vendor/\n'})
+        project.write({'vendor/example/resource.txt': 'offline'})
+        probe = ("python3 -c \"from pathlib import Path; p=Path('vendor/example/resource.txt'); "
+                 "assert p.read_text() == 'offline'; p.write_text('scratch edit')\"")
+        result = verify.scratch_run(project.root, project.evidence, command=probe)
+        self.assertEqual(0, result['exit_code'], result)
+        self.assertEqual('offline', project_file(project, 'vendor/example/resource.txt'))
+        self.assertEqual({}, verify.changed_files(project.root, project.base))
+
     def test_reference_fix_is_proven_by_a_fail_to_pass_flip(self):
         project = self.project()
         project.write(REFERENCE)
@@ -586,3 +596,54 @@ class GoVerifyTests(unittest.TestCase):
         result = project.verify()
         self.assertEqual(verify.FAIL, result["verdict"])
         self.assertTrue(any("fail to import or collect" in failure for failure in result["failures"]), result["failures"])
+
+
+class VendoredDependencyCopyTests(unittest.TestCase):
+    def test_linked_scratch_vendor_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, tree = Path(temporary) / 'source', Path(temporary) / 'tree'
+            (source / 'vendor').mkdir(parents=True)
+            tree.mkdir()
+            (tree / 'vendor').symlink_to(source / 'vendor', target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                verify.copy_vendored_dependencies(source, tree)
+
+    def test_copies_complete_ignored_vendor_as_independent_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, tree = Path(temporary) / 'source', Path(temporary) / 'tree'
+            (source / 'vendor/native').mkdir(parents=True)
+            tree.mkdir()
+            (source / 'vendor/modules.txt').write_text('offline')
+            (source / 'vendor/native/library.so').write_text('native')
+            verify.copy_vendored_dependencies(source, tree)
+            self.assertFalse((tree / 'vendor').is_symlink())
+            self.assertEqual('offline', (tree / 'vendor/modules.txt').read_text())
+            self.assertEqual('native', (tree / 'vendor/native/library.so').read_text())
+            (tree / 'vendor/modules.txt').write_text('scratch')
+            self.assertEqual('offline', (source / 'vendor/modules.txt').read_text())
+
+    def test_missing_dependencies_are_optional_and_existing_base_vendor_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, tree = Path(temporary) / 'source', Path(temporary) / 'tree'
+            source.mkdir()
+            tree.mkdir()
+            verify.copy_vendored_dependencies(None, tree)
+            verify.copy_vendored_dependencies(source, tree)
+            self.assertEqual([], list(tree.iterdir()))
+            (source / 'vendor').mkdir()
+            (tree / 'vendor').mkdir()
+            (source / 'vendor/modules.txt').write_text('candidate')
+            (tree / 'vendor/modules.txt').write_text('baseline')
+            verify.copy_vendored_dependencies(source, tree)
+            self.assertEqual('baseline', (tree / 'vendor/modules.txt').read_text())
+
+    def test_linked_vendor_root_is_rejected_without_copying_external_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, tree, outside = (Path(temporary) / name for name in ('source', 'tree', 'outside'))
+            for path in (source, tree, outside):
+                path.mkdir()
+            (outside / 'secret.txt').write_text('private')
+            (source / 'vendor').symlink_to(outside, target_is_directory=True)
+            with self.assertRaisesRegex(ValueError, 'symlink'):
+                verify.copy_vendored_dependencies(source, tree)
+            self.assertEqual([], list(tree.iterdir()))
