@@ -64,7 +64,7 @@ class PreservedDispositionsTests(unittest.TestCase):
                                     ('astra_plan', 'astra', 'status')):
             record = {'stage': stage, 'exit_code': 0}
             repaired = report(disposition(), source=source)
-            for outcome in ('BLOCKED', 'UNKNOWN', None, '', False):
+            for outcome in ('BLOCKED', 'UNKNOWN', 'NOT_VERIFIED', None, '', False):
                 with self.subTest(stage=stage, outcome=outcome):
                     original = copy.deepcopy(repaired)
                     if outcome is None:
@@ -74,7 +74,7 @@ class PreservedDispositionsTests(unittest.TestCase):
                     self.assertEqual({}, preserved_dispositions(record, original, repaired))
 
     def test_recognized_original_outcomes_retain_existing_dispositions(self):
-        for source, stage, outcomes in (('sol', 'sol', ('PASS', 'FAIL', 'NOT_VERIFIED')),
+        for source, stage, outcomes in (('sol', 'sol', ('PASS', 'FAIL')),
             ('astra', 'astra_review', ('CONTINUE', 'REWORK', 'COMPLETE', 'TASK_COMPLETE'))):
             for outcome in outcomes:
                 with self.subTest(source=source, outcome=outcome):
