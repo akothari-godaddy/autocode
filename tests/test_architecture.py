@@ -24,9 +24,8 @@ TANGLED = frozenset({
 })
 
 # Line counts on 2026-09-28, after merging master at 24617cc and moving subcommand dispatch out of
-# autocode.py. Lower these when a module shrinks: master fixes and the TaskRun branch's
-# command-event/report-retry extraction both reduced these modules.
-MAX_LINES = {"autocode.py": 1468, "autocode_goals.py": 1300, "autocode_support.py": 593, "autopilot.py": 1172}
+# autocode.py. The merged master/controller extracts reduce these caps.
+MAX_LINES = {"autocode.py": 1460, "autocode_goals.py": 1236, "autocode_support.py": 593, "autopilot.py": 982}
 
 
 def source_modules() -> dict[str, Path]:
