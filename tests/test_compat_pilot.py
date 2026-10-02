@@ -18,6 +18,75 @@ import autocode_verify as verify
 
 
 class CompatPilotTests(unittest.TestCase):
+    def test_destination_overlap_is_rejected_without_changing_candidate(self):
+        for kind in ('workspace', 'ancestor', 'child', 'symlink', 'existing-scratch'):
+            with self.subTest(kind=kind):
+                repo, overlay = self.candidate()
+                destination = {'workspace': repo.root, 'ancestor': Path(repo.temp.name),
+                               'child': repo.root / 'tests',
+                               'symlink': Path(repo.temp.name) / 'alias',
+                               'existing-scratch': repo.root / '.autocode/scratch/existing'}[kind]
+                if kind == 'symlink':
+                    destination.symlink_to(repo.root, target_is_directory=True)
+                if kind == 'existing-scratch':
+                    destination.mkdir(parents=True)
+                    (destination / 'sentinel').write_text('existing scratch data')
+                original_guard = (repo.root / 'tests/test_tracker.py').read_bytes()
+                original_overlay = overlay.read_bytes()
+                result = compat.prepare(repo.root, repo.base, destination, overlay,
+                                        overlay_sha256=sha(overlay), expected_nodeids=PILOT_NODEIDS,
+                                        suite_files=['tests/test_tracker.py', 'tests/test_tracker_ops.py'],
+                                        python=sys.executable, log_dir=repo.evidence)
+                self.assertEqual(compat.INCOMPLETE, result['verdict'], result['reasons'])
+                self.assertTrue(any('destination' in reason for reason in result['reasons']))
+                self.assertIsNone(result['copy'])
+                self.assertEqual(CANDIDATE_PILOT_TRACKER, (repo.root / 'tracker.py').read_text())
+                self.assertEqual(CANDIDATE_OPS_TESTS, (repo.root / 'tests/test_tracker_ops.py').read_text())
+                self.assertEqual(original_guard, (repo.root / 'tests/test_tracker.py').read_bytes())
+                self.assertEqual(original_overlay, overlay.read_bytes())
+                revision = subprocess.check_output(['git', '-C', str(repo.root), 'rev-parse', 'HEAD'],
+                                                   text=True).strip()
+                self.assertEqual(repo.base, revision)
+                if kind == 'existing-scratch':
+                    self.assertEqual('existing scratch data', (destination / 'sentinel').read_text())
+
+    def test_fresh_runner_scratch_copy_remains_supported(self):
+        repo, overlay = self.candidate()
+        destination = repo.root / '.autocode/scratch/compatibility'
+        result = compat.prepare(repo.root, repo.base, destination, overlay,
+                                overlay_sha256=sha(overlay), expected_nodeids=PILOT_NODEIDS,
+                                suite_files=['tests/test_tracker.py', 'tests/test_tracker_ops.py'],
+                                transformations=(LOCAL_OPERATOR_ADAPTER,), python=sys.executable,
+                                log_dir=repo.evidence)
+        if result['copy']:
+            self.addCleanup(verify.remove_tree, repo.root, result['copy'])
+        self.assertEqual(compat.PASS, result['verdict'], result['reasons'])
+        self.assertEqual(set(PILOT_NODEIDS), set(result['accounting']['passed']))
+        self.assertEqual(CANDIDATE_PILOT_TRACKER, (repo.root / 'tracker.py').read_text())
+        self.assertEqual(CANDIDATE_OPS_TESTS, (repo.root / 'tests/test_tracker_ops.py').read_text())
+
+    def test_required_nodeid_iterables_are_validated_after_materializing(self):
+        repo, overlay = self.candidate()
+        for expected in ([], iter(()), (nodeid for nodeid in ())):
+            with self.subTest(kind=type(expected).__name__):
+                result = compat.prepare(repo.root, repo.base, Path(repo.temp.name) / 'copy', overlay,
+                                        overlay_sha256=sha(overlay), expected_nodeids=expected,
+                                        suite_files=['tests/test_tracker.py'], python=sys.executable,
+                                        log_dir=repo.evidence)
+                if result['copy']:
+                    verify.remove_tree(repo.root, result['copy'])
+                self.assertEqual(compat.INCOMPLETE, result['verdict'], result['reasons'])
+                self.assertTrue(any('nodeids' in reason for reason in result['reasons']))
+        complete = compat.prepare(repo.root, repo.base, Path(repo.temp.name) / 'complete', overlay,
+                                  overlay_sha256=sha(overlay), expected_nodeids=iter(PILOT_NODEIDS),
+                                  suite_files=['tests/test_tracker.py', 'tests/test_tracker_ops.py'],
+                                  transformations=(LOCAL_OPERATOR_ADAPTER,), python=sys.executable,
+                                  log_dir=repo.evidence)
+        if complete['copy']:
+            self.addCleanup(verify.remove_tree, repo.root, complete['copy'])
+        self.assertEqual(compat.PASS, complete['verdict'], complete['reasons'])
+        self.assertEqual(set(PILOT_NODEIDS), set(complete['accounting']['passed']))
+
     def test_erased_overlay_mode_on_unchanged_file_is_rejected(self):
         name = 'policy "guard".sh'
         repo = Repo({**WINDOW_FILES, name: '#!/bin/sh\nexit 0\n'})

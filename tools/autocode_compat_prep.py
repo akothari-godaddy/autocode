@@ -249,8 +249,8 @@ def prepare(workspace, base, destination, patch_path, *, overlay_sha256, expecte
     ``overlay_sha256`` is the pin: the expected sha256 of the complete patch
     file, checked at this module's own seam before application. The assembled
     copy is kept (returned as ``copy``) when the selected suite ran in it;
-    every rejection removes the destination worktree and leaves the candidate
-    workspace's revision untouched.
+    rejected construction removes its validation worktree. Overlapping paths
+    are refused before any copy or cleanup can change the candidate workspace.
     """
     workspace, destination, patch_path = Path(workspace), Path(destination), Path(patch_path)
     try:
@@ -281,6 +281,12 @@ def prepare(workspace, base, destination, patch_path, *, overlay_sha256, expecte
         return result
 
     reasons = result["reasons"]
+    source_root, copy_root = workspace.resolve(), destination.resolve()
+    scratch_root = source_root / '.autocode' / 'scratch'
+    fresh_scratch = (copy_root.is_relative_to(scratch_root) and copy_root != scratch_root
+                     and not destination.exists() and not destination.is_symlink())
+    if source_root.is_relative_to(copy_root) or (copy_root.is_relative_to(source_root) and not fresh_scratch):
+        reasons.append("invalid destination: the validation copy must not overlap the candidate workspace")
     complete_changes = verify.changed_files(workspace, base)
     changes = dict(changes) if changes is not None else complete_changes
     result["changes"] = dict(changes)
@@ -289,7 +295,7 @@ def prepare(workspace, base, destination, patch_path, *, overlay_sha256, expecte
                          if changes.get(path) != complete_changes.get(path))
         reasons.append("copy failure: candidate inputs differ from the complete working tree: "
                        + ', '.join(missing))
-    if not expected_nodeids:
+    if not result["expected_nodeids"]:
         reasons.append("incomplete proof: required original and candidate nodeids must be declared")
     sources = [path for path in sorted(changes) if not verify.is_test_path(path)]
     tests = [path for path in sorted(changes) if verify.is_test_path(path)]

@@ -14,6 +14,11 @@ even a cleanly applicable hunk-boundary truncation fails this check.
 Missing required nodeids and a partial explicit candidate change map are
 rejected before constructing a proof. Adapter paths must stay inside the
 validation copy; absolute paths and escapes cannot write the original checkout.
+Use a destination outside the candidate workspace, or a fresh directory below
+`.autocode/scratch/`. The candidate itself, its ancestors, source subdirectories
+and existing in-workspace scratch data are rejected before any copy or cleanup,
+including symlink aliases. Required nodeid iterables are materialized once; an empty iterator is
+rejected just like an empty list, before an old-only suite can appear green.
 The same pinned byte snapshot supplies Git's path accounting and application.
 Quoted filenames and both ends of renames are accounted for. A patch changed
 during preparation is rejected instead of certifying different applied bytes.
