@@ -973,10 +973,14 @@ def context(state, stage, state_path):
     if stage in ("requirements_gather", "astra_discovery"):
         packet['workspace_inventory'] = workspace_inventory(state['workspace'], state['task'])
     try:
-        from .. import autocode_figma as figma
+        from .. import autocode_figma as figma, autocode_design_manifest as design_manifest
     except ImportError:
-        import autocode_figma as figma
+        import autocode_figma as figma, autocode_design_manifest as design_manifest
     figma_instruction = figma.instructions(state["settings"])
+    manifest_context = design_manifest.context(state["settings"])
+    if manifest_context:
+        packet["design_manifest"] = manifest_context
+        figma_instruction += design_manifest.INSTRUCTION
     planning_policy = "" if stage == "requirements_gather" else (
         goals.DECISION_PROVENANCE + goals.CONTRACT_REFERENCES + examples.RULE + s.MILESTONE_POLICY + EVIDENCE_FACTS
         + ("" if stage in ("astra_challenge", "plan_review") else CONTRACT_FIELDS_RULE))
