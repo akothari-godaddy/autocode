@@ -39,6 +39,10 @@ An accepted handoff records the Figma URL and hashes of the brief and review rep
 modified or incomplete artifacts are rejected when imported. The implementation
 roles inspect the live Figma reference again, since the file can change after design.
 
+A [multi-component build](task-lanes.md#a-component-with-a-figma-design) can also
+give an individual component a `ui_run` or `figma_file` in `components.json`.
+The design is supplied before the build, and only that component receives it.
+
 `--build` starts the normal implementation brief and orchestration in Codex. Its
 initial product brief still needs approval. Subsequent visual checks use Figma
 comparisons and independent validation by default; they do not require another
