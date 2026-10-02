@@ -55,10 +55,14 @@ def resolve_executable(name: str, env: Mapping[str, str], *, cwd=None,
     if os.path.dirname(name):
         target = os.path.abspath(os.path.join(cwd, name)) if cwd is not None else name
         return shutil.which(target, path='')
-    if cwd is not None and path:
+    if path is None:
+        return None
+    if cwd is not None:
         path = os.pathsep.join(os.path.abspath(os.path.join(cwd, part))
                                for part in path.split(os.pathsep))
-    return shutil.which(name, path=path) if path else None
+    # An explicitly empty PATH is one empty component: POSIX exec searches
+    # the child's working directory. It is different from an absent PATH.
+    return shutil.which(name, path=path or os.curdir)
 
 
 def preflight_run(command, env: Mapping[str, str], *, require_executable=False, **kwargs):

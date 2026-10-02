@@ -13,6 +13,38 @@ from providers import opencode
 
 
 class AbsoluteProviderExecutableTests(unittest.TestCase):
+    def test_empty_path_preflight_matches_provider_launch_from_workspace(self):
+        with tempfile.TemporaryDirectory() as name:
+            root = Path(name)
+            workspace = root / 'project'
+            workspace.mkdir()
+            executable = workspace / 'opencode'
+            executable.write_text(f'#!{sys.executable}\nimport sys\n'
+                                  "print('provider/model' if sys.argv[1:] == ['models'] else '1.18.31')\n")
+            executable.chmod(0o755)
+            config = root / 'provider.toml'
+            config.write_text('name = "local"\n')
+            provider = CommandProvider({'name': 'local', 'command': ['opencode'],
+                                        'version_command': ['opencode', '--version'],
+                                        'models_command': ['opencode', 'models'], 'roles': {}}, config)
+            explicit = {'PATH': '', 'HOME': str(root / 'home'),
+                        'OPENCODE_TEST_MANAGED_CONFIG_DIR': str(root / 'managed')}
+            for adapter in (opencode, provider):
+                with self.subTest(adapter=getattr(adapter, '__name__', 'command')):
+                    launched, child, _ = adapter.launch(
+                        'terra', workspace, root, None, 'provider/model', None, True, env=explicit)
+                    actual = subprocess.run(launched, cwd=workspace, env=child,
+                                            capture_output=True, text=True, timeout=10)
+                    self.assertEqual(0, actual.returncode, actual.stderr)
+                    self.assertEqual('1.18.31', actual.stdout.strip())
+                    settings = adapter.local_settings(workspace, env=explicit)
+                    self.assertEqual(executable.resolve(), Path(settings['executable']).resolve())
+                    self.assertEqual('1.18.31', settings['version'])
+                    self.assertEqual({'provider/model'}, adapter.available_models(workspace, env=explicit))
+            with self.assertRaisesRegex(RuntimeError, 'not on PATH'):
+                opencode.local_settings(workspace, env={key: value for key, value in explicit.items()
+                                                       if key != 'PATH'})
+
     def test_ambient_missing_path_retains_default_shell_admission(self):
         with tempfile.TemporaryDirectory() as name:
             root = Path(name)

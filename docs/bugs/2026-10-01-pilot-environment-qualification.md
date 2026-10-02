@@ -30,7 +30,9 @@ admits an explicit absolute executable without PATH. Bare preflight commands
 require the mapping's PATH, so POSIX default-path lookup cannot start a roster,
 version or authentication subprocess outside the declared environment.
 Relative PATH entries and relative command paths use the preflight child's
-working directory. When `env` is omitted, an unset ambient PATH retains the
+working directory. An explicitly empty PATH searches that working directory,
+matching provider launch; omitting PATH from an explicit mapping still rejects
+bare commands. When `env` is omitted, an unset ambient PATH retains the
 prior POSIX default search behavior.
 
 The mapping
