@@ -376,16 +376,17 @@ def normalized_events(rows):
 
 
 def _trailing_report(final, *, copies=1):
-    """Recover a reply of brief prose followed by the complete JSON report and nothing else.
+    """Recover a reply of prose followed by the complete JSON report and nothing else.
 
-    Models sometimes lead with a sentence ("The probe confirms ... Report:") despite the
-    JSON-only instruction. Accept that shape only when the prose is short (at most 500
-    characters, no code fence) and the message ENDS with one complete JSON object, so a
-    fragment quoted inside an explanation is never taken for the report. Report-only
-    repairs (``copies=2``) also accept the same object repeated twice. Every recovered
-    report is still validated against the stage's schema by the runner."""
+    Models sometimes lead with a summary ("The probe confirms ... Report:") despite the
+    JSON-only instruction, whatever its length (a live attempt led with 730 characters
+    and was repaired at full cost). Accept any prose lead without a code fence as long
+    as the message ENDS with one complete JSON object, so a fragment quoted inside an
+    explanation or a second object is never taken for the report. Report-only repairs
+    (``copies=2``) also accept the same object repeated twice. Every recovered report is
+    still validated against the stage's schema by the runner."""
     start = final.find("{")
-    if start < 0 or start > 500 or "```" in final[:start]:
+    if start < 0 or "```" in final[:start]:
         return None
     decoder = json.JSONDecoder()
     reports = []

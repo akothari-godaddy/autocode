@@ -57,7 +57,12 @@ were archived at tag `archive/pre-restructure-2026-09-26`
    integration, deployment) goes in a new layer that drives task runs through
    the task-run interface (`docs/task-run.md`): `autocode_taskrun.TaskRun` and
    the status view in `autocode_run_view`. It must not import `autocode.py`
-   internals or read `state.json`.
+   internals or read `state.json`. Coordination between independent task runs
+   is that separate layer. Progressive planning inside one existing run is
+   not: it uses that run's existing controller and cycle-free policy helpers,
+   with `autocode_progressive_state` owning the progressive record, never a second controller,
+   cross-run private-state access, larger capped modules or new import
+   cycles.
 6. **The status view is a contract.** Add fields to `autocode_run_view.view`;
    never rename or remove one.
 

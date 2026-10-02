@@ -61,11 +61,18 @@ TIMEOUT_SECONDS = 900
 TAIL_CHARS = 600
 
 
-def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS, approved_state=None) -> dict:
+def replay(checks, workspace, run_dir, record, scratch_run, *, timeout=TIMEOUT_SECONDS, approved_state=None,
+           required_commands=None, progressive_context=None) -> dict:
     """Re-run each distinct check command; return the result or raise ValueError on the first that fails."""
     out = Path(run_dir) / "check-replay" / Path(record.get("output") or "validation").stem
     checks = list(checks)
-    prescribed = verification_plan.approved_commands(approved_state or {})
+    prescribed = verification_plan.approved_commands(approved_state or {}, progressive_context=progressive_context)
+    if required_commands is not None:
+        for command in required_commands:
+            if not isinstance(command, str) or verification_plan.commands(command) != [command]:
+                raise ValueError(f"Required replay command is not an explicit executable command: {command!r}")
+            prescribed.append(command)
+        prescribed = list(dict.fromkeys(prescribed))
     reported = {check["command"] for check in checks}
     checks += [{"command": command, "exit_code": 0, "evidence_ref": "approved-plan"}
                for command in prescribed if command not in reported]

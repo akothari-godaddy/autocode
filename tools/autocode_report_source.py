@@ -7,11 +7,30 @@ from pathlib import Path
 try:
     from . import autocode_support as support
     from . import autocode_opencode as opencode
+    from .autocode_util import read as read_json
 except ImportError:
     import autocode_support as support
     import autocode_opencode as opencode
+    from autocode_util import read as read_json
 
 REPAIR_REPORT_BYTES = 128 * 1024
+
+
+def original_report_for_repair(original):
+    """Expose terminal output directly, including reports rejected before saving.
+
+    OpenCode's schema-invalid JSON may exist only in a long raw event line.
+    Read tools cannot reliably recover those lines. Extract the same terminal
+    report as admission does, without validating, accepting or altering it.
+    """
+    try:
+        if original.get('engine') == 'opencode':
+            value = opencode.final_report(original['events'])
+        else:
+            value = read_json(Path(original['output']))
+        return {'report': value, 'extraction_error': None}
+    except (OSError, ValueError, RuntimeError, KeyError) as error:
+        return {'report': None, 'extraction_error': str(error)}
 
 
 def _write_json(path, value):
