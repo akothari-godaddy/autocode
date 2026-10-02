@@ -261,5 +261,7 @@ def needs(state: dict) -> dict | None:
         attempt = validator_retry.offered_attempt(state)
         if attempt:
             need['retry_report_attempt'] = attempt
+        elif validator_retry.inspected_failure(state):
+            need['retry_failed_stage'] = True
         return need
     return {"kind": "continue"}

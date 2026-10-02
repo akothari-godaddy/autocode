@@ -849,7 +849,8 @@ def repeated_failure_resume_guard(state, workspace, *, authorization=None):
         return
     pending = state.get('pending_report_repair') or {}
     record = pending.get('original') or next(
-        (row for row in reversed(state.get('stages', [])) if row.get('failure_key')), None)
+        (row for row in reversed(state.get('stages', [])) if row.get('failure_key')
+         and (row.get('original_stage') or row.get('stage')) == state.get('next_stage')), None)
     if not record:
         return
     repeated = failures.repeated(state, record)

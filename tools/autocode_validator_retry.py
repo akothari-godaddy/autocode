@@ -5,15 +5,36 @@ import copy
 from pathlib import Path
 
 try:
-    from . import autocode_util as util
+    from . import autocode_util as util, autocode_failures as failures
 except ImportError:
     import autocode_util as util
+    import autocode_failures as failures
 
 
 ERRORS = frozenset({
     'OpenCode final message is not a JSON report; inspect the saved raw events',
     'Check is not supported by an exact executed Validator event',
 })
+
+
+def inspected_failure(state: dict) -> dict | None:
+    """Find a stalled evidence failure after the repair path already retained its history."""
+    if (state.get('status') != 'PAUSED_RESOLVER' or state.get('next_stage') != 'sol'
+            or any(state.get(key) for key in ('active_stage', 'uncertain_artifacts', 'pending_report_repair'))):
+        return None
+    record = next((row for row in reversed(state.get('stages', []))
+                   if (row.get('original_stage') or row.get('stage')) == 'sol'
+                   and row.get('failure_key')), None)
+    if not record or not record.get('rejected'):
+        return None
+    entry = (state.get('failure_history') or {}).get(record['failure_key']) or {}
+    identity = entry.get('identity') or {}
+    if (not failures.stalled(entry) or entry.get('last_error') not in ERRORS
+            or failures.key(identity) != record['failure_key'] or identity.get('stage') != 'sol'
+            or identity.get('artifact_hash') != record.get('source_revision')
+            or record.get('failure_attempt') not in entry.get('attempts', [])):
+        return None
+    return record
 
 
 def offered_attempt(state: dict) -> str | None:

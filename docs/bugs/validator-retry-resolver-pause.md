@@ -14,3 +14,9 @@ artifacts. Other pause kinds, active/uncertain attempts and other report errors
 remain ineligible. Prior failed attempts and exhausted repair counts are
 archived, not erased; limits and plan approval are unchanged. Plain Resume
 remains a hold. The CLI delegates this policy to a cycle-free module.
+
+If the diagnostic path already archived the exhausted report repair, the public
+view instead offers one explicit failed-stage retry. This requires the current
+Validator's exact stalled evidence-failure identity and unchanged source. Later
+investigator failures cannot substitute their identity for the Validator's.
+The scoped authorization is consumed once by the repeated-failure guard.

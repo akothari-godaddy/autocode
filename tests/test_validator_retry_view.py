@@ -3,6 +3,8 @@ import copy
 import unittest
 
 import autocode_run_view as run_view
+import autocode_validator_retry as retry_policy
+import autocode_util as util
 
 
 class ValidatorRetryViewTests(unittest.TestCase):
@@ -34,3 +36,26 @@ class ValidatorRetryViewTests(unittest.TestCase):
             state['pending_report_repair'][key] = value
             with self.subTest(key=key):
                 self.assertNotIn('retry_report_attempt', run_view.needs(state))
+
+    def test_only_the_exact_stalled_validator_evidence_failure_is_retryable(self):
+        identity = {'stage': 'sol', 'artifact_hash': 'revision', 'error_class': 'ValueError'}
+        key = util.digest(identity)
+        record = {'stage': 'sol', 'failure_key': key, 'source_revision': 'revision',
+                  'rejected': True, 'failure_attempt': 'attempt-3'}
+        state = {'status': 'PAUSED_RESOLVER', 'next_stage': 'sol', 'stages': [record],
+                 'failure_history': {key: {'identity': identity, 'count': 3, 'streak': 3,
+                   'attempts': ['attempt-3'], 'last_error': 'Check is not supported by an exact executed Validator event'}}}
+        before = copy.deepcopy(state)
+        self.assertEqual(record, retry_policy.inspected_failure(state))
+        self.assertEqual(before, state)
+        for override in ({'status': 'PAUSED_TIME_LIMIT'}, {'next_stage': 'terra'},
+                         {'active_stage': {'stage': 'sol'}}, {'uncertain_artifacts': ['partial']},
+                         {'pending_report_repair': {'attempts': 2}}, {'failure_history': {}}):
+            with self.subTest(override=override):
+                self.assertIsNone(retry_policy.inspected_failure({**state, **override}))
+        for field, value in (('last_error', 'Different error'), ('streak', 2),
+                             ('identity', {**identity, 'stage': 'terra'})):
+            changed = copy.deepcopy(state)
+            changed['failure_history'][key][field] = value
+            with self.subTest(field=field):
+                self.assertIsNone(retry_policy.inspected_failure(changed))

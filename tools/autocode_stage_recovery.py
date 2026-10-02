@@ -744,15 +744,20 @@ def authorize_failure_retry(state, run_dir, workspace):
     The durable record is audit only. The returned exception is consumed in this
     invocation; loading the checkpoint cannot grant another execution attempt.
     """
+    try:
+        from . import autocode_validator_retry as validator_retry
+    except ImportError:
+        import autocode_validator_retry as validator_retry
+    inspected = validator_retry.inspected_failure(state)
     issued = resolver_human.current(state)
     issued_cause = (state.get('resolver', {}).get('human_escalations', {}).get(issued['request_id'], {})
                     .get('identity', {}).get('proposal', {}).get('origin', {}).get('pause_status')) if issued else None
-    if (state.get('status') != 'PAUSED_REPEATED_FAILURE'
+    if (state.get('status') != 'PAUSED_REPEATED_FAILURE' and not inspected
             and not (issued and issued['scope'] == 'operational_exhaustion' and issued_cause == 'PAUSED_REPEATED_FAILURE')):
         raise ValueError('--retry-failed-stage requires a run paused for repeated failure')
     if any(state.get(key) for key in ('active_stage', 'uncertain_artifacts', 'pending_report_repair')):
         raise ValueError('Reconcile the active attempt or pending report repair before authorizing a retry')
-    record = next(
+    record = inspected or next(
         (row for row in reversed(state.get('stages', [])) if row.get('failure_key')), None)
     repeated = failures.repeated(state, record) if record else None
     if not repeated:
@@ -768,6 +773,8 @@ def authorize_failure_retry(state, run_dir, workspace):
         raise ValueError('Retry authorization requires the exact current source, stage and failure identity')
     authorization = {'at': records.now(), 'failure_key': selected, 'identity': copy.deepcopy(identity),
                      'count': repeated['count'], 'source_revision': revision}
+    if inspected:
+        state['status'] = 'PAUSED_REPEATED_FAILURE'
     resolver_human.supersede_operational(state, 'Operator explicitly authorized one scoped failure retry')
     state.setdefault('failure_retry_authorizations', []).append(authorization)
     state.setdefault('user_events', []).append({

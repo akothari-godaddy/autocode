@@ -84,6 +84,28 @@ class FailureRetryTests(unittest.TestCase):
         self.assertEqual(before, state)
         self.assertIn(record['failure_key'], state['failure_history'])
 
+    def test_resolver_hold_keeps_an_explicit_retry_for_the_current_validator_failure(self):
+        self.seed()
+        revision = support.snapshot(self.root)['revision']
+        for index in range(3):
+            record = {'stage': 'sol', 'iteration': 1, 'role': 'sol', 'rejected': True,
+                      'output': str(self.run / f'validator-{index}.json'), 'source_revision': revision}
+            runner.failures.record(self.state, record,
+                ValueError('Check is not supported by an exact executed Validator event'), support.now())
+            self.state['stages'].append(record)
+        self.state['stages'].append({'stage': 'investigate_stuck', 'failure_key': 'unrelated'})
+        self.state.update(status='PAUSED_RESOLVER', next_stage='sol')
+        before = copy.deepcopy(self.state)
+        from autocode_run_view import needs
+        authorization = runner.authorize_failure_retry(self.state, self.run, self.root)
+        self.assertTrue(needs(before).get('retry_failed_stage'))
+        self.assertEqual(record['failure_key'], authorization['failure_key'])
+        self.assertEqual('PAUSED_REPEATED_FAILURE', self.state['status'])
+        for key in ('failure_history', 'stages', 'settings'):
+            self.assertEqual(before[key], self.state[key])
+        runner.repeated_failure_resume_guard(self.state, self.root, authorization=authorization)
+        self.assertTrue(authorization['consumed'])
+
 
 class FailureRetryCLITests(unittest.TestCase):
     setUp = test_subprocess.SubprocessFlow.setUp
