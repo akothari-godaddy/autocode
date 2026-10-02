@@ -890,7 +890,7 @@ def context(state, stage, state_path):
         packet['workspace_inventory'] = workspace_inventory(state['workspace'], state['task'], limit=20)
     if stage == "requirements_gather":
         packet["requirement_coverage_checklist"] = [
-            sentence for source in goals.source_texts(state)
+            sentence for source in goals.scan_texts(state)
             for sentence in goals.cue_sentences(source)
         ]
     rows = trace_rows(state, stage)
