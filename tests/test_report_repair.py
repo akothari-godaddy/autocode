@@ -17,6 +17,15 @@ runner, support = base.runner, base.s
 class RepairTests(unittest.TestCase):
     setUp = base.RetrofitTest.setUp
 
+    def test_revision_repair_contains_the_review_concerns_with_exact_ids(self):
+        review = {"output": "review.json", "report": {"concerns": [{"id": "C1",
+                  "concern": "Four named guards are missing", "requested_change": "Plan those tests"}]}}
+        self.state.update(next_stage="glm_revise", planning={"reports": {"astra_challenge": review}})
+        self.state["settings"]["roles"]["glm"] = {"model": "planner-model"}
+        self.queue(stage="glm_revise", role="glm")
+        data = json.loads(self.repair_request()["prompt"].split("CURRENT HANDOFF DATA\n", 1)[1])
+        self.assertEqual(review, data["clarification_context"]["planning_exchange"]["astra_challenge"])
+
     def test_repair_launch_keeps_the_original_pre_upgrade_schema_bytes(self):
         self.state["next_stage"] = "astra_review"
         schema = self.run / "legacy-review.schema.json"

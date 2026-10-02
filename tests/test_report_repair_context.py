@@ -1,10 +1,39 @@
 """The report repair handoff retains human clarification provenance."""
 import unittest
+import copy
 
 import autocode_report_repair_context as context
 
 
 class ClarificationContextTests(unittest.TestCase):
+    def test_revision_and_finalization_repairs_get_only_the_current_planning_exchange(self):
+        reports = {
+            "astra_discovery": {"output": "current-discovery.json", "report": {"contract": {"scope": ["greet.py"]}}},
+            "astra_challenge": {"output": "current-review.json", "report": {"concerns": [{
+                "id": "C1", "concern": "Guard test is missing", "requested_change": "Plan the guard test"}]}},
+            "glm_revise": {"output": "current-revision.json", "report": {"responses": [{"concern_id": "C1"}]}},
+            "astra_finalize": {"report": {"summary": "unrelated final"}},
+        }
+        state = {"planning": {"reports": reports},
+                 "planning_history": [{"reports": {"astra_challenge": {"report": {"concerns": [{"id": "OLD"}]}}}}]}
+        before = copy.deepcopy(state)
+        for stage, names in (("glm_revise", ("astra_discovery", "astra_challenge")),
+                             ("astra_finalize", ("astra_discovery", "astra_challenge", "glm_revise"))):
+            with self.subTest(stage=stage):
+                result = context.clarification_context(state, stage)
+                self.assertEqual({name: reports[name] for name in names}, result["planning_exchange"])
+                result["planning_exchange"]["astra_challenge"]["report"]["concerns"][0]["id"] = "changed"
+                self.assertEqual(before, state)
+        self.assertEqual({}, context.clarification_context(state, "requirements_gather")["planning_exchange"])
+        self.assertEqual({}, context.clarification_context({}, "glm_revise")["planning_exchange"])
+
+    def test_repair_instruction_requires_actual_saved_concern_ids_and_substantive_responses(self):
+        text = context.instruction("glm_revise")
+        self.assertIn("planning_exchange.astra_challenge.report.concerns", text)
+        self.assertIn("every saved concern ID exactly once", text)
+        self.assertIn("Do not invent a replacement concern ID", text)
+        self.assertIn("existing evidence_refs", text)
+
     def test_planning_repair_gets_only_matching_answers_and_current_investigation(self):
         question = {"id": "Q1", "question": "Which behavior?"}
         handoff = {"report": {"open_questions": [question], "requirements": [

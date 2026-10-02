@@ -39,7 +39,11 @@ def clarification_context(state: dict, stage: str) -> dict:
                             if isinstance(row, dict))
     answers = state.get("answers") or {}
     feedback = state.get("brief_feedback") or []
+    reports = (state.get("planning") or {}).get("reports") or {}
+    predecessors = (("astra_discovery", "astra_challenge", "glm_revise") if stage == "astra_finalize"
+                    else ("astra_discovery", "astra_challenge") if stage == "glm_revise" else ())
     return {
+        "planning_exchange": {name: copy.deepcopy(reports[name]) for name in predecessors if name in reports},
         "requirements_handoff": handoff,
         "investigation_request": copy.deepcopy(investigation),
         "clarification_episode": copy.deepcopy(state.get("clarification_episode")),
@@ -65,6 +69,11 @@ def instruction(stage: str) -> str:
     return (
         "Planning report repair: use clarification_context.requirements_handoff, "
         "investigation_request, saved_answers, and saved_feedback as authoritative. "
+        "For glm_revise and astra_finalize, planning_exchange.astra_challenge.report.concerns "
+        "is the current review: address every saved concern ID exactly once in responses or "
+        "decisions, with substantive changes and existing evidence_refs. Do not invent a "
+        "replacement concern ID or copy an older cycle's concerns. The saved predecessor "
+        "reports identify the draft and responses being reviewed. "
         "Preserve each unresolved question unless its matching saved answer resolves it; "
         "for requirements_gather, explicit saved feedback answering that question may "
         "also resolve it. Record human decisions in requirements and summary with their "
