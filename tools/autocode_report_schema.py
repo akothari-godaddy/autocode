@@ -1,9 +1,15 @@
 """Review report identities and ID-only decoding; no controller dependencies."""
 import copy
+try:
+    from . import autocode_requirements_report as requirements
+except ImportError:
+    import autocode_requirements_report as requirements
 
 
 def review_generation_schema(schema, state, stage):
     """Constrain runner-owned identity at generation, not by accepting bad reports."""
+    if stage == "requirements_gather":
+        return requirements.generation_schema(schema, state)
     result = copy.deepcopy(schema)
     if stage not in ("sol", "astra_review", "astra_checkpoint"):
         return result
@@ -41,6 +47,8 @@ def review_validation_schema(schema, state, record, value):
     literal exactly. This also accepts ID-only responses against older saved schemas.
     """
     stage = record.get("original_stage") or record.get("stage")
+    if stage == "requirements_gather":
+        return requirements.validation_schema(schema, state, value)
     criteria = (state or {}).get("acceptance_criteria") or []
     if stage not in COMPLETION_STAGES or not criteria or "acceptance_criteria" not in schema.get("properties", {}):
         return schema
@@ -71,6 +79,8 @@ def hydrate_review_report(value, state, record):
     artifact, so every downstream reader can use the complete canonical shape.
     """
     stage = record.get("original_stage") or record.get("stage")
+    if stage == "requirements_gather":
+        return requirements.hydrate_report(value, state)
     if stage not in COMPLETION_STAGES or not (state or {}).get("acceptance_criteria"):
         return value
     rows = value.get("acceptance_criteria", [])

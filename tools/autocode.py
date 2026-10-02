@@ -326,7 +326,7 @@ def run_role(
     base = artifacts.reserve(run_dir, iteration, stage, attempt)
     output, events, prompt_file = base.with_suffix(".json"), base.with_suffix(".jsonl"), base.with_suffix(".prompt.md")
     prompt_file.parent.mkdir(parents=True, exist_ok=True)
-    if not report_only and original_stage in ('sol', 'astra_review', 'astra_checkpoint'):
+    if original_stage == 'requirements_gather' or (not report_only and original_stage in ('sol', 'astra_review', 'astra_checkpoint')):
         bound_schema = support.review_generation_schema(read_json(schema), state, original_stage)
         schema = base.with_suffix('.schema.json')
         write_json(schema, bound_schema)
