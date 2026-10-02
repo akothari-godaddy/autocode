@@ -34,6 +34,61 @@ class ClarificationContextTests(unittest.TestCase):
         self.assertIn("Do not invent a replacement concern ID", text)
         self.assertIn("existing evidence_refs", text)
 
+    def test_finalizer_repair_instructions_use_only_final_report_fields(self):
+        text = context.instruction("astra_finalize")
+
+        self.assertIn("planning_exchange.astra_challenge.report.concerns", text)
+        self.assertIn("every saved concern ID exactly once in decisions", text)
+        self.assertIn("substantive rationale", text)
+        self.assertIn("contract.initial_task", text)
+        self.assertIn("contract.open_blocking_questions", text)
+        self.assertIn("saved stage schema", text)
+        for forbidden_instruction in (
+                "in responses or decisions", "decisions, with substantive changes and existing evidence_refs",
+                "Record human decisions in requirements", "ignored_statements using its exact checklist text",
+                "machine_resolutions and access_blockers must be []"):
+            with self.subTest(instruction=forbidden_instruction):
+                self.assertNotIn(forbidden_instruction, text)
+
+    def test_finalizer_decision_shape_matches_the_strict_saved_schema(self):
+        from units import autoplanner
+
+        text = context.instruction("astra_finalize")
+        fields = autoplanner.SCHEMAS["astra_finalize"]["properties"]["decisions"]["items"]["properties"]
+        self.assertIn("Each decision contains only " + ", ".join(fields), text)
+        self.assertNotIn("evidence_refs", fields)
+        self.assertNotIn("Add evidence_refs", text)
+
+    def test_finalizer_repair_explains_the_observed_root_initial_task_error(self):
+        from goal_fixtures import body
+        from units import autoplanner
+        from autocode_util import validate_schema
+
+        initial_task = {"objective": "Fix blank names", "affected_paths": ["greet.py"],
+                        "kind": "implement", "milestone_id": "M1", "requirements": ["Reject blanks"],
+                        "acceptance_criteria": ["C1"], "validation_plan": ["Run the regression"]}
+        # Retained revision 31: repairs added the sole extra root field while the
+        # contract still omitted it. Both locations must be corrected together.
+        report = {"contract": body(), "summary": "Final plan", "decisions": [],
+                  "contract_changes": [], "conflict_resolutions": [], "requirement_trace": [],
+                  "initial_task": initial_task}
+        schema = autoplanner.SCHEMAS["astra_finalize"]
+        with self.assertRaisesRegex(ValueError, r"\$: unexpected fields"):
+            validate_schema(report, schema)
+        without_extra = {key: value for key, value in report.items() if key != "initial_task"}
+        with self.assertRaisesRegex(ValueError, r"\$\.contract: missing initial_task"):
+            validate_schema(without_extra, schema)
+
+        text = context.instruction("astra_finalize")
+        self.assertIn("Remove a root-level initial_task", text)
+        self.assertIn("preserving that task inside contract.initial_task", text)
+
+    def test_finalizer_repair_defers_to_alternate_progressive_review_schemas(self):
+        text = context.instruction("astra_finalize")
+
+        self.assertIn("For alternate progressive review schemas, follow only their saved fields", text)
+        self.assertIn("do not add contract, initial_task or decisions", text)
+
     def test_planning_repair_gets_only_matching_answers_and_current_investigation(self):
         question = {"id": "Q1", "question": "Which behavior?"}
         handoff = {"report": {"open_questions": [question], "requirements": [
