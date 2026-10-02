@@ -38,9 +38,18 @@ def extend_schema(schema, state, stage):
     return schema
 
 
-def report_refs(state, report):
+def report_refs(state, report, *, stage=None):
+    """Pin design evidence from a report. Non-design stages may omit it.
+
+    Independent sol/checkpoint reports must account for every case (enforced at
+    decode and here). Builder self_check is criteria self-evidence and does not
+    carry design_results; that is not a mismatched manifest.
+    """
     record = state.get("settings", {}).get("design_manifest")
     if not record:
+        return []
+    if (stage not in ("sol", "astra_checkpoint")
+            and not report.get("design_manifest_hash") and not report.get("design_results")):
         return []
     manifest.verify(record)
     if report.get("design_manifest_hash") != record["manifest_hash"]:

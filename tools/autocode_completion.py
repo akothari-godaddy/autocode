@@ -39,7 +39,12 @@ def rejection(state) -> str:
 
 
 def completion_ready(state, decision, current, *, require_human_reviews=True, require_independent=True):
-    if not design_coverage.ready(state) or not progressive_ready(state, current):
+    # Design coverage is an independent-validation obligation (sol / checkpoint).
+    # The final-audit self-check probe passes require_independent=False and must
+    # not demand design_results from the builder's self-assessment.
+    if require_independent and not design_coverage.ready(state):
+        return False
+    if not progressive_ready(state, current):
         return False
     human_only_gap = False
     if (require_independent and state.get('settings', {}).get('milestone_checkpoints', {}).get('enabled')

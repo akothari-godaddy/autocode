@@ -254,6 +254,44 @@ class DesignManifestTests(unittest.TestCase):
         checkpoint = {"type": "object", "required": ["validation"], "properties": {"validation": schema}}
         self.assertIn("design_results", coverage.extend_schema(checkpoint, state, "astra_checkpoint")["properties"]["validation"]["required"])
 
+    def test_builder_self_check_without_design_fields_is_not_a_mismatched_manifest(self):
+        # apply_review_result used to call report_refs for every non-Builder stage,
+        # including the final-audit builder self_check. That report is self-evidence
+        # for criteria; it does not carry design_results. Independent sol reports
+        # still have to account for every case (covered above).
+        import autopilot
+        state, decision, current = self.passing_state()
+        self_check = {
+            "verdict": "NOT_VERIFIED", "checks": [], "findings": [], "unverified_criteria": ["C1"],
+            "criterion_results": [{"id": "C1", "status": "NOT_VERIFIED", "evidence_refs": []}],
+            "acceptance_criteria": copy.deepcopy(state["acceptance_criteria"]),
+        }
+        # report_refs stays strict for independent design reports.
+        with self.assertRaisesRegex(ValueError, "different design manifest"):
+            coverage.report_refs(state, self_check, stage="sol")
+        self.assertEqual([], coverage.report_refs(state, self_check, stage="self_check"))
+
+        class Runtime:
+            def check_evidence_options(self, record):
+                return {}
+        subprocess.run(["git", "init", "-q", str(self.workspace)], check=True)
+        subprocess.run(["git", "-C", str(self.workspace), "-c", "user.name=T", "-c", "user.email=t@example.test",
+                        "commit", "-q", "--allow-empty", "-m", "base"], check=True)
+        record = {"events": str(self.workspace / "events.jsonl"), "source_revision": "source-a",
+                  "role": "terra", "stage": "self_check", "output": str(self.workspace / "self.json")}
+        (self.workspace / "events.jsonl").write_text("")
+        autopilot.apply_review_result(Runtime(), state, "self_check", self_check,
+                                      record, self.workspace, self.workspace)
+        self.assertEqual("NOT_VERIFIED", state["validation"]["verdict"])
+
+        # Design gaps refuse independent completion, but the final-audit self-check
+        # probe (require_independent=False) must not demand design_results.
+        probe, decision, current = self.passing_state()
+        probe["validation"]["design_results"][-1]["status"] = "NOT_VERIFIED"
+        self.assertFalse(coverage.ready(probe))
+        self.assertFalse(completion.completion_ready(probe, decision, current))
+        self.assertTrue(completion.completion_ready(probe, decision, current, require_independent=False))
+
     def test_status_exposes_inventory_without_claiming_current_visual_acceptance(self):
         state, _, _ = self.passing_state()
         state["validation"]["design_results"][-1]["status"] = "NOT_VERIFIED"
