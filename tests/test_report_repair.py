@@ -833,6 +833,22 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(before['pending_report_repair'], self.state['report_repair_archive'][-1]['repair'])
         self.assertEqual(selected, self.state['user_events'][-1]['attempt_id'])
 
+    def test_pending_validator_report_repair_can_be_explicitly_retried_without_execution_replay(self):
+        self.state['next_stage'] = 'sol'
+        pending = self.queue(role='sol', stage='sol', error=ValueError(
+            'Check is not supported by an exact executed Validator event'))
+        self.state.update(status='PAUSED_RESOLVER', phase='PAUSED_OR_BLOCKED')
+        selected = runner.attempt_id(pending['original'])
+        before = copy.deepcopy(self.state)
+        with patch.object(runner, 'prepare_exhausted_execution_report_retry') as execution:
+            runner.retry_format_failed_report(self.state, self.run, self.root, selected)
+        execution.assert_not_called()
+        self.assertEqual('RUNNING', self.state['status'])
+        self.assertEqual('REPORT_REPAIR', self.state['phase'])
+        self.assertEqual(before['pending_report_repair'], self.state['pending_report_repair'])
+        self.assertEqual(before['stages'], self.state['stages'])
+        self.assertEqual(before['settings'], self.state['settings'])
+
     def test_terminal_error_is_durably_queued_without_replaying_implementation(self):
         sessions = copy.deepcopy(self.state['sessions'])
         pending = self.queue()

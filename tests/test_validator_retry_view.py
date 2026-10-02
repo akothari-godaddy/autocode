@@ -24,6 +24,18 @@ class ValidatorRetryViewTests(unittest.TestCase):
             self.assertEqual('001/validator-report-repair-02', run_view.needs(state)['retry_report_attempt'])
             self.assertEqual(before, state)
 
+    def test_resolver_offers_original_pending_report_while_repair_allowance_remains(self):
+        state = self.state()
+        pending = state['pending_report_repair']
+        pending.update(attempts=0, original={'stage': 'sol', 'iteration': 1,
+            'output': '/run/validator-03.json', 'rejected': True, 'exit_code': 0})
+        pending.pop('latest_rejected')
+        self.assertEqual('001/validator-03', run_view.needs(state).get('retry_report_attempt'))
+        for field, value in (('timed_out', True), ('interrupted', True), ('exit_code', 2)):
+            invalid = copy.deepcopy(state)
+            invalid['pending_report_repair']['original'][field] = value
+            self.assertNotIn('retry_report_attempt', run_view.needs(invalid))
+
     def test_other_pauses_or_unbound_reports_do_not_offer_retry(self):
         pristine = self.state()
         for change in ({'status': 'PAUSED_PROVIDER_UNCERTAIN'}, {'status': 'PAUSED_TIME_LIMIT'},

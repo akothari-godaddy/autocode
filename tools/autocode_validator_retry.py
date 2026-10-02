@@ -43,15 +43,26 @@ def offered_attempt(state: dict) -> str | None:
     original = pending.get('original') or {}
     rejected = pending.get('latest_rejected') or {}
     limit = (state.get('settings') or {}).get('report_repair', {}).get('max_attempts', 2)
+    used = pending.get('attempts')
     if (state.get('status') not in ('PAUSED_REPEATED_FAILURE', 'PAUSED_RESOLVER')
             or state.get('active_stage') or state.get('uncertain_artifacts')
             or state.get('next_stage') != 'sol' or original.get('stage') != 'sol'
-            or pending.get('error') not in ERRORS or not limit or pending.get('attempts') != limit
-            or not rejected.get('report_only') or not rejected.get('rejected')
-            or rejected.get('original_stage') != 'sol'
-            or type(rejected.get('iteration')) is not int or not rejected.get('output')):
+            or pending.get('error') not in ERRORS or not limit or type(used) is not int
+            or not 0 <= used <= limit):
         return None
-    return f"{rejected['iteration']:03d}/{Path(rejected['output']).stem}"
+    if used < limit:
+        selected = original
+        if (not original.get('rejected') or original.get('exit_code') != 0
+                or original.get('timed_out') or original.get('interrupted')):
+            return None
+    else:
+        selected = rejected
+        if (not rejected.get('report_only') or not rejected.get('rejected')
+                or rejected.get('original_stage') != 'sol'):
+            return None
+    if type(selected.get('iteration')) is not int or not selected.get('output'):
+        return None
+    return f"{selected['iteration']:03d}/{Path(selected['output']).stem}"
 
 
 def retry(state, run_dir, workspace, selected, *, prepare_retry):
@@ -60,9 +71,15 @@ def retry(state, run_dir, workspace, selected, *, prepare_retry):
         raise ValueError('--retry-report must match the exhausted rejected report-only attempt')
     pending = state['pending_report_repair']
     original = pending['original']
-    repair = next((row for row in reversed(state.get('stages', []))
-                   if row.get('report_only') and row.get('rejected')
-                   and row.get('original_stage') == original.get('stage')), None)
+    limit = (state.get('settings') or {}).get('report_repair', {}).get('max_attempts', 2)
+    bounded_repair = pending['attempts'] < limit
+    if bounded_repair:
+        repair = next((row for row in reversed(state.get('stages', []))
+                       if row.get('rejected') and row.get('output') == original.get('output')), None)
+    else:
+        repair = next((row for row in reversed(state.get('stages', []))
+                       if row.get('report_only') and row.get('rejected')
+                       and row.get('original_stage') == original.get('stage')), None)
     if (not repair or type(repair.get('iteration')) is not int or not repair.get('output')
             or selected != f"{repair['iteration']:03d}/{Path(repair['output']).stem}"
             or repair.get('source_revision') != original.get('source_revision')
@@ -75,6 +92,15 @@ def retry(state, run_dir, workspace, selected, *, prepare_retry):
                    for p, h in pending.get('pins', {}).items())):
         raise ValueError('Saved report inputs changed; reconcile them before retrying')
     candidate = copy.deepcopy(state)
+    if bounded_repair:
+        candidate.update(status='RUNNING', phase='REPORT_REPAIR')
+        candidate.setdefault('user_events', []).append({
+            'kind': 'report_repair_retry_authorized', 'actor': 'user_cli', 'at': util.now(),
+            'attempt_id': selected, 'attempts_used': pending['attempts']})
+        state.clear()
+        state.update(candidate)
+        util.atomic_json(Path(run_dir) / 'state.json', state)
+        return
     # Only this explicit exact-report action may normalize the resolver's pause.
     # Plain Resume retains its existing hold, limits and approval requirements.
     candidate['status'] = 'PAUSED_REPEATED_FAILURE'

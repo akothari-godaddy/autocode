@@ -20,3 +20,7 @@ view instead offers one explicit failed-stage retry. This requires the current
 Validator's exact stalled evidence-failure identity and unchanged source. Later
 investigator failures cannot substitute their identity for the Validator's.
 The scoped authorization is consumed once by the repeated-failure guard.
+
+When report repair still has an allowance, the exact action selects the original
+rejected report and only reopens its existing bounded report-only repair. It does
+not rerun validation, erase the repair count or grant extra repair attempts.
