@@ -79,6 +79,25 @@ class VerifyCase(unittest.TestCase):
         self.assertEqual('offline', project_file(project, 'vendor/example/resource.txt'))
         self.assertEqual({}, verify.changed_files(project.root, project.base))
 
+    def test_new_vendor_source_is_not_copied_into_the_unfixed_baseline(self):
+        seed = {
+            'app.py': "from pathlib import Path\ndef value():\n    path = Path('vendor/value.txt')\n"
+                      "    return int(path.read_text()) if path.exists() else 0\n",
+            'test_app.py': "import unittest\nfrom app import value\nclass ValueTests(unittest.TestCase):\n"
+                           "    def test_smoke(self):\n        self.assertIsInstance(value(), int)\n",
+        }
+        for ignored in (False, True):
+            with self.subTest(force_tracked_under_ignore=ignored):
+                project = self.project({**seed, '.gitignore': 'vendor/\n' if ignored else ''})
+                project.write({'vendor/value.txt': '1\n', 'test_app.py': seed['test_app.py']
+                               + '    def test_restores_value(self):\n        self.assertEqual(1, value())\n'})
+                if ignored:
+                    git(project.root, 'add', '-f', 'vendor/value.txt')
+                    project.write({'vendor/offline.txt': 'ignored dependency\n'})
+                result = project.verify(dependencies_from=project.root)
+                self.assertEqual(verify.PASS, result['verdict'], result['failures'])
+                self.assertIn('test_app.ValueTests.test_restores_value', result['fail_to_pass'])
+
     def test_reference_fix_is_proven_by_a_fail_to_pass_flip(self):
         project = self.project()
         project.write(REFERENCE)
@@ -609,18 +628,16 @@ class VendoredDependencyCopyTests(unittest.TestCase):
                 verify.copy_vendored_dependencies(source, tree)
 
     def test_copies_complete_ignored_vendor_as_independent_files(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            source, tree = Path(temporary) / 'source', Path(temporary) / 'tree'
-            (source / 'vendor/native').mkdir(parents=True)
-            tree.mkdir()
-            (source / 'vendor/modules.txt').write_text('offline')
-            (source / 'vendor/native/library.so').write_text('native')
-            verify.copy_vendored_dependencies(source, tree)
-            self.assertFalse((tree / 'vendor').is_symlink())
-            self.assertEqual('offline', (tree / 'vendor/modules.txt').read_text())
-            self.assertEqual('native', (tree / 'vendor/native/library.so').read_text())
-            (tree / 'vendor/modules.txt').write_text('scratch')
-            self.assertEqual('offline', (source / 'vendor/modules.txt').read_text())
+        project = Project({**SEED, '.gitignore': 'vendor/\n'})
+        self.addCleanup(project.close)
+        source, tree = project.root, project.evidence
+        project.write({'vendor/modules.txt': 'offline', 'vendor/native/library.so': 'native'})
+        verify.copy_vendored_dependencies(source, tree)
+        self.assertFalse((tree / 'vendor').is_symlink())
+        self.assertEqual('offline', (tree / 'vendor/modules.txt').read_text())
+        self.assertEqual('native', (tree / 'vendor/native/library.so').read_text())
+        (tree / 'vendor/modules.txt').write_text('scratch')
+        self.assertEqual('offline', (source / 'vendor/modules.txt').read_text())
 
     def test_missing_dependencies_are_optional_and_existing_base_vendor_is_preserved(self):
         with tempfile.TemporaryDirectory() as temporary:
