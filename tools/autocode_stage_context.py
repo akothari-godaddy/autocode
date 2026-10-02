@@ -112,6 +112,12 @@ def context_packet(state, stage, state_path):
     base["capture_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "capture"])
     base["baseline_compare_command"] = shlex.join([sys.executable, str(Path(__file__).with_name("autocode.py")), "compare-baseline"])
     instruction = support.STABLE.get(stage, "") + proof_note
+    if stage == "sol":
+        try:
+            from . import autocode_validator_evidence_instructions as validator_evidence
+        except ImportError:
+            import autocode_validator_evidence_instructions as validator_evidence
+        instruction += validator_evidence.instruction()
     if stage in ("terra", "sol", "astra_review", "astra_checkpoint"):
         try:
             from . import autocode_progressive_state as progressive_state

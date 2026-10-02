@@ -64,6 +64,12 @@ def clarification_context(state: dict, stage: str) -> dict:
 
 def instruction(stage: str) -> str:
     """Explain how a planning report repair must use the saved clarification sources."""
+    if stage == "sol":
+        try:
+            from . import autocode_validator_evidence_instructions as validator_evidence
+        except ImportError:
+            import autocode_validator_evidence_instructions as validator_evidence
+        return validator_evidence.instruction(report_only=True)
     if stage not in PLANNING_STAGES:
         return ""
     return (

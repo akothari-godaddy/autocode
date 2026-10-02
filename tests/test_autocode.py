@@ -324,6 +324,16 @@ class RetrofitTest(unittest.TestCase):
         self.assertIn('Source writes must stay within current_task.affected_paths',text)
         self.assertGreater(metrics["estimated_prompt_tokens"],0)
 
+    def test_validator_packet_explains_outer_shell_receipts_for_every_engine(self):
+        for engine in ('codex', 'opencode'):
+            with self.subTest(engine=engine), patch.object(runner.planning, 'engine_for', return_value=engine):
+                text,_=stage_context.context_packet(self.state,"sol",self.run/"state.json")
+                self.assertIn("entire outer shell command",text)
+                self.assertIn("outer shell event",text)
+                self.assertIn("Prefer direct checks",text)
+        text,_=stage_context.context_packet(self.state,"terra",self.run/"state.json")
+        self.assertNotIn("entire outer shell command",text)
+
     def test_context_packet_includes_only_runner_provided_private_source_exceptions(self):
         self.state["private_source_exceptions"]=[{
             "sourceId":"fixture-source", "workspacePath":".autocode/private/source.pdf",

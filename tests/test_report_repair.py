@@ -17,6 +17,14 @@ runner, support = base.runner, base.s
 class RepairTests(unittest.TestCase):
     setUp = base.RetrofitTest.setUp
 
+    def test_validator_repair_demands_verbatim_outer_event_receipts(self):
+        self.state['next_stage'] = 'sol'
+        self.queue(stage='sol', role='sol')
+        prompt = self.repair_request()['prompt']
+        self.assertIn('Copy command, exit_code and evidence_ref verbatim', prompt)
+        self.assertIn('outer shell event', prompt)
+        self.assertIn('Do not rerun', prompt)
+
     def test_revision_repair_contains_the_review_concerns_with_exact_ids(self):
         review = {"output": "review.json", "report": {"concerns": [{"id": "C1",
                   "concern": "Four named guards are missing", "requested_change": "Plan those tests"}]}}
