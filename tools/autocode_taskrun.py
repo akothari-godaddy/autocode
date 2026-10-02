@@ -102,6 +102,14 @@ class TaskRun:
         self._invoke("resume", "--resume-paused", "--no-chat", *self.options, advancing=True)
         return self.status()
 
+    def grant_recovery(self, amount: int) -> dict:
+        """Grant exactly N new recoveries after the operator resolves the pause cause."""
+        if type(amount) is not int or amount < 1:
+            raise ValueError('recovery allowance must be a positive integer')
+        self._invoke('grant recovery', '--resume-paused', '--grant-recovery', str(amount),
+                     '--no-chat', *self.options, advancing=True)
+        return self.status()
+
     def accept_transport_change(self) -> dict:
         """Explicitly accept a validated OpenCode transport change and continue."""
         self._invoke("accept transport change", "--resume-paused", "--accept-transport-change",

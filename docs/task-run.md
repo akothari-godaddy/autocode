@@ -56,6 +56,7 @@ All commands take `--workspace WORKSPACE`; commands on an existing run add
 | Display brief | `autocode --show-goal` | 0; prints the current brief for human review |
 | Continue | `autocode --no-chat [options]` | 0 complete, 2 stopped for input |
 | Resume a pause | `autocode --resume-paused --no-chat [options]` | 0 complete, 2 stopped for input |
+| Grant N recoveries after resolving the cause | `autocode --resume-paused --grant-recovery N --no-chat [options]` | 0 complete, 2 stopped for input |
 | Accept a changed OpenCode transport | `autocode --resume-paused --accept-transport-change --no-chat [options]` | 0 complete, 2 stopped for input |
 | Answer | `autocode --answer QUESTION_ID=TEXT [--resolver-token TOKEN]` | 0 saved, 2 rejected |
 | Respond to an operational AutoResolver request | `autocode --resolver-request ID --resolver-token TOKEN --resolver-response provide_information --resolver-message TEXT` | 0 saved, 2 rejected |
@@ -203,3 +204,5 @@ source/contracts block transport or resume. Operator feedback or an edited plan 
 the wait so the new decision can be reviewed. Keep the worker running while waiting;
 if it exits with an error, reconcile the reported cause and restart it against the same
 run. A failed/incomplete producer cannot release the consumer.
+
+`TaskRun.grant_recovery(N)` explicitly grants a positive number of additional recoveries after the operator inspects saved work and fixes the cause. It preserves recovery history and uses the CLI checkpoint guards. `resume_paused()` and operational guidance do not grant an allowance.
