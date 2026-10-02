@@ -25,10 +25,10 @@ import uuid
 try:
     from . import autocode_support as support, autocode_completion as completion_gate, autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_providers, autocode_opencode as opencode, autocode_process as processes, autocode_registry as registry, autocode_planning as planning, autocode_escalation as escalation, autocode_failures as failures, autocode_jobs as jobs
     from . import autocode_gocode as gocode, autocode_regression as regression, autocode_checkout_lock as checkout_lock, autocode_format_correction as format_correction, model_catalogue
-    from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes, autocode_verbose as verbose, autocode_status, autocode_artifacts as artifacts, autocode_report_repair_context as report_repair_context
+    from . import autocode_dependency as dependency, autocode_status_command as status_command, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes, autocode_verbose as verbose, autocode_status, autocode_artifacts as artifacts, autocode_report_repair_context as report_repair_context, autocode_stuck_repair_context as stuck_repair_context
     from . import autocode_run_view as run_view, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_event_log as event_log
 except ImportError:
-    import autocode_dependency as dependency, autocode_status_command as status_command, autocode_verbose as verbose, autocode_status, autocode_artifacts as artifacts, autocode_report_repair_context as report_repair_context
+    import autocode_dependency as dependency, autocode_status_command as status_command, autocode_verbose as verbose, autocode_status, autocode_artifacts as artifacts, autocode_report_repair_context as report_repair_context, autocode_stuck_repair_context as stuck_repair_context
     import autocode_regression as regression, autocode_format_correction as format_correction, autocode_support as support, autocode_completion as completion_gate, autocode_jobs as jobs, autocode_workflows as workflows, autocode_agent_env as agent_env, autocode_worktrees as worktrees, autocode_follow_up as follow_up, autocode_util as util, autocode_stray_writes as stray_writes, autocode_event_log as event_log
     import autocode_goals as goals, autocode_goal_lifecycle as lifecycle, autocode_interventions as interventions, autocode_checkout_lock as checkout_lock
     import autocode_providers, autocode_opencode as opencode, autocode_gocode as gocode, autocode_run_view as run_view
@@ -682,23 +682,9 @@ def execute_report_repair(state, run_dir, workspace):
               'For Builder reports, copy existing valid commands_run, results, changed_files, '
               'remaining_risks, untested_behavior, addressed_requirements and deferred_backlog '
               'arrays exactly. These are immutable execution history, even when a check failed. '
-              'Do not remove or reinterpret a user_request. Evidence references must be bare '
-              'event: IDs or exact file paths, with no appended explanations or line annotations. '
-              'Do not invent delegation or approval. '
-              'For captured checks, use the command and exit_code inside each receipt, not the '
-              'outer capture invocation. A Validator check still requires an independently executed '
-              'Validator tool event; a capture receipt alone cannot establish that independence. '
-              'Preserve executed successful checks; a PASS verdict '
-              'requires at least one. If none are supported by the original events and receipts, '
-              'report NOT_VERIFIED. '
-              'An event: reference must identify a completed shell command in original.events; '
-              'event IDs from another stage or MCP/image-viewing calls are not shell-check evidence. '
-              'For criterion and end-to-end evidence from MCP images or retained prior stages, '
-              'cite the exact existing artifact file path (such as the owning stage JSONL), '
-              'not an event: ID from that other stage. Preserve those artifacts and their observations. '
-              'Artifact evidence paths must resolve inside the project; for observations retained '
-              'only in an external temporary file, cite the original project-contained event log '
-              'that records them and preserve the observation and its limitations. '
+              'Do not remove or reinterpret a user_request. '
+              + stuck_repair_context.evidence_instruction(original['stage'])
+              + 'Do not invent delegation or approval. '
               'Finding identities belong to their source reviewer: the Validator may reuse only open sol IDs, '
               'and the Plan Reviewer only open astra IDs. If the original report copied the other reviewer\'s ID, '
               'leave id empty while preserving the defect, severity, blocking status and evidence. '
@@ -728,6 +714,7 @@ def execute_report_repair(state, run_dir, workspace):
                                                                for sentence in goals.cue_sentences(source)]
                             if original['stage'] == 'requirements_gather' else None,
                             'clarification_context': report_repair_context.clarification_context(state, original['stage']),
+                            'investigation_context': stuck_repair_context.context(state, original['stage'], run_dir / 'state.json', workspace, (original_source, rejected_source)),
                             'protected_contract': (goals.protected_contract_snapshot(state)
                                 if original['stage'] in ('glm_revise', 'astra_finalize') else None),
                             'report_identity': {
